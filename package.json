@@ -1,0 +1,75 @@
+{
+  "name": "riftbound-online",
+  "version": "0.1.0",
+  "private": true,
+  "riftboundUpdateBaseUrl": "https://backboard-fender-basis.ngrok-free.dev",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dist:win": "node scripts/build-win.mjs",
+    "publish:update": "npm run dist:win",
+    "desktop": "node scripts/run-desktop.mjs",
+    "desktop:setup": "npm install --prefix .desktop_runtime electron@41.7.1",
+    "audit:effects": "node scripts/audit-effects.mjs",
+    "export:cards": "node scripts/export-card-data.mjs",
+    "import:cards": "node scripts/import-cards.mjs",
+    "new:card": "node scripts/new-card.mjs",
+    "validate:cards": "node scripts/validate-cards.mjs",
+    "validate:engine": "node scripts/validate-engine-effects.mjs",
+    "audit:ko": "node scripts/audit-korean-terms.mjs",
+    "check": "npm run validate:cards && npm run validate:engine && npm run audit:ko && npm test && npm run interactions && npm run check:dynamic",
+    "check:dynamic": "node scripts/fuzz-games.mjs --games 50 --max-actions 140 --seed 20260714 && node scripts/scenario-games.mjs --scenarios 32 --max-actions 180 --seed 20260714",
+    "start": "node scripts/dev-server.mjs",
+    "restart": "npm run publish:update && node scripts/restart-server.mjs",
+    "restart:local": "node scripts/server-control.mjs restart --no-ngrok",
+    "stop": "node scripts/stop-server.mjs",
+    "server:restart": "node scripts/restart-server.mjs",
+    "server:stop": "node scripts/stop-server.mjs",
+    "test": "node --test tests",
+    "fuzz": "node scripts/fuzz-games.mjs",
+    "scenarios": "node scripts/scenario-games.mjs",
+    "interactions": "node scripts/interaction-scenarios.mjs",
+    "ai:train": "node scripts/train-ai.mjs",
+    "ai:train:quick": "node scripts/train-ai.mjs --games 10 --evaluation-games 4 --max-actions 240",
+    "ai:neural:train": "node scripts/train-neural-ai.mjs",
+    "ai:neural:smoke": "node scripts/train-neural-ai.mjs --games 2 --evaluation-games 2 --workers 1 --epochs 1 --max-actions 120",
+    "ai:continuous": "node scripts/train-neural-ai.mjs --continuous true --games 64 --evaluation-games 40 --workers 4",
+    "ai:meta:import": "node scripts/import-ai-meta.mjs",
+    "ai:bootstrap": "node scripts/bootstrap-neural-ai.mjs",
+    "ai:bootstrap:logged": "node scripts/run-bootstrap-ai.mjs",
+    "ai:bootstrap:apply": "node scripts/apply-ai-bootstrap-artifact.mjs",
+    "ai:collect:shard": "node scripts/collect-ai-shard.mjs"
+  },
+  "build": {
+    "appId": "com.riftbound.online",
+    "productName": "Riftbound Online",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "assets/**",
+      "electron/**",
+      "build-info.json",
+      "index.html",
+      "server/**",
+      "src/**",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "portable"
+      ]
+    },
+    "portable": {
+      "artifactName": "Riftbound Online.exe"
+    }
+  },
+  "devDependencies": {
+    "electron": "^41.7.1",
+    "electron-builder": "^26.0.12"
+  },
+  "dependencies": {
+    "@tensorflow/tfjs": "^4.22.0",
+    "@tensorflow/tfjs-node": "^4.22.0"
+  }
+}

@@ -1,0 +1,85 @@
+name: AI Bootstrap Training
+
+on:
+  workflow_dispatch:
+    inputs:
+      games:
+        description: Completed imitation games to collect
+        required: true
+        default: "256"
+        type: string
+      workers:
+        description: Parallel game collectors (2 is safe on the standard runner)
+        required: true
+        default: "2"
+        type: string
+      epochs:
+        description: Behavior-cloning epochs
+        required: true
+        default: "5"
+        type: string
+      max_actions:
+        description: Maximum actions per attempted game
+        required: true
+        default: "640"
+        type: string
+      seed:
+        description: Deterministic random seed
+        required: true
+        default: "20251207"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-bootstrap-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      TF_CPP_MIN_LOG_LEVEL: "1"
+      RUN_DIR: data/ai/runs/github-${{ github.run_id }}-${{ github.run_attempt }}
+      MODEL_PATH: data/ai/output/neural-champion.json
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Origins behavior-cloning bootstrap
+        run: >-
+          npm run ai:bootstrap:logged --
+          --games "${{ inputs.games }}"
+          --workers "${{ inputs.workers }}"
+          --epochs "${{ inputs.epochs }}"
+          --batch-size 8
+          --max-actions "${{ inputs.max_actions }}"
+          --validation-fraction 0.1
+          --meta-fraction 0.7
+          --card-pool origins-era
+          --seed "${{ inputs.seed }}"
+          --output "$MODEL_PATH"
+          --report "$RUN_DIR/run-report.json"
+
+      - name: Upload model and run report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: origins-ai-bootstrap-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 14
+          compression-level: 6
+          path: |
+            data/ai/output/neural-champion.json
+            data/ai/runs/github-${{ github.run_id }}-${{ github.run_attempt }}/**

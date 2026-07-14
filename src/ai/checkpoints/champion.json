@@ -1,0 +1,1027 @@
+{
+  "version": 1,
+  "generation": 1,
+  "gamesTrained": 3,
+  "policyWeights": {
+    "kind:confirmFirstPlayer": 0,
+    "phase:first-player": 0,
+    "kindPhase:confirmFirstPlayer:first-player": 0,
+    "versusLegend:OGN-269/298:confirmFirstPlayer": 0,
+    "cardEnergy": -0.03050169431208386,
+    "cardMight": -0.021974425781787182,
+    "scoreLead": 6.557872630609816e-19,
+    "readyRunes": -5.0342010558457754e-18,
+    "paymentEnergyProgress": 1.1364162036717535e-17,
+    "paymentPowerProgress": -6.2429932564056296e-18,
+    "confirmReady": -0.004575833349922966,
+    "toggleRemovesSelection": -0.008908261653756952,
+    "mulliganRemovesSelection": 0.00009180768990686824,
+    "mulliganCardEnergy": -0.005565255552066473,
+    "passWithChain": 0.022386524971413,
+    "plan:flexible:confirmFirstPlayer": 0,
+    "kind:selectChampion": 0,
+    "phase:champion-select": 0,
+    "kindPhase:selectChampion:champion-select": 0,
+    "versusLegend:OGN-269/298:selectChampion": 0,
+    "plan:flexible:selectChampion": 0,
+    "kind:selectBattlefield": 0,
+    "phase:battlefield-select": 0,
+    "kindPhase:selectBattlefield:battlefield-select": 0,
+    "versusLegend:OGN-269/298:selectBattlefield": 0,
+    "plan:flexible:selectBattlefield": 0,
+    "kind:toggleMulliganCard": -0.011326342555274928,
+    "phase:mulligan": 1.808551461148209e-18,
+    "kindPhase:toggleMulliganCard:mulligan": -0.011326342555274928,
+    "versusLegend:OGN-269/298:toggleMulliganCard": 0.006385268196080156,
+    "cardType:unit:toggleMulliganCard": -0.02383577708700173,
+    "tag:Poro:toggleMulliganCard": 0.00495964562296154,
+    "keyword:Deflect:toggleMulliganCard": 0.00495964562296154,
+    "plan:flexible:toggleMulliganCard": -0.011326342555274928,
+    "tag:Champion:toggleMulliganCard": -0.00003544300945602756,
+    "tag:Darius:toggleMulliganCard": 0.01755519455293518,
+    "tag:Noxus:toggleMulliganCard": -0.02123526335755447,
+    "tag:Trifarian:toggleMulliganCard": -0.017542976377768093,
+    "keyword:Legion:toggleMulliganCard": -0.007540864173352281,
+    "kind:skipMulligan": 0.009171024686743743,
+    "kindPhase:skipMulligan:mulligan": 0.009171024686743743,
+    "versusLegend:OGN-269/298:skipMulligan": -0.008126333284935082,
+    "plan:flexible:skipMulligan": 0.009171024686743743,
+    "tag:Freljord:toggleMulliganCard": -0.0034027570899693386,
+    "keyword:Deathknell:toggleMulliganCard": -0.0034027570899693386,
+    "kind:confirmMulligan": 0.0021553178685311805,
+    "kindPhase:confirmMulligan:mulligan": 0.0021553178685311805,
+    "versusLegend:OGN-269/298:confirmMulligan": 0.0017410650888549286,
+    "plan:flexible:confirmMulligan": 0.0021553178685311805,
+    "kind:activateCard": -0.023057991292510564,
+    "phase:action": -1.204664829023549e-17,
+    "kindPhase:activateCard:action": -0.023755556911344674,
+    "versusLegend:OGN-269/298:activateCard": 0.004130717479652839,
+    "cardType:legend:activateCard": -0.02273116862412534,
+    "tag:Kai'Sa:activateCard": -0.022204167932862232,
+    "tag:Reaction:activateCard": -0.02273116862412534,
+    "plan:flexible:activateCard": -0.023020895578165102,
+    "kind:beginPlayCard": -0.053732183305073344,
+    "kindPhase:beginPlayCard:action": -0.0497350528481862,
+    "versusLegend:OGN-269/298:beginPlayCard": -0.006286642796257459,
+    "cardType:unit:beginPlayCard": -0.02939984801384657,
+    "tag:Noxus:beginPlayCard": -0.011484979182823372,
+    "plan:flexible:beginPlayCard": -0.05390699709594194,
+    "tag:Freljord:beginPlayCard": 0.0032253678875096723,
+    "keyword:Deathknell:beginPlayCard": 0.0032253678875096723,
+    "kind:endTurn": 0.03741952139937157,
+    "kindPhase:endTurn:action": 0.03741952139937157,
+    "versusLegend:OGN-269/298:endTurn": -0.006643854955706674,
+    "plan:flexible:endTurn": 0.0385531722164317,
+    "kind:togglePaymentRune": 0.008767384282883782,
+    "kindPhase:togglePaymentRune:action": 0.0019016236651668763,
+    "versusLegend:OGN-269/298:togglePaymentRune": 0.0006786757438058426,
+    "plan:flexible:togglePaymentRune": 0.007777000412869663,
+    "kind:cancelPayment": -0.0070526613380195325,
+    "kindPhase:cancelPayment:action": -0.005028080565771336,
+    "versusLegend:OGN-269/298:cancelPayment": 0.0041386320443848774,
+    "plan:flexible:cancelPayment": -0.005612657464978258,
+    "kind:confirmPayment": -0.004575833349922966,
+    "kindPhase:confirmPayment:action": 0.0002653464955457583,
+    "versusLegend:OGN-269/298:confirmPayment": -0.004819041596631584,
+    "plan:flexible:confirmPayment": -0.004563894962922632,
+    "kind:passShowdown": 0.024528617682710096,
+    "kindPhase:passShowdown:action": 0.021229052844657054,
+    "versusLegend:OGN-269/298:passShowdown": 0.004911355961264936,
+    "plan:flexible:passShowdown": 0.024114280864965545,
+    "kind:moveUnit": -0.003308613126254863,
+    "kindPhase:moveUnit:action": -0.003308613126254863,
+    "versusLegend:OGN-269/298:moveUnit": 0.0037356251131325435,
+    "cardType:unit:moveUnit": -0.003308613126254863,
+    "tag:Freljord:moveUnit": 0.004224096130038154,
+    "keyword:Deathknell:moveUnit": 0.004224096130038154,
+    "destinationControl:open": -0.028329521022487144,
+    "plan:flexible:moveUnit": -0.00350363808451855,
+    "tag:Trifarian:beginPlayCard": 0.003946752791653463,
+    "keyword:Legion:beginPlayCard": -0.01415373515286375,
+    "phase:showdown": 4.689884974977843e-18,
+    "kindPhase:beginPlayCard:showdown": -0.0039971304568871555,
+    "cardType:spell:beginPlayCard": -0.024141080446787047,
+    "tag:Action:beginPlayCard": -0.004577890247830386,
+    "tag:Reaction:beginPlayCard": 0.015395562226372466,
+    "kindPhase:passShowdown:showdown": 0.0032995648380530424,
+    "kindPhase:activateCard:showdown": 0.0006975656188341108,
+    "kind:chooseEffectOption": -0.0001778975336336433,
+    "kindPhase:chooseEffectOption:showdown": 3.138930299141265e-21,
+    "versusLegend:OGN-269/298:chooseEffectOption": 0,
+    "plan:flexible:chooseEffectOption": -0.00018105398217217636,
+    "kindPhase:togglePaymentRune:showdown": 0.006865760617716904,
+    "kindPhase:cancelPayment:showdown": -0.002024580772248173,
+    "kindPhase:confirmPayment:showdown": -0.004841179845468726,
+    "destinationControl:friendly": 0.0012931380619027114,
+    "kindPhase:chooseEffectOption:action": -0.0001778975336336433,
+    "kind:moveUnits": 0.000644561090836443,
+    "kindPhase:moveUnits:action": 0.000644561090836443,
+    "versusLegend:OGN-269/298:moveUnits": 0.0010294159477159412,
+    "cardType:unit:moveUnits": 0.000644561090836443,
+    "tag:Noxus:moveUnits": 0.0011974421076384211,
+    "plan:flexible:moveUnits": 0.0006694519244120024,
+    "keyword:Assault:beginPlayCard": -0.000386729995867105,
+    "tag:Noxus:moveUnit": 0.002394683230395728,
+    "tag:Trifarian:moveUnit": 0.002677106715295307,
+    "keyword:Legion:moveUnit": 0.00014658712668049994,
+    "tag:Trifarian:moveUnits": -0.00023933053099564256,
+    "keyword:Legion:moveUnits": -0.00023511022465252433,
+    "kind:beginPlayChampion": 0.017431569874004283,
+    "kindPhase:beginPlayChampion:action": 0.017431569874004283,
+    "versusLegend:OGN-269/298:beginPlayChampion": -0.0008766167498021286,
+    "plan:flexible:beginPlayChampion": 0.017094625752816377,
+    "tag:Ionia:beginPlayCard": -0.00444126112216121,
+    "keyword:Accelerate:beginPlayCard": 0.017738038748125056,
+    "tag:Freljord:moveUnits": -0.00013944472149245133,
+    "keyword:Deathknell:moveUnits": -0.00013944472149245133,
+    "plan:protectLead:beginPlayChampion": 0.00016202122110612913,
+    "plan:protectLead:beginPlayCard": 0.0004654622612547424,
+    "plan:protectLead:moveUnit": -0.00007963012763053432,
+    "plan:protectLead:activateCard": 0.00021276788586711018,
+    "plan:protectLead:endTurn": -0.0009267270409522122,
+    "plan:protectLead:togglePaymentRune": 0.0002765748388580462,
+    "plan:protectLead:cancelPayment": -0.0002692701747289585,
+    "plan:protectLead:confirmPayment": 0.000004302573467588964,
+    "plan:protectLead:chooseEffectOption": 0.0000031564485385330845,
+    "plan:protectLead:passShowdown": 0.00019344361037233694,
+    "tag:Champion:beginPlayCard": -0.003977515983056917,
+    "tag:Darius:beginPlayCard": -0.0036568159977955423,
+    "tag:Champion:moveUnit": -0.007078689627828202,
+    "tag:Darius:moveUnit": 0.0005367133148572163,
+    "plan:protectLead:moveUnits": -0.000027337810017571724,
+    "tag:Champion:moveUnits": -0.000004220306343118267,
+    "tag:Darius:moveUnits": -0.000004220306343118267,
+    "kind:toggleOptionalPaymentEffect": 0.0028611104050587023,
+    "kindPhase:toggleOptionalPaymentEffect:action": 0.0028611104050587023,
+    "versusLegend:OGN-269/298:toggleOptionalPaymentEffect": 0.0000017338084408682894,
+    "plan:protectLead:toggleOptionalPaymentEffect": -0.00001160723759667605,
+    "tag:Poro:beginPlayCard": -0.011899472560460285,
+    "keyword:Deflect:beginPlayCard": -0.011319794256185145,
+    "destinationControl:enemy": -0.0003812531291672497,
+    "tag:Ionia:moveUnit": 0.000027691367065545006,
+    "keyword:Accelerate:moveUnit": -0.005639613193542875,
+    "tag:Ionia:moveUnits": -0.00003188609525833195,
+    "keyword:Accelerate:moveUnits": -0.00003188609525833195,
+    "versusLegend:OGN-247/298:selectChampion": 0,
+    "versusLegend:OGN-247/298:selectBattlefield": 0,
+    "versusLegend:OGN-247/298:toggleMulliganCard": -0.01591608614277135,
+    "cardType:spell:toggleMulliganCard": 0.024608544336564953,
+    "tag:Action:toggleMulliganCard": 0.0007040365019166146,
+    "tag:Ionia:toggleMulliganCard": 0.014374417817444099,
+    "versusLegend:OGN-247/298:skipMulligan": 0.015501833363095099,
+    "tag:Reaction:toggleMulliganCard": 0.012964374831314239,
+    "versusLegend:OGN-247/298:confirmMulligan": 0.00041425277967625015,
+    "versusLegend:OGN-247/298:beginPlayCard": -0.0032632390638577496,
+    "versusLegend:OGN-247/298:endTurn": 0.00439880581099872,
+    "versusLegend:OGN-247/298:chooseEffectOption": -3.2515218943155434e-18,
+    "versusLegend:OGN-247/298:togglePaymentRune": -0.0007356530995444135,
+    "versusLegend:OGN-247/298:cancelPayment": 0.004366080869745605,
+    "versusLegend:OGN-247/298:confirmPayment": 0.00011781164646064008,
+    "versusLegend:OGN-247/298:passShowdown": -0.0012809322460852822,
+    "versusLegend:OGN-247/298:beginPlayChampion": 0.0013257055797527854,
+    "tag:Signature Spell:beginPlayCard": -0.0064366758364717905,
+    "tag:Sett:beginPlayCard": -0.00151287331577435,
+    "plan:pressure:beginPlayCard": -0.0002906484703861552,
+    "versusLegend:OGN-247/298:moveUnit": -0.00001549498963109519,
+    "plan:pressure:moveUnit": 0.0002746550858942192,
+    "plan:pressure:beginPlayChampion": 0.0001749229000817779,
+    "plan:pressure:endTurn": -0.00020692377610792855,
+    "plan:pressure:chooseEffectOption": -4.584971113887632e-22,
+    "plan:pressure:togglePaymentRune": 0.0007138090311560729,
+    "plan:pressure:cancelPayment": -0.0011707336983123062,
+    "plan:pressure:confirmPayment": -0.000016240960467926553,
+    "plan:pressure:passShowdown": 0.0002208932073722132,
+    "tag:Qiyana:beginPlayCard": 0.00006354300581705053,
+    "tag:Ixtal:beginPlayCard": 0.00006354300581705053,
+    "tag:Bilgewater:beginPlayCard": -0.002741967378676056,
+    "tag:Qiyana:moveUnit": 0.000011788012393690335,
+    "tag:Ixtal:moveUnit": 0.000011788012393690335,
+    "keyword:Deflect:moveUnit": -0.000005245543092805622,
+    "tag:Poro:moveUnit": -0.0000028229297656280927,
+    "keyword:Assault:moveUnit": -0.0000028229297656280927,
+    "versusLegend:OGN-247/298:moveUnits": -0.0003855394084454749,
+    "tag:Poro:moveUnits": 0.0000024469764420127067,
+    "keyword:Assault:moveUnits": 0.0000024469764420127067,
+    "plan:pressure:moveUnits": 0.0000024469764420127067,
+    "cardType:gear:beginPlayCard": -0.0001912548444397657,
+    "keyword:Hidden:beginPlayCard": -0.00001222354901246433,
+    "kind:hideCard": 0.00007451767691642437,
+    "kindPhase:hideCard:action": 0.00007451767691642437,
+    "versusLegend:OGN-247/298:hideCard": 0.00007451767691642437,
+    "cardType:spell:hideCard": 0.00007451767691642437,
+    "tag:Action:hideCard": 0.00007451767691642437,
+    "keyword:Hidden:hideCard": 0.00007451767691642437,
+    "plan:pressure:hideCard": 0.00007451767691642437,
+    "versusLegend:OGN-247/298:activateCard": -0.0008538233596483244,
+    "cardType:gear:activateCard": -0.0003268226683852156,
+    "plan:pressure:activateCard": -0.00024986360021256435,
+    "tag:Signature Spell:toggleMulliganCard": 0.017590637562391206,
+    "tag:Bilgewater:toggleMulliganCard": -0.010907851712452139,
+    "tag:Pirate:toggleMulliganCard": -0.010907851712452139,
+    "tag:Demacia:toggleMulliganCard": -0.007623968367431421,
+    "tag:Elite:toggleMulliganCard": -0.007623968367431421,
+    "tag:Pirate:beginPlayCard": -0.0027355621376206605,
+    "tag:Demacia:beginPlayCard": -0.0026780634451890398,
+    "tag:Elite:beginPlayCard": -0.0026780634451890398,
+    "tag:Darius:activateCard": -0.0005270006912631098,
+    "keyword:Legion:activateCard": -0.0005270006912631098,
+    "versusLegend:OGN-247/298:toggleOptionalPaymentEffect": -0.00374823941666184,
+    "plan:flexible:toggleOptionalPaymentEffect": 0.0023995520150312155,
+    "tag:Bird:beginPlayCard": 0.0006151241411120737,
+    "tag:Bilgewater:moveUnit": -0.0020398249513232302,
+    "tag:Pirate:moveUnit": -0.0020398249513232302,
+    "tag:Bilgewater:moveUnits": -0.00038399717649320716,
+    "tag:Pirate:moveUnits": -0.00038399717649320716,
+    "tag:Bandle City:beginPlayCard": -0.000005468772057007616,
+    "tag:Mech:beginPlayCard": -0.000005468772057007616,
+    "versusLegend:OGN-253/298:confirmFirstPlayer": 0,
+    "versusLegend:OGN-253/298:selectChampion": 0,
+    "versusLegend:OGN-253/298:selectBattlefield": 0,
+    "versusLegend:OGN-253/298:skipMulligan": -0.015670041117404603,
+    "versusLegend:OGN-253/298:toggleMulliganCard": 0.015670041117404603,
+    "keyword:Accelerate:toggleMulliganCard": 0.005974589434244279,
+    "versusLegend:OGN-253/298:activateCard": -0.002249141792647039,
+    "versusLegend:OGN-253/298:endTurn": 0.014064416802918124,
+    "versusLegend:OGN-253/298:beginPlayCard": -0.019507883525550024,
+    "versusLegend:OGN-253/298:beginPlayChampion": 0.004494684824862153,
+    "versusLegend:OGN-253/298:chooseEffectOption": -0.0001810539821721731,
+    "versusLegend:OGN-253/298:togglePaymentRune": 0.010613591343856029,
+    "versusLegend:OGN-253/298:cancelPayment": -0.01060346693439415,
+    "versusLegend:OGN-253/298:confirmPayment": -0.000021236914148955868,
+    "versusLegend:OGN-253/298:passShowdown": 0.002838547117609685,
+    "versusLegend:OGN-253/298:moveUnit": 0.00035937657280710905,
+    "keyword:Reaction:beginPlayCard": 0.006327951539225829,
+    "kind:declineEffectChoice": 0.00017789753363364004,
+    "kindPhase:declineEffectChoice:action": 0.00017789753363364004,
+    "versusLegend:OGN-253/298:declineEffectChoice": 0.0001810539821721731,
+    "plan:flexible:declineEffectChoice": 0.0001810539821721731,
+    "versusLegend:OGN-253/298:toggleOptionalPaymentEffect": 0.000011112504687082078,
+    "plan:pressure:toggleOptionalPaymentEffect": 0.0004731656276241624,
+    "tag:Kai'Sa:moveUnit": -0.007907190429572625,
+    "tag:The Void:moveUnit": -0.007907190429572625,
+    "versusLegend:OGN-267/298:confirmFirstPlayer": 0,
+    "versusLegend:OGN-267/298:selectChampion": 0,
+    "versusLegend:OGN-267/298:selectBattlefield": 0,
+    "versusLegend:OGN-267/298:skipMulligan": 0.017465565725988327,
+    "versusLegend:OGN-267/298:toggleMulliganCard": -0.017465565725988334,
+    "versusLegend:OGN-267/298:endTurn": 0.025600153741161372,
+    "versusLegend:OGN-267/298:beginPlayCard": -0.024674417919408147,
+    "versusLegend:OGN-267/298:activateCard": -0.024085743619868035,
+    "versusLegend:OGN-267/298:passShowdown": 0.018059646849920757,
+    "versusLegend:OGN-267/298:beginPlayChampion": 0.012487796219191476,
+    "versusLegend:OGN-267/298:togglePaymentRune": -0.001789229705233679,
+    "versusLegend:OGN-267/298:toggleOptionalPaymentEffect": 0.006596503508592591,
+    "versusLegend:OGN-267/298:cancelPayment": -0.004953907317755851,
+    "versusLegend:OGN-267/298:confirmPayment": 0.0001466335143969336,
+    "versusLegend:OGN-267/298:moveUnit": -0.00738811982256342,
+    "versusLegend:OGN-267/298:chooseEffectOption": 0.0000031564485385330777,
+    "versusLegend:OGN-267/298:moveUnits": 6.84551565976962e-7,
+    "versusLegend:OGN-267/298:declineEffectChoice": -0.000003156448538533077,
+    "plan:protectLead:declineEffectChoice": -0.000003156448538533077,
+    "keyword:Action:toggleMulliganCard": 0.007630855567587649,
+    "cardType:gear:toggleMulliganCard": -0.012099109804838137,
+    "keyword:Action:beginPlayCard": 0.019277197405428485,
+    "tag:Miss Fortune:beginPlayCard": -0.005308045511775866,
+    "tag:Shadow Isles:beginPlayCard": 0.000514082998894019,
+    "tag:Miss Fortune:moveUnit": 0.000279999474493518,
+    "keyword:Ganking:moveUnit": 0.000279999474493518,
+    "keyword:Ganking:beginPlayCard": -0.000371225388415445,
+    "tag:Shadow Isles:moveUnit": -0.000017033555486495958
+  },
+  "valueWeights": {
+    "scoreDiff": 2.950470118790465,
+    "boardMightDiff": 0.6265375258515061,
+    "baseMightDiff": 0.5192904215594748,
+    "handDiff": 0.41879679624064736,
+    "readyRuneDiff": 0.027519018306183068,
+    "battlefieldControlDiff": 0.6700195653382273,
+    "nearVictory": 0.3053229506579716,
+    "nearDefeat": -0.30420109352104463,
+    "bias": -0.5077287986879083,
+    "myTurn": -0.4832519715811609,
+    "showdown": -0.02969519087723825
+  },
+  "metadata": {
+    "algorithm": "self-play-policy-gradient",
+    "promoted": true,
+    "trainedAt": "2026-07-14T03:40:08.476Z",
+    "trainingGames": 3,
+    "truncationRate": 0,
+    "evaluation": {
+      "games": 2,
+      "completed": 2,
+      "candidateWins": 1,
+      "winRate": 0.5,
+      "promoted": false
+    }
+  },
+  "deckStats": {
+    "origins-kaisa": {
+      "games": 3,
+      "wins": 2,
+      "returnSum": 1
+    },
+    "origins-sett": {
+      "games": 1,
+      "wins": 0,
+      "returnSum": -1
+    },
+    "origins-darius": {
+      "games": 1,
+      "wins": 1,
+      "returnSum": 1
+    },
+    "origins-miss-fortune": {
+      "games": 1,
+      "wins": 0,
+      "returnSum": -1
+    }
+  },
+  "cardStats": {
+    "OGN-104/298": {
+      "games": 6,
+      "returnSum": 2,
+      "meanReturn": 0.3333333333333333
+    },
+    "OGN-095/298": {
+      "games": 9,
+      "returnSum": 3,
+      "meanReturn": 0.3333333333333333
+    },
+    "OGN-004/298": {
+      "games": 9,
+      "returnSum": 3,
+      "meanReturn": 0.3333333333333333
+    },
+    "OGN-009/298": {
+      "games": 9,
+      "returnSum": 3,
+      "meanReturn": 0.3333333333333333
+    },
+    "OGN-093/298": {
+      "games": 9,
+      "returnSum": 3,
+      "meanReturn": 0.3333333333333333
+    },
+    "OGN-029/298": {
+      "games": 9,
+      "returnSum": 3,
+      "meanReturn": 0.3333333333333333
+    },
+    "OGN-024/298": {
+      "games": 9,
+      "returnSum": 3,
+      "meanReturn": 0.3333333333333333
+    },
+    "OGN-122/298": {
+      "games": 3,
+      "returnSum": 1,
+      "meanReturn": 0.3333333333333333
+    },
+    "OGN-103/298": {
+      "games": 9,
+      "returnSum": 3,
+      "meanReturn": 0.3333333333333333
+    },
+    "OGN-096/298": {
+      "games": 9,
+      "returnSum": 3,
+      "meanReturn": 0.3333333333333333
+    },
+    "OGN-013/298": {
+      "games": 9,
+      "returnSum": 3,
+      "meanReturn": 0.3333333333333333
+    },
+    "OGN-039/298": {
+      "games": 3,
+      "returnSum": 1,
+      "meanReturn": 0.3333333333333333
+    },
+    "OGN-012/298": {
+      "games": 12,
+      "returnSum": 6,
+      "meanReturn": 0.5
+    },
+    "OGN-027/298": {
+      "games": 12,
+      "returnSum": 6,
+      "meanReturn": 0.5
+    },
+    "OGN-116/298": {
+      "games": 9,
+      "returnSum": 3,
+      "meanReturn": 0.3333333333333333
+    },
+    "OGN-270/298": {
+      "games": 3,
+      "returnSum": -3,
+      "meanReturn": -1
+    },
+    "OGN-156/298": {
+      "games": 3,
+      "returnSum": -3,
+      "meanReturn": -1
+    },
+    "OGN-213/298": {
+      "games": 2,
+      "returnSum": -2,
+      "meanReturn": -1
+    },
+    "OGN-128/298": {
+      "games": 2,
+      "returnSum": -2,
+      "meanReturn": -1
+    },
+    "OGN-207/298": {
+      "games": 3,
+      "returnSum": -3,
+      "meanReturn": -1
+    },
+    "OGN-154/298": {
+      "games": 4,
+      "returnSum": -4,
+      "meanReturn": -1
+    },
+    "OGN-210/298": {
+      "games": 2,
+      "returnSum": -2,
+      "meanReturn": -1
+    },
+    "OGN-139/298": {
+      "games": 3,
+      "returnSum": -3,
+      "meanReturn": -1
+    },
+    "OGN-136/298": {
+      "games": 3,
+      "returnSum": -3,
+      "meanReturn": -1
+    },
+    "OGN-240/298": {
+      "games": 1,
+      "returnSum": -1,
+      "meanReturn": -1
+    },
+    "OGN-232/298": {
+      "games": 3,
+      "returnSum": -3,
+      "meanReturn": -1
+    },
+    "OGN-155/298": {
+      "games": 3,
+      "returnSum": -3,
+      "meanReturn": -1
+    },
+    "OGN-141/298": {
+      "games": 2,
+      "returnSum": -2,
+      "meanReturn": -1
+    },
+    "OGN-164/298": {
+      "games": 2,
+      "returnSum": -2,
+      "meanReturn": -1
+    },
+    "OGN-124/298": {
+      "games": 3,
+      "returnSum": -3,
+      "meanReturn": -1
+    },
+    "OGN-145/298": {
+      "games": 2,
+      "returnSum": -2,
+      "meanReturn": -1
+    },
+    "OGN-216/298": {
+      "games": 3,
+      "returnSum": 3,
+      "meanReturn": 1
+    },
+    "OGN-010/298": {
+      "games": 3,
+      "returnSum": 3,
+      "meanReturn": 1
+    },
+    "OGN-003/298": {
+      "games": 3,
+      "returnSum": 3,
+      "meanReturn": 1
+    },
+    "OGN-218/298": {
+      "games": 3,
+      "returnSum": 3,
+      "meanReturn": 1
+    },
+    "OGN-208/298": {
+      "games": 3,
+      "returnSum": 3,
+      "meanReturn": 1
+    },
+    "OGN-001/298": {
+      "games": 1,
+      "returnSum": 1,
+      "meanReturn": 1
+    },
+    "OGN-020/298": {
+      "games": 3,
+      "returnSum": 3,
+      "meanReturn": 1
+    },
+    "OGN-002/298": {
+      "games": 3,
+      "returnSum": 3,
+      "meanReturn": 1
+    },
+    "OGN-254/298": {
+      "games": 3,
+      "returnSum": 3,
+      "meanReturn": 1
+    },
+    "OGN-005/298": {
+      "games": 3,
+      "returnSum": 3,
+      "meanReturn": 1
+    },
+    "OGN-245/298": {
+      "games": 3,
+      "returnSum": 3,
+      "meanReturn": 1
+    },
+    "OGN-040/298": {
+      "games": 3,
+      "returnSum": 3,
+      "meanReturn": 1
+    },
+    "OGN-268/298": {
+      "games": 2,
+      "returnSum": -2,
+      "meanReturn": -1
+    },
+    "OGN-183/298": {
+      "games": 3,
+      "returnSum": -3,
+      "meanReturn": -1
+    },
+    "OGN-179/298": {
+      "games": 2,
+      "returnSum": -2,
+      "meanReturn": -1
+    },
+    "OGN-169/298": {
+      "games": 3,
+      "returnSum": -3,
+      "meanReturn": -1
+    },
+    "OGN-173/298": {
+      "games": 2,
+      "returnSum": -2,
+      "meanReturn": -1
+    },
+    "OGN-168/298": {
+      "games": 3,
+      "returnSum": -3,
+      "meanReturn": -1
+    },
+    "OGN-134/298": {
+      "games": 3,
+      "returnSum": -3,
+      "meanReturn": -1
+    },
+    "OGN-201/298": {
+      "games": 2,
+      "returnSum": -2,
+      "meanReturn": -1
+    },
+    "OGN-138/298": {
+      "games": 3,
+      "returnSum": -3,
+      "meanReturn": -1
+    },
+    "OGN-162/298": {
+      "games": 1,
+      "returnSum": -1,
+      "meanReturn": -1
+    },
+    "OGN-192/298": {
+      "games": 3,
+      "returnSum": -3,
+      "meanReturn": -1
+    },
+    "OGN-196/298": {
+      "games": 1,
+      "returnSum": -1,
+      "meanReturn": -1
+    },
+    "OGN-161/298": {
+      "games": 3,
+      "returnSum": -3,
+      "meanReturn": -1
+    },
+    "OGN-142/298": {
+      "games": 1,
+      "returnSum": -1,
+      "meanReturn": -1
+    },
+    "OGN-158/298": {
+      "games": 1,
+      "returnSum": -1,
+      "meanReturn": -1
+    },
+    "OGN-186/298": {
+      "games": 3,
+      "returnSum": -3,
+      "meanReturn": -1
+    },
+    "OGN-160/298": {
+      "games": 3,
+      "returnSum": -3,
+      "meanReturn": -1
+    }
+  },
+  "matchupStats": {
+    "origins-kaisa::origins-sett": {
+      "games": 1,
+      "wins": 1
+    },
+    "origins-sett::origins-kaisa": {
+      "games": 1,
+      "wins": 0
+    },
+    "origins-darius::origins-kaisa": {
+      "games": 1,
+      "wins": 1
+    },
+    "origins-kaisa::origins-darius": {
+      "games": 1,
+      "wins": 0
+    },
+    "origins-kaisa::origins-miss-fortune": {
+      "games": 1,
+      "wins": 1
+    },
+    "origins-miss-fortune::origins-kaisa": {
+      "games": 1,
+      "wins": 0
+    }
+  },
+  "metaStats": {
+    "games": 3,
+    "cardAppearances": {
+      "OGN-104/298": {
+        "decks": 3,
+        "wins": 2,
+        "name": "Retreat"
+      },
+      "OGN-095/298": {
+        "decks": 3,
+        "wins": 2,
+        "name": "Stupefy"
+      },
+      "OGN-004/298": {
+        "decks": 3,
+        "wins": 2,
+        "name": "Cleave"
+      },
+      "OGN-009/298": {
+        "decks": 3,
+        "wins": 2,
+        "name": "Hextech Ray"
+      },
+      "OGN-093/298": {
+        "decks": 3,
+        "wins": 2,
+        "name": "Smoke Screen"
+      },
+      "OGN-029/298": {
+        "decks": 3,
+        "wins": 2,
+        "name": "Falling Star"
+      },
+      "OGN-024/298": {
+        "decks": 3,
+        "wins": 2,
+        "name": "Void Seeker"
+      },
+      "OGN-122/298": {
+        "decks": 3,
+        "wins": 2,
+        "name": "Time Warp"
+      },
+      "OGN-103/298": {
+        "decks": 3,
+        "wins": 2,
+        "name": "Ravenbloom Student"
+      },
+      "OGN-096/298": {
+        "decks": 3,
+        "wins": 2,
+        "name": "Watchful Sentry"
+      },
+      "OGN-013/298": {
+        "decks": 3,
+        "wins": 2,
+        "name": "Pouty Poro"
+      },
+      "OGN-039/298": {
+        "decks": 3,
+        "wins": 2,
+        "name": "Kai'Sa, Survivor"
+      },
+      "OGN-012/298": {
+        "decks": 4,
+        "wins": 3,
+        "name": "Noxus Hopeful"
+      },
+      "OGN-027/298": {
+        "decks": 4,
+        "wins": 3,
+        "name": "Darius, Trifarian"
+      },
+      "OGN-116/298": {
+        "decks": 3,
+        "wins": 2,
+        "name": "Thousand-Tailed Watcher"
+      },
+      "OGN-270/298": {
+        "decks": 1,
+        "wins": 0,
+        "name": "Showstopper"
+      },
+      "OGN-156/298": {
+        "decks": 1,
+        "wins": 0,
+        "name": "Sabotage"
+      },
+      "OGN-213/298": {
+        "decks": 1,
+        "wins": 0,
+        "name": "Hidden Blade"
+      },
+      "OGN-128/298": {
+        "decks": 1,
+        "wins": 0,
+        "name": "Challenge"
+      },
+      "OGN-207/298": {
+        "decks": 1,
+        "wins": 0,
+        "name": "Call to Glory"
+      },
+      "OGN-154/298": {
+        "decks": 2,
+        "wins": 0,
+        "name": "Primal Strength"
+      },
+      "OGN-210/298": {
+        "decks": 1,
+        "wins": 0,
+        "name": "Daring Poro"
+      },
+      "OGN-139/298": {
+        "decks": 1,
+        "wins": 0,
+        "name": "Cithria of Cloudfield"
+      },
+      "OGN-136/298": {
+        "decks": 1,
+        "wins": 0,
+        "name": "Pit Rookie"
+      },
+      "OGN-240/298": {
+        "decks": 1,
+        "wins": 0,
+        "name": "Sett, Kingpin"
+      },
+      "OGN-232/298": {
+        "decks": 1,
+        "wins": 0,
+        "name": "Fiora, Victorious"
+      },
+      "OGN-155/298": {
+        "decks": 1,
+        "wins": 0,
+        "name": "Qiyana, Victorious"
+      },
+      "OGN-141/298": {
+        "decks": 1,
+        "wins": 0,
+        "name": "Kinkou Monk"
+      },
+      "OGN-164/298": {
+        "decks": 1,
+        "wins": 0,
+        "name": "Sett, Brawler"
+      },
+      "OGN-124/298": {
+        "decks": 1,
+        "wins": 0,
+        "name": "Arena Bar"
+      },
+      "OGN-145/298": {
+        "decks": 1,
+        "wins": 0,
+        "name": "Unyielding Spirit"
+      },
+      "OGN-216/298": {
+        "decks": 1,
+        "wins": 1,
+        "name": "Soaring Scout"
+      },
+      "OGN-010/298": {
+        "decks": 1,
+        "wins": 1,
+        "name": "Legion Rearguard"
+      },
+      "OGN-003/298": {
+        "decks": 1,
+        "wins": 1,
+        "name": "Chemtech Enforcer"
+      },
+      "OGN-218/298": {
+        "decks": 1,
+        "wins": 1,
+        "name": "Vanguard Captain"
+      },
+      "OGN-208/298": {
+        "decks": 1,
+        "wins": 1,
+        "name": "Cruel Patron"
+      },
+      "OGN-001/298": {
+        "decks": 1,
+        "wins": 1,
+        "name": "Blazing Scorcher"
+      },
+      "OGN-020/298": {
+        "decks": 1,
+        "wins": 1,
+        "name": "Scrapyard Champion"
+      },
+      "OGN-002/298": {
+        "decks": 1,
+        "wins": 1,
+        "name": "Brazen Buccaneer"
+      },
+      "OGN-254/298": {
+        "decks": 1,
+        "wins": 1,
+        "name": "Noxian Guillotine"
+      },
+      "OGN-005/298": {
+        "decks": 1,
+        "wins": 1,
+        "name": "Disintegrate"
+      },
+      "OGN-245/298": {
+        "decks": 1,
+        "wins": 1,
+        "name": "Seal of Unity"
+      },
+      "OGN-040/298": {
+        "decks": 1,
+        "wins": 1,
+        "name": "Seal of Rage"
+      },
+      "OGN-268/298": {
+        "decks": 1,
+        "wins": 0,
+        "name": "Bullet Time"
+      },
+      "OGN-183/298": {
+        "decks": 1,
+        "wins": 0,
+        "name": "Stacked Deck"
+      },
+      "OGN-179/298": {
+        "decks": 1,
+        "wins": 0,
+        "name": "Acceptable Losses"
+      },
+      "OGN-169/298": {
+        "decks": 1,
+        "wins": 0,
+        "name": "Gust"
+      },
+      "OGN-173/298": {
+        "decks": 1,
+        "wins": 0,
+        "name": "Ride the Wind"
+      },
+      "OGN-168/298": {
+        "decks": 1,
+        "wins": 0,
+        "name": "Fight or Flight"
+      },
+      "OGN-134/298": {
+        "decks": 1,
+        "wins": 0,
+        "name": "Mobilize"
+      },
+      "OGN-201/298": {
+        "decks": 1,
+        "wins": 0,
+        "name": "Invert Timelines"
+      },
+      "OGN-138/298": {
+        "decks": 1,
+        "wins": 0,
+        "name": "Catalyst of Aeons"
+      },
+      "OGN-162/298": {
+        "decks": 1,
+        "wins": 0,
+        "name": "Miss Fortune, Captain"
+      },
+      "OGN-192/298": {
+        "decks": 1,
+        "wins": 0,
+        "name": "Mindsplitter"
+      },
+      "OGN-196/298": {
+        "decks": 1,
+        "wins": 0,
+        "name": "Soulgorger"
+      },
+      "OGN-161/298": {
+        "decks": 1,
+        "wins": 0,
+        "name": "Deadbloom Predator"
+      },
+      "OGN-142/298": {
+        "decks": 1,
+        "wins": 0,
+        "name": "Mountain Drake"
+      },
+      "OGN-158/298": {
+        "decks": 1,
+        "wins": 0,
+        "name": "Volibear, Imposing"
+      },
+      "OGN-186/298": {
+        "decks": 1,
+        "wins": 0,
+        "name": "Treasure Trove"
+      },
+      "OGN-160/298": {
+        "decks": 1,
+        "wins": 0,
+        "name": "Dazzling Aurora"
+      }
+    }
+  },
+  "archetypeStats": {
+    "OGN-247/298": {
+      "games": 3,
+      "unitTotal": 57,
+      "spellTotal": 63,
+      "gearTotal": 0,
+      "energyTotal": 336,
+      "cardTotal": 120,
+      "wins": 2,
+      "unitRatio": 0.475,
+      "spellRatio": 0.525,
+      "gearRatio": 0,
+      "averageEnergy": 2.8
+    },
+    "OGN-269/298": {
+      "games": 1,
+      "unitTotal": 19,
+      "spellTotal": 18,
+      "gearTotal": 3,
+      "energyTotal": 108,
+      "cardTotal": 40,
+      "wins": 0,
+      "unitRatio": 0.475,
+      "spellRatio": 0.45,
+      "gearRatio": 0.075,
+      "averageEnergy": 2.7
+    },
+    "OGN-253/298": {
+      "games": 1,
+      "unitTotal": 28,
+      "spellTotal": 6,
+      "gearTotal": 6,
+      "energyTotal": 128,
+      "cardTotal": 40,
+      "wins": 1,
+      "unitRatio": 0.7,
+      "spellRatio": 0.15,
+      "gearRatio": 0.15,
+      "averageEnergy": 3.2
+    },
+    "OGN-267/298": {
+      "games": 1,
+      "unitTotal": 10,
+      "spellTotal": 24,
+      "gearTotal": 6,
+      "energyTotal": 160,
+      "cardTotal": 40,
+      "wins": 0,
+      "unitRatio": 0.25,
+      "spellRatio": 0.6,
+      "gearRatio": 0.15,
+      "averageEnergy": 4
+    }
+  }
+}

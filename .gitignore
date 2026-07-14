@@ -1,0 +1,14 @@
+node_modules/
+.desktop_runtime/
+data/ai/
+dist/
+release/
+tmp/
+build-info.json
+tmp_card_data.json
+tmp_card_summary.txt
+.env
+.env.*
+*.log
+*.pem
+*.key

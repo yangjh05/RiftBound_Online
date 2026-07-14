@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img" aria-label="Stylized battlefield board">
+  <defs>
+    <linearGradient id="sky" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#1b3142"/>
+      <stop offset="0.46" stop-color="#29524a"/>
+      <stop offset="1" stop-color="#6b5136"/>
+    </linearGradient>
+    <linearGradient id="lane" x1="0" x2="1">
+      <stop offset="0" stop-color="#d4b06f" stop-opacity=".72"/>
+      <stop offset=".5" stop-color="#f3d99c" stop-opacity=".88"/>
+      <stop offset="1" stop-color="#78a6a0" stop-opacity=".7"/>
+    </linearGradient>
+    <filter id="soft">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+  </defs>
+  <rect width="1600" height="900" fill="url(#sky)"/>
+  <path d="M0 618 C255 534 370 682 604 608 C856 528 1035 434 1600 528 L1600 900 L0 900 Z" fill="#263b31"/>
+  <path d="M0 716 C270 650 468 720 720 668 C1030 604 1210 620 1600 688 L1600 900 L0 900 Z" fill="#182820"/>
+  <g opacity=".55" filter="url(#soft)">
+    <path d="M220 90 L340 330 L90 328 Z" fill="#7db7b0"/>
+    <path d="M1300 70 L1490 378 L1110 368 Z" fill="#d7a260"/>
+  </g>
+  <g opacity=".9">
+    <rect x="180" y="230" width="1240" height="116" rx="18" fill="url(#lane)" stroke="#f6e5b7" stroke-opacity=".45"/>
+    <rect x="140" y="410" width="1320" height="116" rx="18" fill="url(#lane)" stroke="#f6e5b7" stroke-opacity=".45"/>
+    <rect x="180" y="590" width="1240" height="116" rx="18" fill="url(#lane)" stroke="#f6e5b7" stroke-opacity=".45"/>
+  </g>
+  <g fill="none" stroke="#f8e9bd" stroke-opacity=".35" stroke-width="4">
+    <path d="M250 288 H1350"/>
+    <path d="M220 468 H1380"/>
+    <path d="M250 648 H1350"/>
+  </g>
+</svg>
