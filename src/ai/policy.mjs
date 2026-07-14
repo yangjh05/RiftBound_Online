@@ -1,4 +1,4 @@
-import { actionKey } from "./actions.mjs";
+import { actionKey, planPaymentActions } from "./actions.mjs";
 import { observeGame, stateFeatures } from "./observation.mjs";
 import { publicOpponentPlan } from "./belief.mjs";
 
@@ -41,6 +41,8 @@ export function actionFeatures(game, actorId, action) {
   const mulliganSelected = new Set(game.mulligan?.selectedCardIds || []);
   const paymentEnergySelected = new Set(payment?.energyRuneIds || []);
   const paymentPowerSelected = new Set(payment?.powerRuneIds || []);
+  const paymentPoolSelected = new Set(payment?.poolEnergyIds || []);
+  const optionalPaymentEffect = (payment?.optionalPowerEffects || payment?.optionalEffects || []).find((effect) => effect.id === action.effectId);
   const selectedEnergy = (payment?.energyRuneIds?.length || 0) + (payment?.poolEnergyIds?.length || 0);
   const energyCost = payment?.energyCost || 0;
   const selectedPower = payment?.powerRuneIds?.length || 0;
@@ -60,8 +62,10 @@ export function actionFeatures(game, actorId, action) {
     readyRunes: (player?.runes.filter((rune) => !rune.exhausted).length || 0) / 12,
     paymentEnergyProgress: energyCost ? selectedEnergy / energyCost : 0,
     paymentPowerProgress: powerCost ? selectedPower / powerCost : 0,
-    confirmReady: action.kind === "confirmPayment" && selectedEnergy >= energyCost && selectedPower >= powerCost ? 1 : 0,
+    confirmReady: action.kind === "confirmPayment" ? 1 : 0,
     toggleRemovesSelection: action.kind === "togglePaymentRune" && (paymentEnergySelected.has(action.runeId) || paymentPowerSelected.has(action.runeId)) ? 1 : 0,
+    togglePoolRemovesSelection: action.kind === "togglePaymentPoolEnergy" && paymentPoolSelected.has(action.energyId) ? 1 : 0,
+    toggleOptionalRemovesSelection: action.kind === "toggleOptionalPaymentEffect" && optionalPaymentEffect?.selected ? 1 : 0,
     mulliganRemovesSelection: action.kind === "toggleMulliganCard" && mulliganSelected.has(action.cardId) ? 1 : 0,
     mulliganCardEnergy: action.kind === "toggleMulliganCard" ? (card?.energy || 0) / 10 : 0,
     passWithChain: action.kind === "passShowdown" && ((game.showdown?.chain?.length || 0) + (game.actionChain?.chain?.length || 0)) > 0 ? 1 : 0
@@ -70,10 +74,13 @@ export function actionFeatures(game, actorId, action) {
 
 export function scoreActions(game, actorId, actions, model = DEFAULT_AI_MODEL) {
   const plan = determineStrategicPlan(game, actorId, model);
+  const plannedPaymentKey = game.pendingPayment ? actionKey(planPaymentActions(game)?.[0]) : null;
   return actions.map((action) => {
     const features = actionFeatures(game, actorId, action);
     features[`plan:${plan.kind}:${action.kind}`] = 1;
     let score = dot(model.policyWeights, features) + bootstrapActionScore(game, actorId, action, features) + planActionBias(plan, action, features);
+    if (plannedPaymentKey && actionKey(action) === plannedPaymentKey) score += 12;
+    if (game.pendingPayment && !plannedPaymentKey && action.kind === "cancelPayment") score += 12;
     if (!Number.isFinite(score)) score = 0;
     return { action, key: actionKey(action), score, features };
   }).sort((left, right) => right.score - left.score);
@@ -110,7 +117,8 @@ function bootstrapActionScore(game, actorId, action, features) {
   if (action.kind === "cancelPayment") score -= 2;
   if (action.kind === "togglePaymentRune") score += 1.2 - features.paymentEnergyProgress * 0.25 - features.paymentPowerProgress * 0.25;
   if (features.toggleRemovesSelection) score -= 4;
-  if (action.kind === "togglePaymentPoolEnergy") score += 1.5;
+  if (action.kind === "togglePaymentPoolEnergy") score += features.togglePoolRemovesSelection ? -4 : 1.5;
+  if (action.kind === "toggleOptionalPaymentEffect") score += features.toggleOptionalRemovesSelection ? -4 : -0.25;
   if (action.kind === "skipMulligan") score += 0.15;
   if (action.kind === "confirmMulligan") score += 0.4;
   if (action.kind === "toggleMulliganCard") score += features.mulliganRemovesSelection ? -4 : Math.max(0, features.mulliganCardEnergy - 0.18);

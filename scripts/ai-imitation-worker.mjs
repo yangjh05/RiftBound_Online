@@ -21,4 +21,14 @@ const result = collectBaselineImitation({
   }
 });
 
-parentPort.postMessage({ kind: "result", workerIndex: workerData.workerIndex, result });
+parentPort.postMessage(
+  { kind: "result", workerIndex: workerData.workerIndex, result },
+  transferableBuffers(result)
+);
+
+function transferableBuffers(value, buffers = new Set()) {
+  if (ArrayBuffer.isView(value)) buffers.add(value.buffer);
+  else if (Array.isArray(value)) value.forEach((item) => transferableBuffers(item, buffers));
+  else if (value && typeof value === "object") Object.values(value).forEach((item) => transferableBuffers(item, buffers));
+  return [...buffers];
+}

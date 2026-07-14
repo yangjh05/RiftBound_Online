@@ -8,7 +8,7 @@ import { createGame } from "../src/engine.mjs";
 import { activeActorId, enumerateLegalActions } from "../src/ai/actions.mjs";
 import { inferOpponentDeckBelief } from "../src/ai/belief.mjs";
 import { mutateBattlefieldSuite, mutateCardPackage, mutateRuneDistribution, mutateSideboardPackage } from "../src/ai/deckbuilding.mjs";
-import { ACTION_DIM, CARD_VOCABULARY, encodeState, STATE_DIM, actionStage, cardIndex, selectHierarchicalActions } from "../src/ai/neural/encoding.mjs";
+import { ACTION_DIM, CARD_VOCABULARY, MAX_ACTIONS, encodeActionSet, encodeState, STATE_DIM, actionStage, cardIndex, selectHierarchicalActions } from "../src/ai/neural/encoding.mjs";
 import { createNeuralModel, createNeuralSession, deserializeNeuralModel, serializeNeuralModel } from "../src/ai/neural/model.mjs";
 import { readTrajectoryArchive, writeTrajectoryArchive } from "../src/ai/neural/archive.mjs";
 import { determinizeGame } from "../src/ai/rollout.mjs";
@@ -19,6 +19,7 @@ import { CARD_POOL_FORMATS, cardAllowedInPool, cardNumbersForPool } from "../src
 import { buildMetaPreset, ORIGINS_HOUSTON_2025 } from "../src/ai/meta-presets.mjs";
 import { weightedDeckPick } from "../src/ai/neural/imitation.mjs";
 import { evaluateBehaviorCloning, trainBehaviorCloning } from "../src/ai/neural/trainer.mjs";
+import { assessBehaviorCloningQuality, auditImitationDataset } from "../src/ai/neural/quality.mjs";
 
 const decks = Object.values(decklists);
 
@@ -119,6 +120,17 @@ test("hierarchical action cap retains every active decision stage", () => {
   assert.deepEqual(new Set(selected.map(actionStage)), new Set(["payment", "choice", "reaction", "match", "mulligan", "movement", "main"]));
 });
 
+test("imitation action capping always preserves the full-set teacher choice", () => {
+  const game = createGame({ decks: decks.slice(0, 2), interactive: true, manualActionChainPriority: true });
+  const actorId = activeActorId(game);
+  const actions = Array.from({ length: MAX_ACTIONS + 20 }, (_, index) => ({ kind: "endTurn", syntheticIndex: index }));
+  const teacherChoice = actions.at(-1);
+  const encoded = encodeActionSet(game, actorId, actions, { requiredActions: [teacherChoice] });
+  assert.equal(encoded.truncated, true);
+  assert.equal(encoded.originalLegalCount, actions.length);
+  assert.equal(encoded.actions.includes(teacherChoice), true);
+});
+
 test("trajectory shards round-trip typed neural tensors", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "riftbound-ai-"));
   const filename = path.join(directory, "shard.json.gz");
@@ -167,6 +179,42 @@ test("behavior-cloning bootstrap trains and reports held-out action metrics", ()
   assert.equal(evaluated.steps, 1);
   assert.equal(Number.isFinite(evaluated.policyLoss), true);
   assert.equal(evaluated.actionAccuracy >= 0 && evaluated.actionAccuracy <= 1, true);
+  assert.equal(evaluated.decisionChanceAccuracy >= 0 && evaluated.decisionChanceAccuracy <= 1, true);
+});
+
+test("bootstrap quality gates reject corrupt data and accept measurable learning", () => {
+  const validStep = {
+    state: new Float32Array(STATE_DIM),
+    actions: new Float32Array(ACTION_DIM),
+    selectedIndex: 0,
+    legalCount: 1,
+    beliefTarget: new Float32Array(CARD_VOCABULARY.length),
+    initialMemory: new Float32Array(64),
+    advantage: 1,
+    return: 1,
+    teacherConfidence: 1,
+    selectedKind: "endTurn",
+    originalLegalCount: 1,
+    actionSetTruncated: false
+  };
+  const trajectories = ["quality-1", "quality-2"].map((gameId, index) => ({ gameId, playerId: "p1", completed: true, steps: Array.from({ length: 10 }, () => ({ ...validStep })) }));
+  const summaries = trajectories.map((trajectory, index) => ({ gameId: trajectory.gameId, completed: true, capped: false, firstPlayerId: index ? "p2" : "p1", deckIds: [decks[0].id, decks[1].id] }));
+  const dataset = auditImitationDataset({
+    collected: { trajectories, summaries, completedGames: 2, attemptedGames: 2, targetGames: 2 },
+    split: { training: [trajectories[0]], validation: [trajectories[1]] },
+    deckIds: [decks[0].id, decks[1].id]
+  });
+  assert.equal(dataset.passed, true);
+  trajectories[0].steps[0].state[0] = Number.NaN;
+  assert.equal(auditImitationDataset({ collected: { trajectories, summaries, completedGames: 2, attemptedGames: 2, targetGames: 2 }, split: { training: [trajectories[0]], validation: [trajectories[1]] }, deckIds: [decks[0].id, decks[1].id] }).passed, false);
+
+  const quality = assessBehaviorCloningQuality({
+    baseline: { decisionAccuracy: 0.2, policyLoss: 2 },
+    validation: { decisionAccuracy: 0.35, decisionChanceAccuracy: 0.2, decisionSteps: 100, policyLoss: 1.5, valueMse: 0.8, beliefLoss: 0.4 },
+    training: { decisionAccuracy: 0.4, policyLoss: 1.3 },
+    validationGames: 10
+  });
+  assert.equal(quality.passed, true);
 });
 
 test("advanced deck mutations preserve card count, rune count and unique battlefield count", () => {

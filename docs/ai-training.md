@@ -24,8 +24,22 @@ AI는 사람과 동일한 게임 엔진과 공용 카드 효과 resolver를 사�
 기본 정책의 플레이를 모방하는 초기 체크포인트가 필요하면 다음 명령을 사용합니다. 수집은 worker별로 병렬 실행되며, Origins 역사 메타 70%와 균등 탐색 30%를 혼합합니다. 최대 행동 수 안에 승패가 결정된 경기만 학습에 사용하고, 목표 완주 경기 수를 채울 때까지 제한된 횟수만큼 다시 시도합니다.
 
 ```powershell
-npm run ai:bootstrap -- --games 256 --workers 4 --epochs 5 --batch-size 8 --max-actions 640 --card-pool origins-era --output src/ai/checkpoints/neural-champion.json
+npm run ai:bootstrap -- --games 256 --workers 4 --epochs 5 --batch-size 8 --max-actions 800 --card-pool origins-era --output src/ai/checkpoints/neural-champion.json
 ```
+
+### Bootstrap integrity and quality gates
+
+The bootstrap job rejects a run instead of publishing a weak or corrupted model when any required condition fails:
+
+- every requested game must complete, while capped-game rate, action truncation, deck coverage, and first-player balance stay within configured limits;
+- every tensor is checked for shape and finite values, train/validation game IDs must not overlap, and the collected dataset receives a SHA-256 fingerprint;
+- the full legal action set is scored before capping, and the teacher-selected action is always retained in the encoded set;
+- payment decisions reuse a verified completion plan, and repeated card-play intents are suppressed within a turn to prevent collection loops;
+- validation is measured after every epoch, the best held-out epoch is retained, and the model must beat chance plus either its untrained accuracy or policy-loss baseline;
+- `latest-checkpoint.json`, `best-checkpoint.json`, `run-status.json`, and `console.log` remain available for diagnosis or recovery when a run fails;
+- the final model checksum, dataset fingerprint, report state, and both quality gates are verified before an artifact can be applied.
+
+GitHub Actions also runs the complete engine test suite before collection and verifies the generated artifact before upload. A failed or `quality-rejected` run must not be applied by bypassing the verifier.
 
 초기 정책은 PPO가 아니라 교사 행동 cross-entropy, 최종 승패 가치 회귀, 상대 덱 카드 분포 손실로 학습합니다. 교사가 1순위와 2순위를 명확하게 구분한 판단에 높은 가중치를 부여하며, 강제 행동을 제외한 검증 행동 일치율도 별도로 계산합니다. 실행 중에는 JSON Lines 형식으로 worker 진행률과 epoch 결과가 출력됩니다. 완료 후 `data/ai/runs/bootstrap-*.json`에 다음 정보가 저장됩니다.
 
@@ -56,7 +70,7 @@ npm run ai:bootstrap:apply -- --input "C:\Downloads\origins-ai-bootstrap-실행�
 장기 실행을 로컬 PowerShell에서 직접 수행할 때는 TensorFlow의 정상 `stderr` 안내가 PowerShell 오류로 변환되지 않도록 로깅 래퍼를 사용합니다.
 
 ```powershell
-npm run ai:bootstrap:logged -- --games 256 --workers 4 --epochs 5 --batch-size 8 --max-actions 640 --card-pool origins-era --seed 20251207 --output src/ai/checkpoints/neural-champion.json
+npm run ai:bootstrap:logged -- --games 256 --workers 4 --epochs 5 --batch-size 8 --max-actions 800 --card-pool origins-era --seed 20251207 --output src/ai/checkpoints/neural-champion.json
 ```
 
 ```powershell

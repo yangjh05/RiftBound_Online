@@ -21,7 +21,7 @@ on:
       max_actions:
         description: Maximum actions per attempted game
         required: true
-        default: "640"
+        default: "800"
         type: string
       seed:
         description: Deterministic random seed
@@ -42,6 +42,7 @@ jobs:
     timeout-minutes: 360
     env:
       TF_CPP_MIN_LOG_LEVEL: "1"
+      NODE_OPTIONS: "--max-old-space-size=4096"
       RUN_DIR: data/ai/runs/github-${{ github.run_id }}-${{ github.run_attempt }}
       MODEL_PATH: data/ai/output/neural-champion.json
     steps:
@@ -57,6 +58,16 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Record runner capacity
+        run: |
+          node --version
+          npm --version
+          free -h
+          df -h .
+
+      - name: Run engine and AI preflight checks
+        run: npm run check
+
       - name: Run Origins behavior-cloning bootstrap
         run: >-
           npm run ai:bootstrap:logged --
@@ -67,10 +78,19 @@ jobs:
           --max-actions "${{ inputs.max_actions }}"
           --validation-fraction 0.1
           --meta-fraction 0.7
+          --attempt-multiplier 3
+          --collection-rounds 3
+          --max-cap-rate 0.15
+          --max-truncation-rate 0.01
+          --min-deck-coverage 0.9
+          --max-seat-imbalance 0.15
           --card-pool origins-era
           --seed "${{ inputs.seed }}"
           --output "$MODEL_PATH"
           --report "$RUN_DIR/run-report.json"
+
+      - name: Verify checkpoint, report, fingerprints, and quality gates
+        run: npm run ai:bootstrap:apply -- --input data/ai --verify-only true
 
       - name: Upload model and run report
         if: always()
@@ -78,7 +98,7 @@ jobs:
         with:
           name: origins-ai-bootstrap-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 30
           compression-level: 6
           path: |
             data/ai/output/neural-champion.json

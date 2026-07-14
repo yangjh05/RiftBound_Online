@@ -76,6 +76,7 @@ export function evaluateBehaviorCloning(model, trajectories, options = {}) {
     actionAccuracy: steps ? batches.reduce((sum, item) => sum + item.correct, 0) / steps : 0,
     decisionSteps,
     decisionAccuracy: decisionSteps ? batches.reduce((sum, item) => sum + item.decisionCorrect, 0) / decisionSteps : 0,
+    decisionChanceAccuracy: decisionSteps ? batches.reduce((sum, item) => sum + item.chanceCorrect, 0) / decisionSteps : 0,
     policyLoss: weightedMean(batches, "policyLoss"),
     valueMse: weightedMean(batches, "valueMse"),
     beliefLoss: weightedMean(batches, "beliefLoss"),
@@ -218,5 +219,17 @@ function chunkTrajectories(trajectories, length) {
 function shuffle(items, random) { for (let index = items.length - 1; index > 0; index -= 1) { const target = Math.floor(random() * (index + 1)); [items[index], items[target]] = [items[target], items[index]]; } }
 function mean(values) { return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0; }
 function weightedMean(items, key) { const weight = items.reduce((sum, item) => sum + item.steps, 0); return weight ? items.reduce((sum, item) => sum + item[key] * item.steps, 0) / weight : 0; }
-function aggregateMetrics(items) { return { meanLoss: mean(items.map((item) => item.loss)), meanPolicyLoss: mean(items.map((item) => item.policyLoss)), meanValueLoss: mean(items.map((item) => item.valueLoss)), meanBeliefLoss: mean(items.map((item) => item.beliefLoss)), meanEntropy: mean(items.map((item) => item.entropy)) }; }
+function aggregateMetrics(items) {
+  return {
+    meanLoss: metricMean(items, "loss"),
+    meanPolicyLoss: metricMean(items, "policyLoss"),
+    meanValueLoss: metricMean(items, "valueLoss"),
+    meanBeliefLoss: metricMean(items, "beliefLoss"),
+    meanEntropy: metricMean(items, "entropy")
+  };
+}
+function metricMean(items, key) {
+  const weight = items.reduce((sum, item) => sum + (item.steps || 0), 0);
+  return weight ? items.reduce((sum, item) => sum + item[key] * item.steps, 0) / weight : mean(items.map((item) => item[key]));
+}
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }

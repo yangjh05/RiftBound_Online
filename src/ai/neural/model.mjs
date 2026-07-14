@@ -211,7 +211,7 @@ export function trainBehaviorCloningBatch(model, batch, optimizer, options = {})
       tf.mul(entropy, -entropyCoefficient)
     ]);
   }, true, variableList);
-  const result = readLossComponents(loss, components);
+  const result = readLossComponents(loss, components, batch);
   Object.values(tensors).forEach((tensor) => tensor.dispose());
   return result;
 }
@@ -229,12 +229,14 @@ export function evaluateBehaviorCloningBatch(model, batch) {
     const correct = tf.mul(tf.equal(predictions, tensors.selectedIndices).toFloat(), tensors.stepMask);
     const decisionMask = tf.mul(tf.greater(tensors.legalCounts, 1).toFloat(), tensors.stepMask);
     const decisionCorrect = tf.mul(tf.equal(predictions, tensors.selectedIndices).toFloat(), decisionMask);
+    const chanceCorrect = tf.mul(tf.div(1, tf.maximum(1, tensors.legalCounts.toFloat())), decisionMask);
     const count = Math.max(1, tf.sum(tensors.stepMask).dataSync()[0]);
     return {
       steps: count,
       correct: tf.sum(correct).dataSync()[0],
       decisionSteps: tf.sum(decisionMask).dataSync()[0],
       decisionCorrect: tf.sum(decisionCorrect).dataSync()[0],
+      chanceCorrect: tf.sum(chanceCorrect).dataSync()[0],
       policyLoss: -tf.sum(tf.mul(selectedLogProbabilities, tensors.stepMask)).dataSync()[0] / count,
       valueMse: tf.sum(tf.mul(tf.square(tf.sub(output.value, tensors.returns)), tensors.stepMask)).dataSync()[0] / count,
       beliefLoss: beliefCrossEntropyLoss(output.belief, tensors.beliefTargets, tensors.stepMask, tf.scalar(count)).dataSync()[0],
@@ -318,8 +320,9 @@ function beliefCrossEntropyLoss(prediction, target, stepMask, denominator) {
   return tf.div(tf.sum(tf.mul(crossEntropy, stepMask)), denominator);
 }
 
-function readLossComponents(loss, components) {
+function readLossComponents(loss, components, batch) {
   const result = {
+    steps: batch.stepMask.reduce((sum, value) => sum + value, 0),
     loss: loss.dataSync()[0],
     policyLoss: components.policyLoss.dataSync()[0],
     valueLoss: components.valueLoss.dataSync()[0],

@@ -59,13 +59,21 @@ export function enumerateLegalActions(game, actorId = activeActorId(game)) {
 }
 
 function canCompletePayment(game) {
+  return Boolean(planPaymentActions(game));
+}
+
+export function planPaymentActions(source) {
   const orders = [
     { reverse: false, powerFirst: false },
     { reverse: true, powerFirst: false },
     { reverse: false, powerFirst: true },
     { reverse: true, powerFirst: true }
   ];
-  return orders.some((order) => attemptPaymentPlan(game, order));
+  for (const order of orders) {
+    const plan = attemptPaymentPlan(source, order);
+    if (plan) return plan;
+  }
+  return null;
 }
 
 function attemptPaymentPlan(source, order) {
@@ -73,16 +81,30 @@ function attemptPaymentPlan(source, order) {
   const payment = game.pendingPayment;
   const player = game.players.find((candidate) => candidate.id === payment?.playerId);
   if (!payment || !player) return false;
-  for (const energy of payment.poolEnergyOptions || payment.poolEnergy || []) togglePaymentPoolEnergy(game, energy.id);
+  if (confirmPayment(cloneGame(game))?.ok) return [{ kind: "confirmPayment" }];
+  const actions = [];
+  const selectedPool = new Set(payment.poolEnergyIds || []);
+  for (const energy of payment.poolEnergyOptions || payment.poolEnergy || []) {
+    if (selectedPool.has(energy.id)) continue;
+    const action = { kind: "togglePaymentPoolEnergy", energyId: energy.id };
+    if (!togglePaymentPoolEnergy(game, energy.id)?.ok) continue;
+    actions.push(action);
+    if (confirmPayment(cloneGame(game))?.ok) return [...actions, { kind: "confirmPayment" }];
+  }
   const runes = order.reverse ? [...player.runes].reverse() : [...player.runes];
   const modes = order.powerFirst ? ["power", "energy"] : ["energy", "power"];
   for (const mode of modes) {
     for (const rune of runes) {
+      const selected = mode === "energy" ? game.pendingPayment.energyRuneIds : game.pendingPayment.powerRuneIds;
+      if (selected?.includes(rune.instanceId)) continue;
+      const action = { kind: "togglePaymentRune", runeId: rune.instanceId, mode };
       const result = togglePaymentRune(game, rune.instanceId, mode);
-      if (result?.ok && confirmPayment(cloneGame(game))?.ok) return true;
+      if (!result?.ok) continue;
+      actions.push(action);
+      if (confirmPayment(cloneGame(game))?.ok) return [...actions, { kind: "confirmPayment" }];
     }
   }
-  return Boolean(confirmPayment(game)?.ok);
+  return null;
 }
 
 function candidateActions(game, actorId) {

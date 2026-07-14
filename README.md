@@ -89,8 +89,8 @@ This runs:
 
 ```powershell
 npm run ai:neural:smoke
-npm run ai:bootstrap -- --games 256 --workers 4 --epochs 5 --batch-size 8 --max-actions 640 --card-pool origins-era --output src/ai/checkpoints/neural-champion.json
-npm run ai:bootstrap:logged -- --games 256 --workers 4 --epochs 5 --max-actions 640 --card-pool origins-era
+npm run ai:bootstrap -- --games 256 --workers 4 --epochs 5 --batch-size 8 --max-actions 800 --card-pool origins-era --output src/ai/checkpoints/neural-champion.json
+npm run ai:bootstrap:logged -- --games 256 --workers 4 --epochs 5 --max-actions 800 --card-pool origins-era
 npm run ai:bootstrap:apply -- --input "C:\Downloads\origins-ai-bootstrap-artifact"
 npm run ai:neural:train -- --games 256 --evaluation-games 80 --workers 4 --epochs 4 --seed 20260714
 npm run ai:continuous
