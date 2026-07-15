@@ -8,7 +8,7 @@ export default card({
   set: "Origins",
   rarity: "Epic",
   domains: [DOMAINS.FURY, DOMAINS.CHAOS],
-  tags: ["Signature Spell","Jinx"],
+  tags: ["Signature", "Signature Spell", "Jinx"],
   keywords: [],
   energy: 4,
   power: [{ domain: DOMAINS.ANY, amount: 1 }],
@@ -20,6 +20,13 @@ export default card({
     "kind": "dealDamageUnit",
     "target": "unit",
     "amount": 5
+  },
+  {
+    "timing": "battlefieldControl",
+    "kind": "discardReturnSelfFromTrash",
+    "event": "conquer",
+    "amount": 1,
+    "optional": true
   }
 ]
 });

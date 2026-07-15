@@ -8,7 +8,7 @@ export default card({
   set: "Origins",
   rarity: "Epic",
   domains: [DOMAINS.FURY, DOMAINS.MIND],
-  tags: ["Signature Spell","Kai'Sa"],
+  tags: ["Signature", "Signature Spell", "Kai'Sa"],
   keywords: [],
   energy: 7,
   power: [{ domain: DOMAINS.ANY, amount: 3 }],

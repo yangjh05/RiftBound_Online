@@ -12,6 +12,7 @@ export default card({
         DOMAINS.CHAOS
       ],
       "tags": [
+        "Champion",
         "Yordle",
         "Vex",
         "Shadow Isles"
@@ -25,10 +26,6 @@ export default card({
       "image": "https://exburst.dev/riftbound/cards/sd/UNL-150-219.webp",
       "text": "[Deflect] (Opponents must pay Power to choose me with a spell or ability.)\nWhen an opponent plays a unit while I'm at a battlefield, [Stun] it. They can't move it this turn. (It doesn't deal combat damage this turn.)",
       "effects": [
-        {
-          "timing": "static",
-          "kind": "deflect"
-        },
         {
           "timing": "opponentPlaysUnit",
           "kind": "stunAndCantMove"

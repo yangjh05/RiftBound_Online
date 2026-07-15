@@ -8,7 +8,7 @@ export default card({
   set: "Origins",
   rarity: "Rare",
   domains: [DOMAINS.BODY, DOMAINS.CHAOS],
-  tags: ["Miss Fortune"],
+  tags: ["Champion", "Miss Fortune"],
   keywords: ["Ganking"],
   power: [],
   image: "https://cdn.piltoverarchive.com/cards/OGN-267.webp",

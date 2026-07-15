@@ -15,6 +15,6 @@ export default card({
   image: "https://cdn.piltoverarchive.com/cards/OGN-060.webp",
   text: "When a friendly unit attacks or defends alone, give it +1 Might this turn.",
   effects: [
-    { timing: "attackOrDefend", kind: "modifyFriendlyAlone", amount: 1 }
+    { timing: "attackOrDefend", kind: "modifyFriendlyAlone", amount: 1, temporary: true }
   ]
 });

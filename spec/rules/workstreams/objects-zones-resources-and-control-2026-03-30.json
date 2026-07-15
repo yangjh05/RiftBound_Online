@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "rulesVersion": "2026-03-30",
+  "workstreamId": "objects-zones-resources-and-control",
+  "ranges": [[120, 189], [700, 742]],
+  "scope": "all-duel-leaf-clauses-in-ranges",
+  "cases": [
+    {
+      "id": "objects-cards-privacy-and-rules-text",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleRanges": [[120, 139]],
+      "evidenceTests": ["Core Rules runtime oracle rejects illegal zone, player, chain, attachment, and numeric states", "facedown privacy follows the card controller rather than its owner", "controlled spells enter their owners trash or corresponding deck after resolution", "every registered effect declares its ability class and active zones"],
+      "remaining": "None; ownership, card identity, public/private/secret faces, printed costs, types, Domains, Rules Text, Effect Text, and Might Bonuses are represented and checked at their active-zone boundaries."
+    },
+    {
+      "id": "board-types-zones-resources-tokens-and-control",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleRanges": [[140, 189]],
+      "evidenceTests": ["a target that visits a non-Board zone is a new object even after returning to the Board", "a target that moves only between Board locations remains the same object", "killed cards clear temporary board state before entering trash", "every declared unit-token effect creates the right unique tokens in the right state and zone", "Gold kills and exhausts itself as an Add Reaction cost, then universal Power pays a colored cost", "Open-state cleanup removes control when the controller has no unit without awarding it to an occupant"],
+      "remaining": "None for duel Unit, Gear, Spell, Rune, Legend, Battlefield, resource, zone, token, location, control, contested, and attached-object state."
+    },
+    {
+      "id": "buff-mighty-and-bonus-damage",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleRanges": [[700, 715]],
+      "evidenceTests": ["Buff objects remain distinct from ordinary Might modifiers", "baited hook kills a friendly unit and plays a top deck unit within might range", "Bonus Damage is added only after the underlying Deal action remains valid", "Bonus Damage increases one split total and its target limit without being added per allocation"],
+      "remaining": "None; Buff uniqueness and removal, Board versus non-Board Mighty, stacked Bonus Damage, valid Deal prerequisites, and pre-split total application have focused evidence."
+    },
+    {
+      "id": "attachment-inactive-and-dependent-keywords",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleRanges": [[716, 727]],
+      "evidenceTests": ["attaching Equipment to a new Top-Most card records the required Detach first", "attached Rules Text is inactive while Effect Text is appended to the Top-Most card", "Weaponmaster declares Equipment, pays its Equip cost, and attaches through the shared keyword resolver", "master yi tempered gains ganking only at level 6 xp"],
+      "remaining": "None; attachment trees, Top-Most state, appended Effect Text, inactive Rules Text exceptions, and dependent-keyword activation use shared evaluators."
+    },
+    {
+      "id": "xp-additional-turns-and-special-terms",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleRanges": [[728, 742]],
+      "evidenceTests": ["master yi tempered gains ganking only at level 6 xp", "multiple Additional Turns resolve newest-first and then resume the untouched regular turn order", "star-crossed requires explicit friendly and enemy unit choices", "attached cards keep their own controller when the Top-Most card changes control"],
+      "remaining": "None for duel XP ownership and spending, queued additional turns, and the special relationship terms consumed by card target filters."
+    }
+  ]
+}

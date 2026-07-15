@@ -12,6 +12,7 @@ export default card({
         DOMAINS.MIND
       ],
       "tags": [
+        "Champion",
         "Ionia",
         "Hwei"
       ],
@@ -29,7 +30,8 @@ export default card({
       "effects": [
         {
           "timing": "onMove",
-          "kind": "drawDiscardTypeBonus"
+          "kind": "drawDiscardTypeBonus",
+          "temporary": true
         }
       ]
     });

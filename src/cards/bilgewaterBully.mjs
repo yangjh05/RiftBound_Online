@@ -9,7 +9,7 @@ export default card({
   rarity: "Common",
   domains: [DOMAINS.BODY],
   tags: ["Bilgewater"],
-  keywords: ["Ganking"],
+  keywords: [],
   energy: 6,
   power: [],
   might: 6,

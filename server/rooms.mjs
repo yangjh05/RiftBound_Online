@@ -180,19 +180,21 @@ function submitMatchSideboard(room, playerId, command) {
   if (result.ready) {
     const next = beginNextMatchGame(room.match);
     if (!next.ok) return next;
-    room.game = createRoomGame(room, next.decks, next.firstPlayerId, next.lockedBattlefields);
+    room.game = createRoomGame(room, next.decks, next.firstPlayerId, next.lockedBattlefields, next.unavailableBattlefields);
     room.game.hostPlayerId = room.hostPlayerId || "p1";
     room.status = "playing";
   }
   return { ok: true };
 }
 
-function createRoomGame(room, deckRecords, firstPlayerId = null, lockedBattlefields = null) {
+function createRoomGame(room, deckRecords, firstPlayerId = null, lockedBattlefields = null, unavailableBattlefields = null) {
   const game = createGame({
     interactive: true,
     randomFirstPlayer: !firstPlayerId,
     firstPlayerId,
     lockedBattlefields,
+    unavailableBattlefields,
+    format: room.sideboardingEnabled ? "match" : "duel",
     manualActionChainPriority: true,
     enforceChampionLegendMatch: true,
     decks: deckRecords.map(resolveDeckRecord)

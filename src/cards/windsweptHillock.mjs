@@ -9,7 +9,7 @@ export default card({
   rarity: "Uncommon",
   domains: [],
   tags: [],
-  keywords: ["Ganking"],
+  keywords: [],
   power: [],
   image: "https://cdn.piltoverarchive.com/cards/OGN-297.webp?rotate=90&width=3840",
   text: "Units here have GANKING. (They can move from battlefield to battlefield.)",

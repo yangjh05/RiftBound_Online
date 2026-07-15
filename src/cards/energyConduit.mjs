@@ -8,7 +8,7 @@ export default card({
   set: "Origins",
   rarity: "Uncommon",
   domains: [DOMAINS.MIND],
-  tags: ["Reaction"],
+  tags: [],
   keywords: [],
   energy: 3,
   power: [],
@@ -28,7 +28,8 @@ export default card({
       "Order"
     ],
     "restriction": null,
-    "nonReactive": true
+    "nonReactive": true,
+    "abilityKeywords": ["Reaction"]
   }
 ]
 });

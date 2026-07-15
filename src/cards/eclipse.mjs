@@ -26,11 +26,8 @@ export default card({
           "kind": "modifyMight",
           "target": "unit",
           "amount": -4,
+          "temporary": true,
           "predict": true
-        },
-        {
-          "timing": "spell",
-          "kind": "predict"
         }
       ]
     });

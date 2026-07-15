@@ -26,6 +26,12 @@ export default card({
           "timing": "activated",
           "kind": "equip",
           "domain": "Calm"
+        },
+        {
+          "timing": "static",
+          "kind": "attachedMight",
+          "textSection": "mightBonus",
+          "amount": 1
         }
       ]
     });

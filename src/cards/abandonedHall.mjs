@@ -18,6 +18,7 @@ export default card({
           "timing": "spellPlayed",
           "kind": "battlefieldBuffUnitHere",
           "amount": 1,
+          "temporary": true,
           "optional": true
         }
       ]

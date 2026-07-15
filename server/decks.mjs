@@ -22,7 +22,7 @@ export function normalizeSubmittedDeck(deck) {
     battlefields: Array.isArray(deck?.battlefields) ? deck.battlefields.map(String) : [],
     main: normalizeEntries(deck?.main),
     sideboard: normalizeEntries(deck?.sideboard),
-    runes: normalizeEntries(deck?.runes),
+    runes: normalizeRuneEntries(deck?.runes),
     createdAt: Number(deck?.createdAt) || Date.now(),
     updatedAt: Date.now()
   };
@@ -45,8 +45,18 @@ export function resolveDeckRecord(deck) {
     sideboard: deck.sideboard
       .flatMap(([number, count]) => Array.from({ length: count }, () => cardByNumber(number)))
       .filter(Boolean),
-    runes: deck.runes.flatMap(([domain, count]) => Array.from({ length: count }, () => makeRune(domain)))
+    runes: deck.runes.flatMap(([runeKey, count]) => Array.from({ length: count }, () => makeRune(runeKey)))
   };
+}
+
+function normalizeRuneEntries(entries) {
+  const migrated = normalizeEntries(entries).map(([key, count]) => {
+    const card = cardByNumber(key);
+    if (card?.type === "rune") return [card.cardNumber, count];
+    if (["Body", "Calm", "Chaos", "Fury", "Mind", "Order"].includes(key)) return [makeRune(key).cardNumber, count];
+    return [key, count];
+  });
+  return normalizeEntries(migrated);
 }
 
 function normalizeEntries(entries) {

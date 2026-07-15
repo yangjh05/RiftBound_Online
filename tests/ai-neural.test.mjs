@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { cards, decklists } from "../src/cards.mjs";
-import { createGame } from "../src/engine.mjs";
+import { confirmFirstPlayer, createGame, selectChampion } from "../src/engine.mjs";
 import { activeActorId, enumerateLegalActions } from "../src/ai/actions.mjs";
 import { inferOpponentDeckBelief } from "../src/ai/belief.mjs";
 import { mutateBattlefieldSuite, mutateCardPackage, mutateRuneDistribution, mutateSideboardPackage } from "../src/ai/deckbuilding.mjs";
@@ -22,6 +22,32 @@ import { evaluateBehaviorCloning, trainBehaviorCloning } from "../src/ai/neural/
 import { assessBehaviorCloningQuality, auditImitationDataset } from "../src/ai/neural/quality.mjs";
 
 const decks = Object.values(decklists);
+
+test("training random seeds reproduce deck and Rune shuffles", () => {
+  const create = () => createGame({
+    decks: decks.slice(0, 2),
+    firstPlayerId: "p1",
+    interactive: true,
+    manualActionChainPriority: true,
+    random: () => 0.25,
+    randomSeed: 20260716
+  });
+  const first = create();
+  const second = create();
+  for (const game of [first, second]) {
+    assert.equal(confirmFirstPlayer(game).ok, true);
+    while (game.phase === "champion-select") {
+      const player = game.players.find((candidate) => candidate.id === game.championSelectPlayerId);
+      assert.equal(selectChampion(game, player.id, player.availableChampions[0].instanceId).ok, true);
+    }
+  }
+  const sequence = (game) => game.players.map((player) => ({
+    hand: player.hand.map((card) => card.cardNumber),
+    main: player.mainDeck.map((card) => card.cardNumber),
+    runes: player.runeDeck.map((card) => card.cardNumber)
+  }));
+  assert.deepEqual(sequence(first), sequence(second));
+});
 
 test("neural public-state encoding and Bayesian belief do not depend on hidden hand order", () => {
   const game = createGame({ decks: decks.slice(0, 2), interactive: true, manualActionChainPriority: true });
@@ -41,6 +67,50 @@ test("determinization preserves private slot identities while sampling only beli
   const sampled = determinizeGame(game, viewerId, inferOpponentDeckBelief(game, viewerId), () => 0.2);
   assert.deepEqual(sampled.players[1].hand.map((card) => card.instanceId), ids);
   assert.equal(sampled.players[1].hand.every((card) => card.ownerId === game.players[1].id), true);
+});
+
+test("determinization keeps a viewer-controlled facedown card private to that controller", () => {
+  const game = createGame({ decks: decks.slice(0, 2), interactive: true, manualActionChainPriority: true });
+  const viewer = game.players[0];
+  const opponent = game.players[1];
+  const original = {
+    ...structuredClone(cards.annieFiery),
+    instanceId: "controlled-hidden-slot",
+    ownerId: opponent.id,
+    controllerId: viewer.id
+  };
+  opponent.hand = [];
+  opponent.mainDeck = [];
+  game.battlefields = [{
+    instanceId: "determinization-hidden-field",
+    name: "Determinization Hidden Field",
+    type: "battlefield",
+    controlledBy: viewer.id,
+    units: [],
+    hidden: []
+  }];
+  game.battlefields[0].hidden = [{
+    ownerId: opponent.id,
+    hiddenByPlayerId: viewer.id,
+    card: original
+  }];
+  const belief = {
+    observedCards: {},
+    posterior: [{
+      probability: 1,
+      profile: { cardCounts: { [cards.lonelyPoro.cardNumber]: 1 } }
+    }]
+  };
+
+  const controlled = determinizeGame(game, viewer.id, belief, () => 0);
+  assert.equal(controlled.battlefields[0].hidden[0].card.name, cards.annieFiery.name);
+  assert.equal(controlled.battlefields[0].hidden[0].card.controllerId, viewer.id);
+
+  game.battlefields[0].hidden[0].card.controllerId = opponent.id;
+  game.battlefields[0].hidden[0].hiddenByPlayerId = opponent.id;
+  const unknown = determinizeGame(game, viewer.id, belief, () => 0);
+  assert.equal(unknown.battlefields[0].hidden[0].card.name, cards.lonelyPoro.name);
+  assert.equal(unknown.battlefields[0].hidden[0].card.controllerId, opponent.id);
 });
 
 test("recurrent neural policy serializes, restores and scores the legal action set", () => {

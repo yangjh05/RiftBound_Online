@@ -51,7 +51,7 @@ const referenceCard = explicitReference || automaticReference;
 const scaffoldEffects = explicitReference && !args.timing
   ? structuredClone(explicitReference.effects || [])
   : args.timing && args.kind
-    ? [{ timing: args.timing, kind: args.kind }]
+    ? [{ timing: args.timing, kind: args.kind, ...(args["text-section"] ? { textSection: args["text-section"] } : {}) }]
     : [];
 
 const cardSource = buildCardSource({
@@ -70,7 +70,9 @@ const cardSource = buildCardSource({
   image: args.image || "",
   text: args.text || "TODO: paste exact card text.",
   effects: scaffoldEffects,
-  implementationReference: referenceCard?.cardNumber || ""
+  implementationReferences: referenceCard
+    ? Object.fromEntries(scaffoldEffects.map((effect) => [`${effect.timing}:${effect.kind}`, referenceCard.cardNumber]))
+    : {}
 });
 
 if (dryRun) {
@@ -125,6 +127,7 @@ Common options:
   --text "Exact card text"
   --timing spell
   --kind moveUnit
+  --text-section rules|effect|mightBonus
   --reference "OGN-001/298"
   --dry-run
   --force
@@ -185,7 +188,7 @@ function buildCardSource(data) {
     Number.isFinite(Number(data.might)) ? jsField("might", Number(data.might), true) : null,
     jsField("image", data.image),
     jsField("text", data.text),
-    data.implementationReference ? jsField("implementationReference", data.implementationReference) : null,
+    Object.keys(data.implementationReferences || {}).length ? jsField("implementationReferences", data.implementationReferences) : null,
     jsField("effects", buildEffects(data), true)
   ].filter(Boolean);
 

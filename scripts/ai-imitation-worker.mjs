@@ -13,6 +13,7 @@ const result = collectBaselineImitation({
   meta: workerData.meta,
   metaFraction: workerData.metaFraction,
   gameOffset: workerData.gameOffset,
+  seed: workerData.seed,
   random: seededRandom(workerData.seed),
   onProgress(progress) {
     if (progress.completed === progress.targetGames || progress.attempted % 4 === 0) {

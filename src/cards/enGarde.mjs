@@ -17,7 +17,8 @@ export default card({
   effects: [
   {
     "timing": "spell",
-    "kind": "enGarde"
+    "kind": "enGarde",
+    "temporary": true
   }
 ]
 });

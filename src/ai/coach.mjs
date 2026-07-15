@@ -2,7 +2,6 @@ import { actionKey, applyAiAction, cloneGame, enumerateLegalActions } from "./ac
 import { observeGame } from "./observation.mjs";
 import { DEFAULT_AI_MODEL, evaluateState, scoreActions } from "./policy.mjs";
 import { buildMatchupDeckPlan, metaCardLeaderboard, recommendDeckChanges } from "./deckbuilding.mjs";
-import { rolloutAlternatives } from "./rollout.mjs";
 
 export function analyzeDecision(game, actorId, selectedAction, model = DEFAULT_AI_MODEL, options = {}) {
   const legal = options.legalActions || enumerateLegalActions(game, actorId);
@@ -10,13 +9,8 @@ export function analyzeDecision(game, actorId, selectedAction, model = DEFAULT_A
   const policyScores = new Map(scoreActions(game, actorId, legal, model).map((item) => [item.key, item.score]));
   const before = observeGame(game, actorId);
   const evaluated = legal.map((action) => evaluateAlternative(game, before, actorId, action, policyScores.get(actionKey(action)) || 0, model));
-  if (options.rollouts > 0) {
-    const rolloutResults = new Map(rolloutAlternatives(game, actorId, legal, model, {
-      simulations: options.rollouts,
-      depth: options.rolloutDepth || 32,
-      random: options.random,
-      neuralModel: options.neuralModel
-    }).map((item) => [actionKey(item.action), item]));
+  if (options.rolloutResults) {
+    const rolloutResults = options.rolloutResults;
     for (const item of evaluated) {
       const rollout = rolloutResults.get(item.key);
       if (!rollout) continue;
@@ -46,6 +40,23 @@ export function analyzeDecision(game, actorId, selectedAction, model = DEFAULT_A
     confidence: confidenceFor(evaluated),
     explanation: explainDecision(before, selected, best, regret)
   };
+}
+
+export async function analyzeDecisionWithRollouts(game, actorId, selectedAction, model = DEFAULT_AI_MODEL, options = {}) {
+  const legal = options.legalActions || enumerateLegalActions(game, actorId);
+  if (!legal.length) return null;
+  const { rolloutAlternatives } = await import("./rollout.mjs");
+  const rolloutResults = new Map(rolloutAlternatives(game, actorId, legal, model, {
+    simulations: options.rollouts || 8,
+    depth: options.rolloutDepth || 32,
+    random: options.random,
+    neuralModel: options.neuralModel
+  }).map((item) => [actionKey(item.action), item]));
+  return analyzeDecision(game, actorId, selectedAction, model, {
+    ...options,
+    legalActions: legal,
+    rolloutResults
+  });
 }
 
 function evaluateAlternative(game, before, actorId, action, policyScore, model) {

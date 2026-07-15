@@ -12,6 +12,7 @@ export default card({
         DOMAINS.BODY
       ],
       "tags": [
+        "Signature",
         "Master Yi",
         "Action"
       ],

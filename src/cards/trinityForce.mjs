@@ -30,6 +30,7 @@ export default card({
         {
           "timing": "static",
           "kind": "attachedMight",
+          "textSection": "mightBonus",
           "amount": 2
         }
       ]

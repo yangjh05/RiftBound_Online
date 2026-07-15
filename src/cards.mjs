@@ -809,18 +809,38 @@ const RUNE_CARD_NUMBERS = {
   [DOMAINS.ORDER]: "OGN-214/298"
 };
 
-function makeRune(domain) {
+function makeRune(selection) {
+  const selectedCard = typeof selection === "object" && selection?.type === "rune"
+    ? selection
+    : cardsByNumber[selection];
+  const domain = selectedCard?.domains?.[0] || selectedCard?.domain || selection;
+  const defaultCard = cardsByNumber[RUNE_CARD_NUMBERS[domain]];
+  const runeCard = selectedCard?.type === "rune" ? selectedCard : defaultCard;
+  if (!runeCard) {
+    return {
+      id: `rune-${String(domain).toLowerCase()}`,
+      name: `${domain} Rune`,
+      type: "rune",
+      domains: [domain],
+      domain,
+      cardNumber: RUNE_CARD_NUMBERS[domain] || `rune-${String(domain).toLowerCase()}`,
+      collectorNumber: RUNE_CARD_NUMBERS[domain] || "",
+      color: RUNE_COLORS[domain],
+      image: "",
+      text: `Exhaust for 1 Energy. Recycle for 1 ${domain} Power.`
+    };
+  }
   return {
-    id: `rune-${domain.toLowerCase()}`,
-    name: `${domain} Rune`,
-    type: "rune",
+    ...runeCard,
     domain,
-    cardNumber: RUNE_CARD_NUMBERS[domain] || `rune-${domain.toLowerCase()}`,
-    collectorNumber: RUNE_CARD_NUMBERS[domain] || "",
-    color: RUNE_COLORS[domain],
-    image: "",
-    text: `Exhaust for 1 Energy. Recycle for 1 ${domain} Power.`
+    color: RUNE_COLORS[domain]
   };
+}
+
+function runeCardsForDomain(domain) {
+  return Object.values(cards)
+    .filter((candidate) => candidate.type === "rune" && candidate.domains?.[0] === domain)
+    .sort((left, right) => left.cardNumber.localeCompare(right.cardNumber));
 }
 
 const rawDecklists = {
@@ -1022,4 +1042,4 @@ function assertUniqueCardNumbers(cardMap) {
 }
 
 
-export { makeRune, rawDecklists, decklists };
+export { makeRune, rawDecklists, decklists, runeCardsForDomain };

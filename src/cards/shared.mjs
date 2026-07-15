@@ -29,13 +29,38 @@ export function normalizeCardNumber(data) {
 
 export function card(data) {
   const cardNumber = normalizeCardNumber(data);
+  const basicRuneDomain = data.type === "rune" && data.tags?.includes("Basic Rune")
+    ? data.domains?.[0]
+    : null;
+  const implicitBasicRuneEffects = basicRuneDomain && !(data.effects || []).length
+    ? [
+        {
+          timing: "activated",
+          kind: "addEnergy",
+          abilityId: "basic-rune-energy",
+          amount: 1,
+          exhaust: true,
+          abilityKeywords: ["Reaction"]
+        },
+        {
+          timing: "activated",
+          kind: "addPower",
+          abilityId: "basic-rune-power",
+          amount: 1,
+          domain: basicRuneDomain,
+          exhaust: false,
+          recycleSelfCost: true,
+          abilityKeywords: ["Reaction"]
+        }
+      ]
+    : null;
   return {
     domains: [],
     keywords: [],
     tags: [],
     power: [],
-    effects: [],
     cardNumber,
-    ...data
+    ...data,
+    effects: implicitBasicRuneEffects || data.effects || []
   };
 }

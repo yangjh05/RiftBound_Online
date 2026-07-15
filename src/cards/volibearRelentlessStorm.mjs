@@ -8,7 +8,7 @@ export default card({
   set: "Origins",
   rarity: "Rare",
   domains: [DOMAINS.BODY, DOMAINS.FURY],
-  tags: ["Volibear"],
+  tags: ["Champion", "Volibear"],
   keywords: [],
   power: [],
   image: "https://cdn.piltoverarchive.com/cards/OGN-249.webp",

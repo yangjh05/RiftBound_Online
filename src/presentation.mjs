@@ -288,7 +288,7 @@ function unitSnapshot(unit, location, mightOf) {
 }
 
 function defaultMight(unit) {
-  return (unit.might || 0) + (unit.buffs || 0);
+  return (unit.might || 0) + (unit.buffs || 0) + (unit.mightModifier || 0);
 }
 
 function makeHighlight(data) {

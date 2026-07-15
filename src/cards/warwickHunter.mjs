@@ -20,6 +20,11 @@ export default card({
       {
           "timing": "static",
           "kind": "entersReady"
+      },
+      {
+          "timing": "attackOrDefend",
+          "role": "attacker",
+          "kind": "killDamagedEnemiesHere"
       }
   ]
 });

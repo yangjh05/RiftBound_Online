@@ -4,6 +4,7 @@ import { inferOpponentDeckBelief } from "./belief.mjs";
 import { choosePolicyAction, evaluateState } from "./policy.mjs";
 import { createNeuralSession, estimateNeuralValue } from "./neural/model.mjs";
 import { calibratedProbability } from "./neural/trainer.mjs";
+import { hiddenCardControllerId, hiddenCardIsControlledBy } from "../rules/zones.mjs";
 
 const CARD_BY_NUMBER = new Map(Object.values(cards).map((card) => [card.cardNumber, card]));
 
@@ -48,12 +49,16 @@ export function determinizeGame(game, viewerId, belief = inferOpponentDeckBelief
   const privateSlots = [
     ...opponent.hand.map((card, index) => ({ zone: opponent.hand, index, original: card })),
     ...opponent.mainDeck.map((card, index) => ({ zone: opponent.mainDeck, index, original: card })),
-    ...clone.battlefields.flatMap((field) => (field.hidden || []).filter((item) => item.ownerId === opponent.id).map((item) => ({ hidden: item, original: item.card })))
+    ...clone.battlefields.flatMap((field) => (field.hidden || [])
+      .filter((item) => item.ownerId === opponent.id && !hiddenCardIsControlledBy(item, viewerId))
+      .map((item) => ({ hidden: item, original: item.card })))
   ];
   for (const slot of privateSlots) {
     const source = remaining.shift();
     if (!source) break;
-    const replacement = instantiatePrivateCard(source, slot.original, opponent.id);
+    const replacement = instantiatePrivateCard(source, slot.original,
+      slot.hidden?.ownerId || opponent.id,
+      slot.hidden ? hiddenCardControllerId(slot.hidden) : opponent.id);
     if (slot.hidden) slot.hidden.card = replacement;
     else slot.zone[slot.index] = replacement;
   }
@@ -78,15 +83,16 @@ function simulateContinuation(game, viewerId, model, depth, random, neuralModel 
   return (evaluateState(game, viewerId, model) + 1) / 2;
 }
 
-function instantiatePrivateCard(source, original, ownerId) {
+function instantiatePrivateCard(source, original, ownerId, controllerId = ownerId) {
   return {
     ...structuredClone(source),
     instanceId: original.instanceId,
     ownerId,
-    controllerId: ownerId,
+    controllerId,
     zone: original.zone,
     damage: 0,
     buffs: 0,
+    mightModifier: 0,
     exhausted: Boolean(original.exhausted),
     attachments: []
   };

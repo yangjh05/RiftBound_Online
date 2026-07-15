@@ -1,3 +1,4 @@
+import { hiddenCardIsControlledBy } from "../rules/zones.mjs";
 import {
   activateCard,
   beginPlayCard,
@@ -19,6 +20,7 @@ import {
   toggleMulliganCard,
   toggleOptionalPaymentEffect,
   togglePaymentPoolEnergy,
+  togglePaymentPoolPower,
   togglePaymentRune
 } from "../engine.mjs";
 
@@ -91,6 +93,14 @@ function attemptPaymentPlan(source, order) {
     actions.push(action);
     if (confirmPayment(cloneGame(game))?.ok) return [...actions, { kind: "confirmPayment" }];
   }
+  const selectedPoolPower = new Set(payment.poolPowerIds || []);
+  for (const power of player.runePool?.power || []) {
+    if (!power?.id || selectedPoolPower.has(power.id)) continue;
+    const action = { kind: "togglePaymentPoolPower", powerId: power.id };
+    if (!togglePaymentPoolPower(game, power.id)?.ok) continue;
+    actions.push(action);
+    if (confirmPayment(cloneGame(game))?.ok) return [...actions, { kind: "confirmPayment" }];
+  }
   const runes = order.reverse ? [...player.runes].reverse() : [...player.runes];
   const modes = order.powerFirst ? ["power", "energy"] : ["energy", "power"];
   for (const mode of modes) {
@@ -136,12 +146,21 @@ function candidateActions(game, actorId) {
   }
   if (game.pendingPayment) {
     const payment = game.pendingPayment;
+    const addSources = [
+      player.legend,
+      player.champion?.zone === "played" ? player.champion : null,
+      ...player.base,
+      ...player.runes,
+      ...game.battlefields.flatMap((field) => field.units.filter((card) => card.controllerId === actorId))
+    ].filter(Boolean);
     return [
+      ...addSources.map((card) => ({ kind: "activateCard", cardId: card.instanceId })),
       ...player.runes.flatMap((rune) => [
         { kind: "togglePaymentRune", runeId: rune.instanceId, mode: "energy" },
         { kind: "togglePaymentRune", runeId: rune.instanceId, mode: "power" }
       ]),
       ...(payment.poolEnergyOptions || payment.poolEnergy || []).map((energy) => ({ kind: "togglePaymentPoolEnergy", energyId: energy.id })),
+      ...(player.runePool?.power || []).filter((power) => power?.id).map((power) => ({ kind: "togglePaymentPoolPower", powerId: power.id })),
       ...(payment.optionalPowerEffects || payment.optionalEffects || []).map((effect) => ({ kind: "toggleOptionalPaymentEffect", effectId: effect.id })),
       { kind: "confirmPayment" },
       { kind: "cancelPayment" }
@@ -150,12 +169,13 @@ function candidateActions(game, actorId) {
 
   const destinations = ["base", ...game.battlefields.map((field) => field.instanceId)];
   const hiddenCards = game.battlefields.flatMap((field) => (field.hidden || [])
-    .filter((item) => item.ownerId === actorId)
+    .filter((item) => hiddenCardIsControlledBy(item, actorId))
     .map((item) => ({ card: item.card, destination: field.instanceId })));
   const controlledCards = [
     player.legend,
-    player.champion,
+    player.champion?.zone === "played" ? player.champion : null,
     ...player.base,
+    ...player.runes,
     ...game.battlefields.flatMap((field) => field.units.filter((card) => card.controllerId === actorId))
   ].filter(Boolean);
   const movable = [
@@ -226,6 +246,7 @@ export function applyAiAction(game, action, actorId = activeActorId(game)) {
     case "activateCard": return activateCard(game, action.cardId);
     case "togglePaymentRune": return togglePaymentRune(game, action.runeId, action.mode);
     case "togglePaymentPoolEnergy": return togglePaymentPoolEnergy(game, action.energyId);
+    case "togglePaymentPoolPower": return togglePaymentPoolPower(game, action.powerId);
     case "toggleOptionalPaymentEffect": return toggleOptionalPaymentEffect(game, action.effectId);
     case "confirmPayment": return confirmPayment(game);
     case "cancelPayment": return cancelPayment(game);

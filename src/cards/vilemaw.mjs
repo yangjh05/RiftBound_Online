@@ -31,10 +31,6 @@ export default card({
       "text": "[Ambush] (You may play me as a [Reaction] to a battlefield where you have units.)\nEnemy units here with less Might than me don't deal combat damage.\nWhen I hold, draw 1.",
       "effects": [
         {
-          "timing": "keyword",
-          "kind": "ambush"
-        },
-        {
           "timing": "static",
           "kind": "suppressWeakerEnemyCombatDamage"
         },

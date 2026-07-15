@@ -21,7 +21,8 @@ export default card({
           "timing": "secondDrawEachTurn",
           "kind": "modifyMight",
           "target": "friendlyUnit",
-          "amount": 2
+          "amount": 2,
+          "temporary": true
         }
       ]
     });

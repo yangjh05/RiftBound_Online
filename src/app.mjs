@@ -17,6 +17,8 @@ import {
   hideCard,
   hiddenCardsAtBattlefieldForPlayer,
   hiddenSlotLimit,
+  legalCardPlayDestinations,
+  legalChampionPlayDestinations,
   moveUnit,
   moveUnits,
   passShowdown,
@@ -29,9 +31,11 @@ import {
   toggleMulliganCard,
   toggleOptionalPaymentEffect,
   togglePaymentPoolEnergy,
+  togglePaymentPoolPower,
   togglePaymentRune
 } from "./engine.mjs";
-import { cards, DOMAINS, makeRune, rawDecklists, RUNE_COLORS } from "./cards.mjs";
+import { hiddenCardControllerId, hiddenCardIsControlledBy } from "./rules/zones.mjs";
+import { cards, DOMAINS, makeRune, rawDecklists, RUNE_COLORS, runeCardsForDomain } from "./cards.mjs";
 import {
   DECK_RULES,
   cardCount as deckCardCount,
@@ -155,6 +159,9 @@ let aiPlayerId = null;
 let aiModel = createModel(DEFAULT_AI_MODEL);
 let neuralAiModel = null;
 let neuralAiSession = null;
+let neuralAiLoadState = "idle";
+let neuralAiLoadError = "";
+let neuralAiLoadPromise = null;
 let aiReplay = null;
 let aiTurnTimer = null;
 let aiThinking = false;
@@ -496,17 +503,17 @@ function menuView() {
         </label>
         <div class="menu-actions">
           <button class="primary menu-button" data-action="menu-start" ${validPair ? "" : "disabled"}>${t("startGame", locale())}</button>
-          <button class="primary menu-button coach-start" data-action="menu-ai" ${validPair ? "" : "disabled"}>${locale() === LOCALES.KO ? "학습 AI와 대전" : "Play Learning AI"}</button>
+          <button class="primary menu-button coach-start" data-action="menu-ai" ${validPair && neuralAiLoadState !== "loading" ? "" : "disabled"}>${neuralAiLoadState === "loading" ? (locale() === LOCALES.KO ? "완성 모델 로딩 중…" : "Loading trained model…") : (locale() === LOCALES.KO ? "학습 AI와 대전" : "Play Learning AI")}</button>
           <button class="secondary menu-button" data-action="menu-multiplayer">${t("multiplayer", locale())}</button>
           <button class="secondary menu-button" data-action="menu-decks">${t("deckEdit", locale())}</button>
         </div>
-        <p class="ai-model-status">${locale() === LOCALES.KO ? `AI 세대 ${activeAiGeneration()} · 자가대전 ${activeAiGames()}경기 학습 · ${neuralAiModel ? "순환 PPO" : "기본 정책"}` : `AI generation ${activeAiGeneration()} · ${activeAiGames()} self-play games · ${neuralAiModel ? "recurrent PPO" : "baseline policy"}`}</p>
+        <p class="ai-model-status">${escapeHtml(neuralAiStatusText())}</p>
         ${online.loading ? `<p class="online-status">${locale() === LOCALES.KO ? "멀티플레이 서버에 연결 중입니다." : "Connecting to the multiplayer server."}</p>` : ""}
         ${online.error ? `<p class="online-error" role="alert">${escapeHtml(online.error)}</p>` : ""}
         <div class="active-decks-summary">
           ${activeDecks.map((deck, index) => deckSummaryBadge(deck, t("playerDeck", locale(), { n: index + 1 }))).join("")}
         </div>
-        ${validPair ? "" : `<p class="deck-warning">${locale() === LOCALES.KO ? `사용 가능한 덱 2개가 필요합니다. 메인 덱은 정확히 ${DECK_RULES.mainExact}장, 사이드보드는 최대 ${DECK_RULES.sideboardMax}장, 룬은 ${DECK_RULES.runeExact}장, 전장은 ${DECK_RULES.battlefieldsExact}장이어야 합니다.` : `Two playable decks are required: exactly ${DECK_RULES.mainExact} Main Deck cards, up to ${DECK_RULES.sideboardMax} Sideboard cards, ${DECK_RULES.runeExact} Runes, and ${DECK_RULES.battlefieldsExact} Battlefields.`}</p>`}
+        ${validPair ? "" : `<p class="deck-warning">${locale() === LOCALES.KO ? `토너먼트에서 사용 가능한 덱 2개가 필요합니다. 메인 덱은 정확히 ${DECK_RULES.tournamentMainExact}장, 사이드보드는 최대 ${DECK_RULES.sideboardMax}장, 룬은 ${DECK_RULES.runeExact}장, 전장은 ${DECK_RULES.battlefieldsExact}장이어야 합니다.` : `Two tournament-legal decks are required: exactly ${DECK_RULES.tournamentMainExact} Main Deck cards, up to ${DECK_RULES.sideboardMax} Sideboard cards, ${DECK_RULES.runeExact} Runes, and ${DECK_RULES.battlefieldsExact} Battlefields.`}</p>`}
       </section>
     </main>
   `;
@@ -698,7 +705,7 @@ function deckSelectCard(deck) {
       ${hero?.image ? `<img src="${hero.image}" alt="${hero.name}" loading="lazy" />` : `<span class="deck-card-back"></span>`}
       ${activeLabels ? `<em>${activeLabels}</em>` : ""}
       <strong>${escapeHtml(deck.name)}</strong>
-      <span>${mainDeckCount(deck)}/${DECK_RULES.mainExact} ${t("main", locale())} · ${sideboardCount(deck)}/${DECK_RULES.sideboardMax} SB</span>
+      <span>${mainDeckCount(deck)}/${DECK_RULES.tournamentMainExact} ${t("main", locale())} · ${sideboardCount(deck)}/${DECK_RULES.sideboardMax} SB</span>
       <small class="${validation.playable ? "valid-text" : "invalid-text"}">${validation.playable ? t("playable", locale()) : t("cannotPlayDeck", locale())}</small>
     </button>
   `;
@@ -746,10 +753,14 @@ function deckActionButtonsForCard(card, deck) {
   } else if (card.type === "battlefield") {
     const disabled = deck.battlefields.length >= DECK_RULES.battlefieldsExact && !deck.battlefields.includes(card.cardNumber);
     buttons.push(`<button data-action="deck-add-battlefield" data-card-number="${card.cardNumber}" ${disabled ? "disabled" : ""}>전장 추가</button>`);
+  } else if (card.type === "rune") {
+    const count = cardCount(deck.runes, card.cardNumber);
+    const disabled = runeDeckCount(deck) >= DECK_RULES.runeExact || !runeMatchesLegend(deck, card);
+    buttons.push(`<button data-action="deck-rune-add" data-card-number="${card.cardNumber}" ${disabled ? "disabled" : ""}>${locale() === LOCALES.KO ? "룬 덱에 추가" : "Add to Rune Deck"} ${count}</button>`);
   } else if (["unit", "spell", "gear"].includes(card.type)) {
     const count = cardCount(deck.main, card.cardNumber);
     const sideCountValue = cardCount(deck.sideboard, card.cardNumber);
-    buttons.push(`<button data-action="deck-add-main" data-card-number="${card.cardNumber}" ${registeredNameCount(deck, card.name) >= DECK_RULES.maxCopies || mainDeckCount(deck) >= DECK_RULES.mainExact ? "disabled" : ""}>메인 덱 추가 ${count}/${DECK_RULES.maxCopies}</button>`);
+    buttons.push(`<button data-action="deck-add-main" data-card-number="${card.cardNumber}" ${registeredNameCount(deck, card.name) >= DECK_RULES.maxCopies || mainDeckCount(deck) >= DECK_RULES.tournamentMainExact ? "disabled" : ""}>메인 덱 추가 ${count}/${DECK_RULES.maxCopies}</button>`);
     buttons.push(`<button data-action="deck-add-sideboard" data-card-number="${card.cardNumber}" ${registeredNameCount(deck, card.name) >= DECK_RULES.maxCopies || sideboardCount(deck) >= DECK_RULES.sideboardMax ? "disabled" : ""}>${locale() === LOCALES.KO ? "사이드보드 추가" : "Add to Sideboard"} ${sideCountValue}/${DECK_RULES.maxCopies}</button>`);
   }
   return buttons.join("") || `<button disabled>추가할 수 없음</button>`;
@@ -778,7 +789,7 @@ function deckCompositionPanel(deck) {
       ${battlefields.map((card) => compactDeckRow(card, 1, "battlefield")).join("") || `<p class="empty">전장 ${DECK_RULES.battlefieldsExact}장을 선택하세요.</p>`}
     </div>
     <div class="deck-zone-block main-deck-block">
-      <div class="deck-zone-title"><strong>${t("mainDeck", locale())}</strong><span>${mainDeckCount(deck)}/${DECK_RULES.mainExact}</span></div>
+      <div class="deck-zone-title"><strong>${t("mainDeck", locale())}</strong><span>${mainDeckCount(deck)}/${DECK_RULES.tournamentMainExact}</span></div>
       ${deck.main.map(([number, count]) => compactDeckRow(cardByNumber(number), count, "main")).join("") || `<p class="empty">메인 덱 카드를 추가하세요.</p>`}
     </div>
     <div class="deck-zone-block sideboard-deck-block">
@@ -788,7 +799,10 @@ function deckCompositionPanel(deck) {
     <div class="deck-zone-block rune-deck-block">
       <div class="deck-zone-title"><strong>${t("runeDeck", locale())}</strong><span>${runeDeckCount(deck)}/${DECK_RULES.runeExact}</span></div>
       <p class="deck-note">룬 덱은 메인 덱 뒤에 표시되지만, 메인 덱 장수와는 별도로 계산됩니다.</p>
-      ${Object.values(DOMAINS).filter((domain) => domain !== DOMAINS.ANY).map((domain) => runeDeckRow(deck, domain)).join("")}
+      <div class="selected-rune-list">
+        ${deck.runes.map(([runeKey, count]) => runeDeckRow(deck, runeKey, count)).join("") || `<p class="empty">${locale() === LOCALES.KO ? "아래에서 룬 카드를 선택하세요." : "Choose Rune cards below."}</p>`}
+      </div>
+      ${runeCardPicker(deck)}
     </div>
   `;
 }
@@ -809,15 +823,42 @@ function compactDeckRow(card, count, zone) {
   `;
 }
 
-function runeDeckRow(deck, domain) {
-  const count = runeCount(deck, domain);
+function runeDeckRow(deck, runeKey, count) {
+  const card = cardByNumber(runeKey) || makeRune(runeKey);
+  const domain = card.domains?.[0] || card.domain;
   return `
     <div class="rune-deck-row">
-      <span class="rune-swatch" style="--rune:${RUNE_COLORS[domain]}"></span>
-      <strong>${domainText(domain)} ${t("runes", locale()).replace(/s$/u, "")}</strong>
-      <em>${count}</em>
-      <button class="small-icon" data-action="deck-rune-dec" data-domain="${domain}" ${count <= 0 ? "disabled" : ""}>-</button>
-      <button class="small-icon" data-action="deck-rune-inc" data-domain="${domain}">+</button>
+      ${card.image ? `<img class="rune-row-art" src="${card.image}" alt="${cardName(card)}" loading="lazy" />` : `<span class="rune-swatch" style="--rune:${RUNE_COLORS[domain]}"></span>`}
+      <button class="deck-row-main" data-action="deck-card-focus" data-card-number="${card.cardNumber}">
+        <strong>${cardName(card)}</strong>
+        <span>${domainText(domain)} · ${card.rarity || card.cardNumber}</span>
+      </button>
+      <em>x${count}</em>
+      <button class="small-icon" data-action="deck-rune-remove" data-card-number="${card.cardNumber}" ${count <= 0 ? "disabled" : ""}>-</button>
+      <button class="small-icon" data-action="deck-rune-add" data-card-number="${card.cardNumber}" ${runeDeckCount(deck) >= DECK_RULES.runeExact ? "disabled" : ""}>+</button>
+    </div>
+  `;
+}
+
+function runeCardPicker(deck) {
+  const legend = cardByNumber(deck.legend);
+  const domains = (legend?.domains || []).filter((domain) => domain !== DOMAINS.ANY);
+  const variants = domains.flatMap((domain) => runeCardsForDomain(domain));
+  if (!variants.length) return `<p class="empty">${locale() === LOCALES.KO ? "먼저 레전드를 선택하세요." : "Choose a Legend first."}</p>`;
+  return `
+    <div class="rune-variant-picker" aria-label="${locale() === LOCALES.KO ? "룬 카드 선택" : "Rune card selection"}">
+      ${variants.map((card) => {
+        const count = cardCount(deck.runes, card.cardNumber);
+        return `
+          <article class="rune-variant ${count ? "selected" : ""}">
+            <button class="rune-variant-preview" data-action="deck-card-focus" data-card-number="${card.cardNumber}" title="${cardName(card)}">
+              <img src="${card.image}" alt="${cardName(card)}" loading="lazy" />
+              ${count ? `<em>x${count}</em>` : ""}
+            </button>
+            <button class="small-icon" data-action="deck-rune-add" data-card-number="${card.cardNumber}" ${runeDeckCount(deck) >= DECK_RULES.runeExact ? "disabled" : ""}>+</button>
+          </article>
+        `;
+      }).join("")}
     </div>
   `;
 }
@@ -832,7 +873,7 @@ function cardSearchPanel(deck) {
     <div class="card-advanced-search">
       <label>카드풀<select data-action="deck-pool-filter">${CARD_POOL_FORMATS.map((pool) => `<option value="${pool.id}" ${pool.id === deckEditor.poolId ? "selected" : ""}>${escapeHtml(pool.name)}</option>`).join("")}</select></label>
       <label>출시 카드팩<select data-action="deck-pack-filter"><option value="all">전체 카드팩</option>${CARD_PACKS.map((pack) => `<option value="${pack.id}" ${pack.id === deckEditor.packId ? "selected" : ""}>${escapeHtml(pack.name)}</option>`).join("")}</select></label>
-      <label>종류<select data-action="deck-type-filter">${[["all", "전체"], ["legend", "레전드"], ["unit", "유닛"], ["spell", "주문"], ["gear", "장비"], ["battlefield", "전장"]].map(([value, label]) => `<option value="${value}" ${value === deckEditor.type ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+      <label>종류<select data-action="deck-type-filter">${[["all", "전체"], ["legend", "레전드"], ["unit", "유닛"], ["spell", "주문"], ["gear", "장비"], ["battlefield", "전장"], ["rune", locale() === LOCALES.KO ? "룬" : "Rune"]].map(([value, label]) => `<option value="${value}" ${value === deckEditor.type ? "selected" : ""}>${label}</option>`).join("")}</select></label>
       <label>도메인<select data-action="deck-domain-filter"><option value="all">전체</option>${Object.values(DOMAINS).filter((domain) => domain !== DOMAINS.ANY).map((domain) => `<option value="${domain}" ${domain === deckEditor.domain ? "selected" : ""}>${domainText(domain)}</option>`).join("")}</select></label>
       <label>최대 에너지<select data-action="deck-energy-filter"><option value="all">제한 없음</option>${Array.from({ length: 9 }, (_, energy) => `<option value="${energy}" ${String(energy) === deckEditor.maxEnergy ? "selected" : ""}>${energy}</option>`).join("")}</select></label>
     </div>
@@ -864,13 +905,15 @@ function deckAiRecommendationPanel() {
 
 function libraryCard(card, deck) {
   const mainCount = cardCount(deck.main, card.cardNumber);
+  const runeCardCount = card.type === "rune" ? cardCount(deck.runes, card.cardNumber) : 0;
+  const displayedCount = card.type === "rune" ? runeCardCount : mainCount;
   const disabled = ["unit", "spell", "gear"].includes(card.type) && mainCount >= DECK_RULES.maxCopies;
   return `
     <button class="library-card ${deckEditor.selectedCardNumber === card.cardNumber ? "selected" : ""}" data-action="deck-card-focus" data-card-number="${card.cardNumber}">
       ${card.image ? `<img src="${card.image}" alt="${cardName(card)}" loading="lazy" />` : `<span class="deck-card-back"></span>`}
       <strong>${cardName(card)}</strong>
       <span>${cardType(card)}${card.energy !== undefined ? ` / ${card.energy}` : ""}</span>
-      ${mainCount ? `<em>x${mainCount}</em>` : ""}
+      ${displayedCount ? `<em>x${displayedCount}</em>` : ""}
       ${disabled ? `<small>${t("max", locale())}</small>` : ""}
     </button>
   `;
@@ -931,7 +974,7 @@ function normalizeDeckRecord(deck) {
     battlefields: Array.isArray(deck.battlefields) ? [...deck.battlefields] : [],
     main: normalizeCountEntries(deck.main),
     sideboard: normalizeCountEntries(deck.sideboard),
-    runes: normalizeCountEntries(deck.runes),
+    runes: normalizeRuneEntries(deck.runes),
     createdAt: deck.createdAt || Date.now(),
     updatedAt: deck.updatedAt || Date.now()
   };
@@ -939,6 +982,16 @@ function normalizeDeckRecord(deck) {
 
 function normalizeCountEntries(entries) {
   return normalizeDeckCountEntries(entries);
+}
+
+function normalizeRuneEntries(entries) {
+  const normalized = (Array.isArray(entries) ? entries : []).map(([key, count]) => {
+    const registered = cardByNumber(key);
+    if (registered?.type === "rune") return [registered.cardNumber, count];
+    if (Object.values(DOMAINS).includes(key) && key !== DOMAINS.ANY) return [makeRune(key).cardNumber, count];
+    return [key, count];
+  });
+  return normalizeCountEntries(normalized);
 }
 
 function saveDeckStore() {
@@ -1196,7 +1249,7 @@ function runeDeckCount(deck) {
 }
 
 function runeCount(deck, domain) {
-  return deckRuneCount(deck, domain);
+  return deckRuneCount(deck, domain, cardByNumber);
 }
 
 function cardCount(entries, cardNumber) {
@@ -1225,7 +1278,7 @@ function addMainDeckCard(deck, cardNumber) {
   const card = cardByNumber(cardNumber);
   if (!card || !["unit", "spell", "gear"].includes(card.type)) return;
   const count = cardCount(deck.main, cardNumber);
-  if (mainDeckCount(deck) >= DECK_RULES.mainExact || registeredNameCount(deck, card.name) >= DECK_RULES.maxCopies) return;
+  if (mainDeckCount(deck) >= DECK_RULES.tournamentMainExact || registeredNameCount(deck, card.name) >= DECK_RULES.maxCopies) return;
   setCountEntry(deck.main, cardNumber, count + 1);
 }
 
@@ -1257,8 +1310,22 @@ function removeBattlefieldCard(deck, cardNumber) {
   if (index >= 0) deck.battlefields.splice(index, 1);
 }
 
-function updateRune(deck, domain, delta) {
-  setCountEntry(deck.runes, domain, Math.max(0, runeCount(deck, domain) + delta));
+function addRuneCard(deck, cardNumber) {
+  const card = cardByNumber(cardNumber);
+  if (card?.type !== "rune" || runeDeckCount(deck) >= DECK_RULES.runeExact || !runeMatchesLegend(deck, card)) return;
+  setCountEntry(deck.runes, card.cardNumber, cardCount(deck.runes, card.cardNumber) + 1);
+}
+
+function removeRuneCard(deck, cardNumber) {
+  const card = cardByNumber(cardNumber);
+  if (card?.type !== "rune") return;
+  setCountEntry(deck.runes, card.cardNumber, cardCount(deck.runes, card.cardNumber) - 1);
+}
+
+function runeMatchesLegend(deck, runeCard) {
+  const legend = cardByNumber(deck?.legend);
+  const domain = runeCard?.domains?.[0];
+  return Boolean(domain && legend?.domains?.includes(domain));
 }
 
 function resolveDeckRecord(deck) {
@@ -1270,7 +1337,7 @@ function resolveDeckRecord(deck) {
     battlefields: deck.battlefields.map(cardByNumber).filter(Boolean),
     main: deck.main.flatMap(([number, count]) => Array.from({ length: count }, () => cardByNumber(number))).filter(Boolean),
     sideboard: deck.sideboard.flatMap(([number, count]) => Array.from({ length: count }, () => cardByNumber(number))).filter(Boolean),
-    runes: deck.runes.flatMap(([domain, count]) => Array.from({ length: count }, () => makeRune(domain)))
+    runes: deck.runes.flatMap(([runeKey, count]) => Array.from({ length: count }, () => makeRune(runeKey)))
   };
 }
 
@@ -1352,7 +1419,7 @@ function sideboardingView() {
         <div class="sideboarding-player-banner">${isOnlineGame() ? (locale() === LOCALES.KO ? "내 사이드보드" : "Your sideboard") : `${playerId.toUpperCase()} · ${locale() === LOCALES.KO ? "다른 플레이어는 화면을 보지 마세요" : "Other player, please look away"}`}</div>
         <div class="sideboarding-grid">
           <section class="sideboarding-column">
-            <div class="deck-zone-title"><strong>${t("mainDeck", locale())}</strong><span>${mainDeckCount(draft)}/${DECK_RULES.mainExact}</span></div>
+            <div class="deck-zone-title"><strong>${t("mainDeck", locale())}</strong><span>${mainDeckCount(draft)}/${DECK_RULES.tournamentMainExact}</span></div>
             <p class="deck-note">${sideboardSelectedMain ? (locale() === LOCALES.KO ? "이제 넣을 사이드 카드를 선택하세요." : "Now choose a Sideboard card to bring in.") : (locale() === LOCALES.KO ? "뺄 카드를 먼저 선택하세요." : "Choose a card to take out first.")}</p>
             <div class="sideboarding-card-list">${draft.main.map(([number, count]) => sideboardCardRow(number, count, "main", locked || submitted)).join("")}</div>
           </section>
@@ -1419,6 +1486,8 @@ function startNextLocalMatchGame() {
     randomFirstPlayer: !next.firstPlayerId,
     firstPlayerId: next.firstPlayerId,
     lockedBattlefields: next.lockedBattlefields,
+    unavailableBattlefields: next.unavailableBattlefields,
+    format: localMatch.sideboardingEnabled ? "match" : "duel",
     manualActionChainPriority: true,
     enforceChampionLegendMatch: true,
     decks: next.decks.map(resolveDeckRecord)
@@ -1441,16 +1510,18 @@ function startGameFromMenu() {
     randomFirstPlayer: true,
     manualActionChainPriority: true,
     enforceChampionLegendMatch: true,
+    format: settings.sideboardingEnabled ? "match" : "duel",
     decks: pair.map(resolveDeckRecord)
   });
   resetGameUiState();
   appView = "game";
 }
 
-function startAiGameFromMenu() {
+async function startAiGameFromMenu() {
   clearOnlineSeat();
   const pair = activeDeckRecords();
   if (pair.length !== 2 || pair.some((deck) => !validateDeckRecord(deck).playable)) return;
+  await ensureNeuralAiLoaded();
   localMatch = createMatchState({ decks: pair, sideboardingEnabled: settings.sideboardingEnabled });
   sideboardDrafts = localMatch.currentDecks.map((deck) => structuredClone(deck));
   game = createGame({
@@ -1458,6 +1529,7 @@ function startAiGameFromMenu() {
     randomFirstPlayer: true,
     manualActionChainPriority: true,
     enforceChampionLegendMatch: true,
+    format: settings.sideboardingEnabled ? "match" : "duel",
     decks: pair.map(resolveDeckRecord)
   });
   aiMode = true;
@@ -1737,7 +1809,7 @@ function cardZoneSnapshot() {
   for (const field of game.battlefields) {
     zones.set(field.instanceId, { playerId: field.controlledBy, zone: "battlefield" });
     for (const card of field.units) zones.set(card.instanceId, { playerId: card.controllerId, zone: "battlefield" });
-    for (const item of field.hidden || []) zones.set(item.card.instanceId, { playerId: item.ownerId, zone: "hidden", battlefieldId: field.instanceId });
+    for (const item of field.hidden || []) zones.set(item.card.instanceId, { playerId: hiddenCardControllerId(item), zone: "hidden", battlefieldId: field.instanceId });
   }
   return zones;
 }
@@ -2297,6 +2369,7 @@ function paymentPanel() {
           ${optionalPaymentControls(payment)}
           ${paymentAddControls(player)}
           ${poolEnergyControls(player, payment, energyNeeded)}
+          ${poolPowerControls(player, payment, powerCost)}
           <div class="pay-runes">
             ${player.runes.map((rune) => paymentRune(rune, payment, displayCard, powerCost)).join("")}
           </div>
@@ -2350,6 +2423,29 @@ function poolEnergyControls(player, payment, energyNeeded) {
   `;
 }
 
+function poolPowerControls(player, payment, powerCost) {
+  const pool = runePoolPower(player);
+  if (!pool.length || totalPowerAmount(powerCost) <= 0) return "";
+  return `
+    <div class="pool-energy-list">
+      ${pool.map((resource) => {
+        const selected = (payment.poolPowerIds || []).includes(resource.id);
+        const usable = powerCost.some((requirement) => powerMatches(resource, requirement));
+        const limitReached = !selected
+          && ((payment.poolPowerIds?.length || 0) + (payment.powerRuneIds?.length || 0) >= totalPowerAmount(powerCost));
+        return `
+          <button
+            class="${selected ? "selected" : ""}"
+            data-action="pay-pool-power"
+            data-power="${resource.id}"
+            ${!usable || limitReached ? "disabled" : ""}
+          >${t("power", locale())}: ${domainText(resource.domain)}</button>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
 function poolEnergyCanPay(resource, card = null) {
   if (resource.restriction === "showdown") return game.phase === "showdown";
   if (resource.restriction === "spell") {
@@ -2382,12 +2478,12 @@ function activatedAddResources(player) {
   const paidCard = paymentDisplayCard(player, game.pendingPayment);
   return controlledCards(player)
     .filter((card) => card.controllerId === player.id)
-    .filter((card) => !card.exhausted)
-    .filter((card) => card.tags?.includes("Reaction") || card.keywords?.includes("Reaction"))
     .filter((card) => (card.effects || [])
       .filter((effect) => effect.timing === "activated")
       .some((effect) =>
-        effect.kind === "addEnergy"
+        ["addEnergy", "addPower"].includes(effect.kind)
+        && (effect.abilityKeywords?.includes("Reaction") || card.tags?.includes("Reaction") || card.keywords?.includes("Reaction"))
+        && (!card.exhausted || effect.exhaust === false)
         && (effect.restriction !== "spell" || paidCard?.type === "spell")
       ));
 }
@@ -2397,6 +2493,7 @@ function controlledCards(player) {
     player.legend,
     player.champion,
     ...player.base,
+    ...player.runes,
     ...game.battlefields.flatMap((field) => field.units.filter((unit) => unit.controllerId === player.id))
   ].filter(Boolean);
 }
@@ -2438,8 +2535,12 @@ function paymentCanConfirm(player, card, payment) {
   const selectedPowerRunes = powerRuneIds
     .map((id) => player.runes.find((rune) => rune.instanceId === id))
     .filter(Boolean);
+  const selectedPoolPower = (payment.poolPowerIds || [])
+    .map((id) => runePoolPower(player).find((resource) => resource.id === id))
+    .filter(Boolean);
+  if (selectedPoolPower.length !== (payment.poolPowerIds || []).length) return false;
 
-  return powerSelectionSatisfies(selectedPowerRunes, powerCost, true);
+  return powerSelectionSatisfies([...selectedPoolPower, ...selectedPowerRunes], powerCost, true);
 }
 
 function runePoolEnergy(player) {
@@ -2452,15 +2553,26 @@ function runePoolEnergy(player) {
   }));
 }
 
+function runePoolPower(player) {
+  return (player.runePool?.power || []).map((resource, index) => {
+    if (resource && typeof resource === "object") return resource;
+    return { id: `legacy-power-${player.id}-${index}`, instanceId: `legacy-power-${player.id}-${index}`, domain: resource || "Any" };
+  });
+}
+
 function powerProgress(player, card, payment) {
   const powerCost = payment.powerCost || card.power || [];
   if (!powerCost.length) return "0/0";
   const selectedPowerRunes = (payment.powerRuneIds || [])
     .map((id) => player.runes.find((rune) => rune.instanceId === id))
     .filter(Boolean);
+  const selectedPoolPower = (payment.poolPowerIds || [])
+    .map((id) => runePoolPower(player).find((resource) => resource.id === id))
+    .filter(Boolean);
+  const selectedPower = [...selectedPoolPower, ...selectedPowerRunes];
   return powerCost
     .map((requirement) => {
-      const available = selectedPowerRunes.filter((rune) => powerMatches(rune, requirement)).length;
+      const available = selectedPower.filter((rune) => powerMatches(rune, requirement)).length;
       return `${Math.min(available, requirement.amount)}/${requirement.amount} ${requirement.domain}`;
     })
     .join(", ");
@@ -2468,6 +2580,8 @@ function powerProgress(player, card, payment) {
 
 function powerMatches(rune, requirement) {
   if (rune.temporaryResource) return false;
+  if (rune.domain === "Any") return true;
+  if (requirement.allowedDomains?.length) return requirement.allowedDomains.includes(rune.domain);
   return requirement.domain === "Any" || rune.domain === requirement.domain;
 }
 
@@ -2516,7 +2630,7 @@ function runeCanPayPower(rune, card, payment, powerCost) {
   const powerRuneIds = payment.powerRuneIds || [];
   if (powerRuneIds.includes(rune.instanceId)) return true;
   if (!powerCost.some((requirement) => powerMatches(rune, requirement))) return false;
-  if (powerRuneIds.length >= totalPowerAmount(powerCost)) return false;
+  if (powerRuneIds.length + (payment.poolPowerIds?.length || 0) >= totalPowerAmount(powerCost)) return false;
   return true;
 }
 
@@ -2532,8 +2646,9 @@ function paymentRune(rune, payment, card, powerCost) {
   const energyDisabled = rune.exhausted || (!energySelected && energyRuneIds.length >= runeEnergyNeeded);
   return `
     <article class="pay-rune ${energySelected ? "selected-energy" : ""} ${powerSelected ? "selected-power" : ""}">
-      <span class="rune" style="--rune:${rune.color}">
-        <span class="rune-swatch"></span>${domainText(rune.domain)}${rune.exhausted ? ` ${t("spent", locale())}` : ""}
+      <span class="rune payment-rune-card ${rune.exhausted ? "spent" : ""}" style="--rune:${rune.color}">
+        ${rune.image ? `<img src="${rune.image}" alt="${cardName(rune)}" />` : `<span class="rune-swatch"></span>`}
+        <span class="rune-card-caption">${domainText(rune.domain)}${rune.exhausted ? ` · ${t("spent", locale())}` : ""}</span>
         ${energySelected ? `<strong>${t("energySelected", locale())}</strong>` : ""}
         ${powerSelected ? `<strong>${t("powerSelected", locale())}</strong>` : ""}
       </span>
@@ -2594,7 +2709,7 @@ function intelPanel(playerId) {
   if (!player || !canViewPrivateInfo(viewer.id, player.id)) return "";
   const hiddenCards = game.battlefields.flatMap((field) =>
     (field.hidden || [])
-      .filter((item) => item.ownerId === player.id)
+      .filter((item) => hiddenCardIsControlledBy(item, player.id))
       .map((item) => ({ ...item, fieldName: field.name }))
   );
   return `
@@ -2952,7 +3067,7 @@ function deflectPaymentPanel(choice) {
           const rune = findVisibleCard(option.cardId);
           return `
             <button type="button" class="deflect-rune-option" data-action="choose-effect" data-choice="${option.id}">
-              <span class="rune-swatch" style="--rune:${rune?.color || "#94a3b8"}"></span>
+              ${rune?.image ? `<img class="deflect-rune-art" src="${rune.image}" alt="${cardName(rune)}" />` : `<span class="rune-swatch" style="--rune:${rune?.color || "#94a3b8"}"></span>`}
               <strong>${rune ? domainText(rune.domain) : option.label}</strong>
               <span>${rune?.exhausted ? t("spent", locale()) : t("ready", locale())}</span>
             </button>
@@ -3161,6 +3276,7 @@ function chainZoneItem(item, order) {
   const player = game.players.find((candidate) => candidate.id === item.playerId);
   const targets = chainItemTargetIds(item).map(targetLabel).filter(Boolean);
   const source = chainItemSourceTitle(item);
+  const effectText = chainItemEffectText(item);
   const previewCardId = item.card?.instanceId || item.trigger?.sourceCardId || "";
   const itemClass = [
     "chain-zone-item",
@@ -3173,9 +3289,17 @@ function chainZoneItem(item, order) {
       <strong>${chainItemTitle(item)}</strong>
       <span>${t("source", locale())}: ${source}</span>
       ${targets.length ? `<small>${t("target", locale())}: ${targets.join(", ")}</small>` : ""}
+      ${effectText ? `<p class="chain-zone-effect">${escapeHtml(effectText)}</p>` : ""}
       <em>${t(item.status || "pending", locale())}</em>
     </button>
   `;
+}
+
+function chainItemEffectText(item) {
+  const source = item?.itemType === "trigger"
+    ? findVisibleCard(item.trigger?.sourceCardId) || item.card
+    : item?.card;
+  return source ? cardText(source) : (triggerKindLabel(item?.trigger) || "");
 }
 
 function realtimeFeedbackOverlay() {
@@ -3532,7 +3656,8 @@ function playerSide(player, side) {
 }
 
 function miniIdentity(card, player = null) {
-  const championState = player && card?.instanceId === player.champion?.instanceId
+  const championState = player && ["champion", "played"].includes(player.champion?.zone)
+    && card?.instanceId === player.champion?.instanceId
     ? player.championPlayed || player.champion.zone === "played" ? " deployed" : " ready"
     : "";
   const exhausted = card?.exhausted ? " exhausted" : "";
@@ -3547,14 +3672,16 @@ function miniIdentity(card, player = null) {
 
 function championPanelStatus(player) {
   if (!player.champion) return "";
+  if (!["champion", "played"].includes(player.champion.zone)) return "";
   const deployed = player.championPlayed || player.champion.zone === "played";
   const mine = viewerPlayerId() === player.id;
-  const canUse = mine && viewerCanAct() && !deployed && game.phase === "action" && !game.pendingPayment && !game.pendingChoice && canPayCard(player, player.champion);
+  const legalDestinations = mine ? legalChampionPlayDestinations(game) : [];
+  const canUse = mine && viewerCanAct() && !deployed && legalDestinations.length > 0 && canPayCard(player, player.champion);
   const reason = deployed
     ? t("alreadyUsed", locale())
     : !mine
       ? t("opponentChampion", locale())
-      : game.phase !== "action"
+      : game.phase !== "action" && game.phase !== "showdown"
         ? t("notActionPhase", locale())
         : !canPayCard(player, player.champion)
           ? t("needCost", locale())
@@ -3578,8 +3705,8 @@ function battlefieldCard(field) {
   const [topPlayer, bottomPlayer] = [opponentPlayer(), viewerPlayer()];
   const topUnits = field.units.filter((unit) => unit.controllerId === topPlayer.id);
   const bottomUnits = field.units.filter((unit) => unit.controllerId === bottomPlayer.id);
-  const topHidden = (field.hidden || []).filter((item) => item.ownerId === topPlayer.id);
-  const bottomHidden = (field.hidden || []).filter((item) => item.ownerId === bottomPlayer.id);
+  const topHidden = (field.hidden || []).filter((item) => hiddenCardIsControlledBy(item, topPlayer.id));
+  const bottomHidden = (field.hidden || []).filter((item) => hiddenCardIsControlledBy(item, bottomPlayer.id));
   const topTarget = targetAttributes(field.instanceId, topPlayer.id);
   const bottomTarget = targetAttributes(field.instanceId, bottomPlayer.id);
   const showdownActive = game.phase === "showdown" && game.showdown?.battlefieldId === field.instanceId;
@@ -3650,12 +3777,13 @@ function battlefieldLaneContents(player, field, units, hiddenItems, side) {
 }
 
 function hiddenCardBack(item, field) {
-  const ownedByViewer = viewerPlayerId() === item.ownerId;
-  const visibleByIntel = canViewPrivateInfo(viewerPlayerId(), item.ownerId);
+  const controllerId = hiddenCardControllerId(item);
+  const controlledByViewer = viewerPlayerId() === controllerId;
+  const visibleByIntel = canViewPrivateInfo(viewerPlayerId(), controllerId);
   const playable = hiddenPlayable(item, field);
   const sourceGlow = uiMotion.sourceIds.has(item.card.instanceId) ? " source-card-glow hidden-reveal-glow" : "";
   const targetGlow = uiMotion.targetIds.has(item.card.instanceId) ? " target-card-glow" : "";
-  if (ownedByViewer) {
+  if (controlledByViewer) {
     return `
       <button class="hidden-card-back hidden-card-owned owner-${item.ownerId} ${playable ? "usable-card" : ""}${sourceGlow}${targetGlow}" data-action="select-card" data-card="${item.card.instanceId}" data-card-id="${item.card.instanceId}" title="${item.card.name}">
         ${cardImage(item.card)}
@@ -3663,7 +3791,7 @@ function hiddenCardBack(item, field) {
       </button>
     `;
   }
-  if (visibleByIntel && !ownedByViewer) {
+  if (visibleByIntel && !controlledByViewer) {
     return `
       <article class="${imageCardClass(item.card, `hidden-revealed owner-${item.ownerId}${sourceGlow}${targetGlow}`)}" data-card-id="${item.card.instanceId}" title="${item.card.name}">
         ${cardImage(item.card)}
@@ -3675,7 +3803,7 @@ function hiddenCardBack(item, field) {
   return `
     <button class="hidden-card-back owner-${item.ownerId} locked-hidden ${playable ? "usable-card" : ""}${sourceGlow}${targetGlow}" ${attrs}>
       <span class="card-back-mark">H</span>
-      <span class="hidden-label">${ownedByViewer ? t("hiddenZone", locale()) : t("setHidden", locale())}</span>
+      <span class="hidden-label">${controlledByViewer ? t("hiddenZone", locale()) : t("setHidden", locale())}</span>
     </button>
   `;
 }
@@ -3735,6 +3863,7 @@ function actingPlayerClass() {
 
 function championCard(player) {
   if (!player.champion) return "";
+  if (!["champion", "played"].includes(player.champion.zone)) return "";
   if (player.championPlayed || player.champion.zone === "played") {
     return `
       <article class="champion-zone-slot champion-zone-used" aria-label="${player.champion.name} has been played">
@@ -3917,7 +4046,8 @@ function statusLine(card) {
   if (card.exhausted) items.push(t("exhausted", locale()));
   if (card.damage) items.push(`${card.damage} ${t("damageShort", locale())}`);
   if (card.stunned) items.push(t("stunned", locale()));
-  if (card.buffs) items.push(`+${card.buffs} ${t("buff", locale())}`);
+  if (card.buffs) items.push(t("buff", locale()));
+  if (card.mightModifier) items.push(`${card.mightModifier > 0 ? "+" : ""}${card.mightModifier} ${t("might", locale())}`);
   return `<span class="status-line">${items.join(" / ")}</span>`;
 }
 
@@ -4032,6 +4162,7 @@ function selectedActions(card, context) {
   if (context.zone === "champion") return championActions(player);
   if (context.zone === "base" || context.zone === "battlefield") return [...unitActions(card, context), ...activatedActions(card)];
   if (context.zone === "legend") return activatedActions(card);
+  if (context.zone === "rune") return activatedActions(card);
   if (context.zone === "hidden") return hiddenActions(card, context);
   return [];
 }
@@ -4039,24 +4170,20 @@ function selectedActions(card, context) {
 function handActions(card, player) {
   const inShowdown = game.phase === "showdown";
   const inActionChain = game.phase === "action" && Boolean(game.actionChain);
-  const showdownDestination = inShowdown && card.type === "unit" ? game.showdown.battlefieldId : "base";
-  if (inShowdown && !canPlayInShowdown(card, player, showdownDestination)) return [];
-  if (inActionChain && !canPlayInActionChain(card, player)) return [];
-  if (!canPayCard(player, card)) return [];
-  const label = inShowdown
-    ? (hasKeyword(card, "Ambush") ? keywordText(["Ambush"]) : (card.tags?.includes("Reaction") ? t("chainReaction", locale()) : t("chainAction", locale())))
-    : inActionChain ? t("chainReaction", locale())
-    : (card.type === "spell" ? t("cast", locale()) : t("playBase", locale()));
   const actions = [];
-  if (hasRequiredPlayTargets(game, player, card, showdownDestination)) {
-    actions.push(`<button data-action="begin-play" data-card="${card.instanceId}" data-destination="${showdownDestination}">${label}</button>`);
-  }
-  if (!inShowdown && !inActionChain && card.type === "unit") {
-    const canEnterEnemyBattlefield = (card.effects || []).some((effect) => effect.kind === "canEnterEnemyBattlefield");
-    for (const field of game.battlefields.filter((candidate) =>
-      candidate.controlledBy === player.id
-      || (canEnterEnemyBattlefield && candidate.units.some((unit) => unit.controllerId !== player.id)))) {
-      actions.push(`<button data-action="begin-play" data-card="${card.instanceId}" data-destination="${field.instanceId}">${t("playToBattlefield", locale(), { name: cardName(field) })}</button>`);
+  if (canPayCard(player, card)) {
+    for (const destination of legalCardPlayDestinations(game, card.instanceId)) {
+      const field = game.battlefields.find((candidate) => candidate.instanceId === destination);
+      const label = field
+        ? (inShowdown
+          ? (hasKeyword(card, "Ambush") ? keywordText(["Ambush"]) : (card.tags?.includes("Reaction") ? t("chainReaction", locale()) : t("chainAction", locale())))
+          : t("playToBattlefield", locale(), { name: cardName(field) }))
+        : inShowdown
+          ? (card.tags?.includes("Reaction") ? t("chainReaction", locale()) : t("chainAction", locale()))
+          : inActionChain
+            ? t("chainReaction", locale())
+            : (card.type === "spell" ? t("cast", locale()) : t("playBase", locale()));
+      actions.push(`<button data-action="begin-play" data-card="${card.instanceId}" data-destination="${destination}">${label}</button>`);
     }
   }
   if (!inShowdown && !inActionChain && hasKeyword(card, "Hidden")) {
@@ -4072,13 +4199,12 @@ function handActions(card, player) {
 
 function championActions(player) {
   if (!player.champion) return [];
-  if (game.phase !== "action" || player.championPlayed || player.champion.zone === "played") return [];
   if (!canPayCard(player, player.champion)) return [];
-  const actions = [`<button data-action="begin-champion" data-destination="base">${t("playChampionToBase", locale())}</button>`];
-  for (const field of game.battlefields.filter((candidate) => candidate.controlledBy === player.id)) {
-    actions.push(`<button data-action="begin-champion" data-destination="${field.instanceId}">${t("playChampionToField", locale(), { name: cardName(field) })}</button>`);
-  }
-  return actions;
+  return legalChampionPlayDestinations(game).map((destination) => {
+    if (destination === "base") return `<button data-action="begin-champion" data-destination="base">${t("playChampionToBase", locale())}</button>`;
+    const field = game.battlefields.find((candidate) => candidate.instanceId === destination);
+    return `<button data-action="begin-champion" data-destination="${destination}">${t("playChampionToField", locale(), { name: cardName(field) })}</button>`;
+  });
 }
 
 function unitActions(card, context) {
@@ -4104,15 +4230,8 @@ function hiddenActions(card, context) {
 }
 
 function hiddenPlayable(hidden, field, player = currentPlayer(game)) {
-  if (!hidden || !field || !player) return false;
-  if (game.pendingPayment || game.pendingChoice) return false;
-  if (hidden.ownerId !== player.id) return false;
-  if (game.phase !== "showdown" || !game.showdown) return false;
-  if (game.showdown.priorityPlayerId !== player.id) return false;
-  if (field.instanceId !== game.showdown.battlefieldId) return false;
-  if ((game.turnSequence || 0) < (hidden.playableFromTurnSequence || 0)) return false;
-  if (!canPlayInShowdown(hidden.card, player, field.instanceId)) return false;
-  return hasRequiredPlayTargets(game, player, hidden.card, field.instanceId);
+  if (!hidden || !field || !player || !hiddenCardIsControlledBy(hidden, player.id)) return false;
+  return legalCardPlayDestinations(game, hidden.card.instanceId).includes(field.instanceId);
 }
 
 function canPayCard(player, card) {
@@ -4195,7 +4314,7 @@ function selectedContext(cardId) {
     if (player.base.some((card) => card.instanceId === cardId)) return { playerId: player.id, zone: "base", location: "base" };
     if (player.runes.some((card) => card.instanceId === cardId)) return { playerId: player.id, zone: "rune", location: "rune" };
     if ((player.banished || []).some((card) => card.instanceId === cardId)) return { playerId: player.id, zone: "banished", location: "banished" };
-    if (player.champion?.instanceId === cardId && !player.championPlayed && player.champion.zone !== "played") {
+    if (player.champion?.instanceId === cardId && !player.championPlayed && player.champion.zone === "champion") {
       return { playerId: player.id, zone: "champion", location: "champion" };
     }
     for (const unit of player.base.filter((card) => card.type === "unit")) {
@@ -4206,7 +4325,7 @@ function selectedContext(cardId) {
   for (const field of game.battlefields) {
     if (field.instanceId === cardId) return { playerId: null, zone: "battlefield-card", location: field.instanceId };
     const hidden = field.hidden?.find((item) => item.card.instanceId === cardId);
-    if (hidden) return { playerId: hidden.ownerId, zone: "hidden", location: field.instanceId };
+    if (hidden) return { playerId: hiddenCardControllerId(hidden), zone: "hidden", location: field.instanceId };
     const unit = field.units.find((card) => card.instanceId === cardId);
     if (unit) return { playerId: unit.controllerId, zone: "battlefield", location: field.instanceId };
     for (const unit of field.units) {
@@ -4247,10 +4366,11 @@ function pruneMoveSelection() {
 function canActivate(card) {
   if (game.pendingPayment || game.pendingChoice) return false;
   if (!viewerCanAct()) return false;
-  const hasActivated = (card.effects || []).some((effect) => effect.timing === "activated");
+  const activatedEffects = (card.effects || []).filter((effect) => effect.timing === "activated");
+  const hasActivated = activatedEffects.length > 0;
   const playerControlsForge = game.battlefields.some((field) => field.controlledBy === viewerPlayerId() && (field.effects || []).some((effect) => effect.kind === "legendAttachEquipment"));
   if (!hasActivated && !(card.type === "legend" && playerControlsForge)) return false;
-  if (card.exhausted) return false;
+  if (card.exhausted && !activatedEffects.some((effect) => effect.exhaust === false)) return false;
   if (canActivateReactionAbility(card)) return true;
   if (game.actionChain) {
     return false;
@@ -4263,13 +4383,18 @@ function canActivate(card) {
 function canActivateReactionAbility(card) {
   const activatedEffects = (card.effects || []).filter((effect) => effect.timing === "activated");
   if (!activatedEffects.length) return false;
-  if (!card.tags?.includes("Reaction") && !card.keywords?.includes("Reaction")) return false;
+  const reactionEffects = activatedEffects.filter((effect) =>
+    effect.abilityKeywords?.includes("Reaction")
+    || card.tags?.includes("Reaction")
+    || card.keywords?.includes("Reaction"));
+  if (!reactionEffects.length) return false;
   if (game.pendingPayment) {
     const player = game.players.find((candidate) => candidate.id === game.pendingPayment.playerId);
     const paidCard = player ? paymentDisplayCard(player, game.pendingPayment) : null;
     return game.pendingPayment.playerId === card.controllerId
-      && activatedEffects.every((effect) =>
-        effect.kind === "addEnergy"
+      && reactionEffects.some((effect) =>
+        ["addEnergy", "addPower"].includes(effect.kind)
+        && (!card.exhausted || effect.exhaust === false)
         && (effect.restriction !== "spell" || paidCard?.type === "spell")
       );
   }
@@ -4281,8 +4406,9 @@ function canActivateReactionAbility(card) {
 function activationBlockedReason(card) {
   const activatedEffects = (card.effects || []).filter((effect) => effect.timing === "activated");
   if (!activatedEffects.length) return "";
-  if (!card.tags?.includes("Reaction") && !card.keywords?.includes("Reaction")) return "";
-  if (card.exhausted) return "Legend Exhausted";
+  if (!activatedEffects.some((effect) => effect.abilityKeywords?.includes("Reaction"))
+    && !card.tags?.includes("Reaction") && !card.keywords?.includes("Reaction")) return "";
+  if (card.exhausted && !activatedEffects.some((effect) => effect.exhaust === false)) return "Source Exhausted";
   if (game.pendingPayment) {
     const player = game.players.find((candidate) => candidate.id === game.pendingPayment.playerId);
     const paidCard = player ? paymentDisplayCard(player, game.pendingPayment) : null;
@@ -4317,17 +4443,10 @@ function canUseTarget(card, context, destination, ownerId) {
   if (context.playerId !== viewerPlayerId()) return false;
   if (context.zone === "hand") {
     if (card.type !== "unit") return false;
-    if (game.phase === "showdown") return destination === game.showdown?.battlefieldId && canPlayInShowdown(card, viewerPlayer(), destination);
-    if (destination === "base") return game.phase === "action";
-    const field = game.battlefields.find((candidate) => candidate.instanceId === destination);
-    return game.phase === "action" && card.type === "unit" && field?.controlledBy === viewerPlayerId();
+    return legalCardPlayDestinations(game, card.instanceId).includes(destination);
   }
   if (context.zone === "champion") {
-    const player = game.players.find((candidate) => candidate.id === context.playerId);
-    if (game.phase !== "action" || player?.championPlayed || card.zone === "played") return false;
-    if (destination === "base") return true;
-    const field = game.battlefields.find((candidate) => candidate.instanceId === destination);
-    return field?.controlledBy === viewerPlayerId();
+    return legalChampionPlayDestinations(game).includes(destination);
   }
   if (context.zone === "base" || context.zone === "battlefield") {
     if (game.phase !== "action" || card.type !== "unit" || card.exhausted || card.cantMoveThisTurn) return false;
@@ -4341,7 +4460,13 @@ function canUseTarget(card, context, destination, ownerId) {
 function runeSummary(player) {
   const counts = new Map();
   for (const rune of player.runes) {
-    const item = counts.get(rune.domain) || { total: 0, ready: 0, color: rune.color };
+    const item = counts.get(rune.domain) || {
+      total: 0,
+      ready: 0,
+      color: rune.color,
+      image: rune.image || "",
+      name: cardName(rune)
+    };
     item.total += 1;
     if (!rune.exhausted) item.ready += 1;
     counts.set(rune.domain, item);
@@ -4351,7 +4476,8 @@ function runeSummary(player) {
   return `
     <div class="rune-summary">
       ${[...counts.entries()].map(([domain, item]) => `
-        <span class="rune-count" style="--rune:${item.color}">
+        <span class="rune-count" style="--rune:${item.color}" title="${escapeHtml(item.name)} · ${domainText(domain)} ${item.ready}/${item.total}">
+          ${item.image ? `<img class="rune-summary-art" src="${item.image}" alt="${escapeHtml(item.name)}" loading="lazy" />` : ""}
           <b>${domain}</b> ${item.ready}/${item.total}
         </span>
       `).join("") || `<span class="rune-count muted">${t("noRunes", locale())}</span>`}
@@ -4364,10 +4490,11 @@ function runeSummary(player) {
 function runeChip(rune) {
   const spent = rune.exhausted ? " spent" : "";
   return `
-    <span class="rune${spent}" style="--rune:${rune.color}" title="${translateCardText(rune.text, locale())}">
-      <span class="rune-swatch"></span>${domainText(rune.domain)}
-      ${rune.exhausted ? `<strong>${t("energy", locale())} ${t("spent", locale()).toLowerCase()}</strong>` : ""}
-    </span>
+    <button type="button" class="rune rune-card-chip${spent}" data-action="select-card" data-card="${rune.instanceId}" style="--rune:${rune.color}" title="${translateCardText(rune.text, locale())}">
+      ${rune.image ? `<img src="${rune.image}" alt="${cardName(rune)}" loading="lazy" />` : `<span class="rune-swatch"></span>`}
+      <span class="rune-card-caption">${domainText(rune.domain)}</span>
+      ${rune.exhausted ? `<strong>${t("spent", locale())}</strong>` : ""}
+    </button>
   `;
 }
 
@@ -4404,7 +4531,7 @@ function inspector(card) {
       <div class="inspector-text">
         <h2>${cardName(card)}</h2>
         <span>${cardTags(card).join(" / ")} / ${cost}</span>
-        ${["unit", "gear"].includes(card.type) ? `<strong>${t("might", locale())} ${card.type === "unit" ? card.might + (card.buffs || 0) : card.might || 0}</strong>` : ""}
+        ${["unit", "gear"].includes(card.type) ? `<strong>${t("might", locale())} ${card.type === "unit" ? card.might + (card.buffs || 0) + (card.mightModifier || 0) : card.might || 0}</strong>` : ""}
         <p>${shortCardText(cardText(card))}</p>
         ${(card.keywords || []).length ? `<small>${keywordText(card.keywords)}</small>` : ""}
         <button class="secondary view-full-card" data-action="view-full-card">${t("viewFullCard", locale())}</button>
@@ -4464,7 +4591,8 @@ function fullCardModal(card) {
 
 function hasKeyword(card, keyword) {
   if ((card.keywords || []).some((item) => item.toLowerCase() === keyword.toLowerCase())) return true;
-  const player = game.players.find((candidate) => candidate.id === card.controllerId || candidate.id === card.ownerId);
+  const player = game.players.find((candidate) => candidate.id === card.controllerId)
+    || game.players.find((candidate) => candidate.id === card.ownerId);
   for (const effect of card.effects || []) {
     if (effect.timing !== "levelStatic" || effect.kind !== "gainKeywords") continue;
     if ((player?.xp || 0) < (effect.level || 0)) continue;
@@ -4475,26 +4603,6 @@ function hasKeyword(card, keyword) {
 
 function isFlashed(cardId) {
   return game.effectFlash?.sourceId === cardId || game.effectFlash?.targetIds?.includes(cardId);
-}
-
-function canPlayInShowdown(card, player = currentPlayer(game), destination = "base") {
-  const isAction = card.tags?.includes("Action");
-  const isReaction = card.tags?.includes("Reaction");
-  const isAmbush = hasKeyword(card, "Ambush");
-  if (!isAction && !isReaction && !isAmbush) return false;
-  if (game.showdown.chain.length > 0 && !isReaction && !isAmbush) return false;
-  if (isAmbush) {
-    const battlefield = game.battlefields.find((field) => field.instanceId === game.showdown.battlefieldId);
-    if (destination !== game.showdown.battlefieldId) return false;
-    if ((card.effects || []).some((effect) => effect.kind === "canEnterEnemyBattlefield")) return true;
-    return Boolean(battlefield?.units.some((unit) => unit.controllerId === player.id));
-  }
-  return true;
-}
-
-function canPlayInActionChain(card, player = currentPlayer(game)) {
-  if (!game.actionChain || game.actionChain.priorityPlayerId !== player.id) return false;
-  return card.tags?.includes("Reaction") || card.keywords?.includes("Reaction");
 }
 
 app.addEventListener("click", (event) => {
@@ -4647,6 +4755,7 @@ app.addEventListener("click", (event) => {
             randomFirstPlayer: true,
             manualActionChainPriority: true,
             enforceChampionLegendMatch: true,
+            format: settings.sideboardingEnabled ? "match" : "duel",
             decks: pair.length === 2 && pair.every((deck) => validateDeckRecord(deck).playable)
               ? pair.map(resolveDeckRecord)
               : undefined
@@ -4686,6 +4795,7 @@ app.addEventListener("click", (event) => {
     if (action === "activate-card") dispatchGameCommand({ kind: "activateCard", cardId: card }, () => activateCard(game, card));
     if (action === "pay-rune") dispatchGameCommand({ kind: "togglePaymentRune", runeId: rune, mode }, () => togglePaymentRune(game, rune, mode));
     if (action === "pay-pool-energy") dispatchGameCommand({ kind: "togglePaymentPoolEnergy", energyId: energy }, () => togglePaymentPoolEnergy(game, energy));
+    if (action === "pay-pool-power") dispatchGameCommand({ kind: "togglePaymentPoolPower", powerId: button.dataset.power }, () => togglePaymentPoolPower(game, button.dataset.power));
     if (action === "toggle-optional-payment") dispatchGameCommand({ kind: "toggleOptionalPaymentEffect", effectId: button.dataset.effect }, () => toggleOptionalPaymentEffect(game, button.dataset.effect));
     if (action === "confirm-payment") dispatchGameCommand({ kind: "confirmPayment" }, () => confirmPayment(game));
     if (action === "cancel-payment") dispatchGameCommand({ kind: "cancelPayment" }, () => cancelPayment(game));
@@ -4832,7 +4942,7 @@ function handleShellClick(event) {
     connectDefaultMultiplayer();
   }
   if (action === "menu-start") startGameFromMenu();
-  if (action === "menu-ai") startAiGameFromMenu();
+  if (action === "menu-ai") void startAiGameFromMenu();
   if (action === "coach-back") appView = "game";
   if (action === "coach-deep-review") runDeepAiReview();
   if (action === "online-refresh") refreshRooms();
@@ -4854,10 +4964,7 @@ function handleShellClick(event) {
     saveDeckStore();
   }
   if (action === "deck-save") saveDeckStore();
-  if (action === "deck-ai-recommend") {
-    const selected = getSelectedDeckRecord();
-    if (selected) deckEditor.aiRecommendation = recommendDeckForPool(resolveDeckRecord(selected), activeCoachModel(), deckEditor.poolId);
-  }
+  if (action === "deck-ai-recommend") void runDeckAiRecommendation();
   if (action === "deck-ai-apply") {
     const changes = deckEditor.aiRecommendation?.changes || [];
     mutateSelectedDeck((selected) => {
@@ -4892,8 +4999,8 @@ function handleShellClick(event) {
     deckEditor.selectedCardNumber = cardNumber;
   }
   if (action === "deck-remove-battlefield") mutateSelectedDeck((selected) => removeBattlefieldCard(selected, cardNumber));
-  if (action === "deck-rune-inc") mutateSelectedDeck((selected) => updateRune(selected, domain, 1));
-  if (action === "deck-rune-dec") mutateSelectedDeck((selected) => updateRune(selected, domain, -1));
+  if (action === "deck-rune-add") mutateSelectedDeck((selected) => addRuneCard(selected, cardNumber));
+  if (action === "deck-rune-remove") mutateSelectedDeck((selected) => removeRuneCard(selected, cardNumber));
   if (action === "deck-set-active") {
     const selected = getSelectedDeckRecord();
     if (!selected || !validateDeckRecord(selected).playable) return;
@@ -4954,6 +5061,7 @@ async function runDeepAiReview() {
   aiDeepReviewRunning = true;
   render();
   try {
+    await ensureNeuralAiLoaded();
     await refineAiReplay(aiReplay, activeCoachModel(), { limit: 5, rollouts: 8, rolloutDepth: 32, neuralModel: neuralAiModel });
     await persistAiReplay(persistableAiReplay(aiReplay));
   } catch (error) {
@@ -4984,7 +5092,6 @@ function coachDecisionCard(item) {
 
 enableLocalPresentationPreview();
 loadAiCheckpoint();
-loadNeuralAiCheckpoint();
 
 if (online.mode === "online" && online.roomId && online.playerToken) {
   connectOnlineEvents();
@@ -5042,19 +5149,58 @@ async function loadAiCheckpoint() {
   }
 }
 
-async function loadNeuralAiCheckpoint() {
-  try {
-    const response = await fetch(new URL("./ai/checkpoints/neural-champion.json", import.meta.url));
-    if (!response.ok) return;
-    const checkpoint = await response.json();
-    const { createNeuralSession, deserializeNeuralModel } = await import("./ai/neural/model.mjs");
-    neuralAiModel = deserializeNeuralModel(checkpoint);
-    neuralAiSession = createNeuralSession(neuralAiModel);
-    if (appView === "menu") render();
-  } catch {
-    neuralAiModel = null;
-    neuralAiSession = null;
-  }
+async function ensureNeuralAiLoaded() {
+  if (neuralAiModel && neuralAiSession) return true;
+  if (neuralAiLoadPromise) return neuralAiLoadPromise;
+  neuralAiLoadState = "loading";
+  neuralAiLoadError = "";
+  render();
+  neuralAiLoadPromise = (async () => {
+    try {
+      await nextPaint();
+      const response = await fetch(new URL("./ai/checkpoints/neural-champion.json", import.meta.url), { cache: "no-cache" });
+      if (!response.ok) throw new Error(`모델 파일을 읽을 수 없습니다 (HTTP ${response.status}).`);
+      const checkpoint = await response.json();
+      const { createNeuralSession, deserializeNeuralModel } = await import("./ai/neural/model.mjs");
+      neuralAiModel = deserializeNeuralModel(checkpoint);
+      neuralAiSession = createNeuralSession(neuralAiModel);
+      neuralAiLoadState = "ready";
+      return true;
+    } catch (error) {
+      neuralAiModel = null;
+      neuralAiSession = null;
+      neuralAiLoadState = "error";
+      neuralAiLoadError = error instanceof Error ? error.message : String(error);
+      reportUiException(error, "trained AI model load");
+      return false;
+    } finally {
+      neuralAiLoadPromise = null;
+      render();
+    }
+  })();
+  return neuralAiLoadPromise;
+}
+
+function nextPaint() {
+  return new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+}
+
+async function runDeckAiRecommendation() {
+  const selected = getSelectedDeckRecord();
+  if (!selected) return;
+  await ensureNeuralAiLoaded();
+  deckEditor.aiRecommendation = recommendDeckForPool(resolveDeckRecord(selected), activeCoachModel(), deckEditor.poolId);
+  render();
+}
+
+function neuralAiStatusText() {
+  const korean = locale() === LOCALES.KO;
+  if (neuralAiLoadState === "loading") return korean ? "저장된 완성 모델을 불러오는 중입니다." : "Loading the saved trained model.";
+  if (neuralAiLoadState === "error") return korean ? `완성 모델을 사용할 수 없어 기본 AI로 실행합니다: ${neuralAiLoadError} · 다음 AI 기능 실행 시 다시 로드합니다.` : `Using the baseline AI because the trained model is unavailable: ${neuralAiLoadError} · The next AI feature will retry.`;
+  if (neuralAiLoadState === "idle") return korean ? "완성 모델은 AI 기능을 처음 사용할 때만 로드됩니다." : "The trained model loads only when an AI feature is first used.";
+  return korean
+    ? `AI 세대 ${activeAiGeneration()} · 자가대전 ${activeAiGames()}경기 학습 · 순환 PPO 준비됨`
+    : `AI generation ${activeAiGeneration()} · ${activeAiGames()} self-play games · recurrent PPO ready`;
 }
 
 function activeCoachModel() {

@@ -12,6 +12,7 @@ export default card({
         DOMAINS.BODY
       ],
       "tags": [
+        "Champion",
         "Cat",
         "Rengar",
         "Ixtal",
@@ -32,10 +33,6 @@ export default card({
       "image": "https://exburst.dev/riftbound/cards/sd/UNL-120-219.webp",
       "text": "[Ambush] (You may play me as a [Reaction] to a battlefield where you have units.)\nI can be played to a battlefield where there are enemy units (even if you don't have units there).",
       "effects": [
-        {
-          "timing": "keyword",
-          "kind": "ambush"
-        },
         {
           "timing": "static",
           "kind": "canEnterEnemyBattlefield"

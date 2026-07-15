@@ -14,5 +14,5 @@ export default card({
   power: [],
   image: "https://cdn.piltoverarchive.com/cards/OGN-303s.webp",
   text: "When an enemy unit attacks a battlefield you control, give it -1 Might this turn, to a minimum of 1 Might.",
-  effects: [{ timing: "static", kind: "enemyAttacksControlledBattlefieldMightReduction", amount: -1, minMight: 1 }]
+  effects: [{ timing: "static", kind: "enemyAttacksControlledBattlefieldMightReduction", amount: -1, minMight: 1, temporary: true }]
 });

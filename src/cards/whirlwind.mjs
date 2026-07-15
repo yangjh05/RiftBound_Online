@@ -10,7 +10,7 @@ export default card({
   domains: [DOMAINS.CHAOS],
   tags: [],
   keywords: [],
-  energy: 4,
+  energy: 3,
   power: [{ domain: DOMAINS.ANY, amount: 1 }],
   image: "https://cdn.piltoverarchive.com/cards/OGN-187.webp",
   text: "Starting with the next player, each player may return a unit to its owner's hand.",

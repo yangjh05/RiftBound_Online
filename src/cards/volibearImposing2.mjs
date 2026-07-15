@@ -18,11 +18,6 @@ export default card({
   text: "[SHIELD 3] (+3 Might while I'm a defender.)\nTANK (I must be assigned combat damage first.)\nWhen an opponent moves to a battlefield other than mine, draw 1. (Bases are not battlefields.)",
   effects: [
     {
-      timing: "static",
-      kind: "shield",
-      amount: 3
-    },
-    {
       timing: "onMove",
       kind: "drawWhenOpponentMovesToOtherBattlefield",
       amount: 1

@@ -17,6 +17,6 @@ export default card({
   image: "https://cdn.piltoverarchive.com/cards/OGN-027.webp",
   text: "When you play your second card in a turn, give me +2 Might this turn and ready me.",
   effects: [
-    { timing: "cardPlayed", kind: "secondCardMightReadySelf", cardNumber: 2, amount: 2 }
+    { timing: "cardPlayed", kind: "secondCardMightReadySelf", cardNumber: 2, amount: 2, temporary: true }
   ]
 });

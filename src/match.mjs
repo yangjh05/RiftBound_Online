@@ -17,6 +17,7 @@ export function createMatchState({ decks, sideboardingEnabled = false } = {}) {
     nextFirstPlayerId: null,
     firstPlayerChooserId: null,
     previousBattlefields: { p1: null, p2: null },
+    usedBattlefields: { p1: [], p2: [] },
     lockedBattlefields: null,
     lastGameWasDraw: false
   };
@@ -31,6 +32,14 @@ export function recordMatchGame(match, { winnerId = null, firstPlayerId = null, 
     p1: battlefields.p1 || null,
     p2: battlefields.p2 || null
   };
+  if (!isDraw) {
+    for (const playerId of ["p1", "p2"]) {
+      const battlefield = match.previousBattlefields[playerId];
+      if (battlefield && !match.usedBattlefields[playerId].includes(battlefield)) {
+        match.usedBattlefields[playerId].push(battlefield);
+      }
+    }
+  }
   match.lastGameWasDraw = isDraw;
   if (winnerId && match.wins[winnerId] >= match.winsRequired) {
     match.phase = "complete";
@@ -72,7 +81,8 @@ export function beginNextMatchGame(match) {
     ok: true,
     decks: match.currentDecks.map(cloneDeck),
     firstPlayerId: match.nextFirstPlayerId,
-    lockedBattlefields: match.lockedBattlefields ? { ...match.lockedBattlefields } : null
+    lockedBattlefields: match.lockedBattlefields ? { ...match.lockedBattlefields } : null,
+    unavailableBattlefields: structuredClone(match.usedBattlefields)
   };
 }
 

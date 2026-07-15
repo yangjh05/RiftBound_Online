@@ -14,5 +14,5 @@ export default card({
   power: [],
   image: "https://cdn.piltoverarchive.com/cards/OGN-143.webp",
   text: "When you ready a friendly unit, give it +1 Might this turn.",
-  effects: [{ timing: "static", kind: "exhaustPayReadyBuffedUnit", amount: 1 }]
+  effects: [{ timing: "static", kind: "readyFriendlyUnitMightThisTurn", amount: 1, temporary: true }]
 });

@@ -18,9 +18,10 @@ export default card({
   text: "[DEFLECT 2] (Opponents must play Rune Rune to choose me with a spell or effect.)\nWhen I attack, deal 5 damage split among any number of enemy units here.",
   effects: [
       {
-          "timing": "static",
-          "kind": "deflect",
-          "amount": 2
+          "timing": "attackOrDefend",
+          "role": "attacker",
+          "kind": "splitDamageEnemyHere",
+          "amount": 5
       }
   ]
 });

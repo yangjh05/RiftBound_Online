@@ -8,7 +8,7 @@ export default card({
   set: "Origins",
   rarity: "Rare",
   domains: [DOMAINS.CHAOS],
-  tags: [],
+  tags: ["Spirit", "Shadow Isles"],
   keywords: [],
   energy: 8,
   power: [{ domain: DOMAINS.ANY, amount: 2 }],

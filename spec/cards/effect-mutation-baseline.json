@@ -1,0 +1,1331 @@
+{
+  "schemaVersion": 1,
+  "policy": "A killed effect mutant may never regress; new effects must be killed by independent evidence.",
+  "results": [
+    {
+      "effectKey": "activated:addEnergy",
+      "status": "killed",
+      "harness": "independent-probe"
+    },
+    {
+      "effectKey": "activated:baitedHook",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "activated:buffUnit",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "activated:dealDamageUnit",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "activated:draw",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "activated:equip",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "activated:giveKeyword",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "activated:killFriendlyPermanentChannelRune",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "activated:killSelf",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "activated:modifyMight",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "activated:moveFriendlyUnit",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "activated:nextSpellBonusDamage",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "activated:nextUnitEnterReady",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "activated:playUnitToken",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "activated:returnFriendlyPermanentOrHiddenToHand",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "activated:returnOwnedTagUnitToHand",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "activated:returnUnitToBase",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "activated:saveFriendlyUnitThisTurn",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "activated:udyrChooseMode",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "attackOrDefend:damageEnemyByHiddenTopDeck",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "attackOrDefend:dealDamageAllEnemiesHere",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "attackOrDefend:dealDamageEnemyHere",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "attackOrDefend:ifEnemyAloneBuffAndXp",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "attackOrDefend:killDamagedEnemiesHere",
+      "status": "killed",
+      "harness": "independent-probe"
+    },
+    {
+      "effectKey": "attackOrDefend:modifyEnemyHere",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "attackOrDefend:modifyFriendlyAlone",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "attackOrDefend:modifySelfIfReadyEnemyHere",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "attackOrDefend:playHiddenFromHand",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "attackOrDefend:runeDeckGambit",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "attackOrDefend:splitDamageEnemyHere",
+      "status": "killed",
+      "harness": "independent-probe"
+    },
+    {
+      "effectKey": "attackOrDefend:stunEnemyHere",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "battlefieldControl:discardReturnSelfFromTrash",
+      "status": "killed",
+      "harness": "independent-probe"
+    },
+    {
+      "effectKey": "battlefieldControl:legendAttachEquipment",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "beginning:drawIfControlsHidden",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "beginning:drawIfHandSizeAtMost",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "beginning:recycleTrash",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "cardPlayed:anotherUnitBuffSelf",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "cardPlayed:exhaustSelfChannelOnMightyUnit",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "cardPlayed:fromHiddenBuffSelf",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "cardPlayed:gearReadySelf",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "cardPlayed:highCostSpellBuffSelf",
+      "status": "killed",
+      "harness": "independent-probe"
+    },
+    {
+      "effectKey": "cardPlayed:highCostSpellDraw",
+      "status": "killed",
+      "harness": "independent-probe"
+    },
+    {
+      "effectKey": "cardPlayed:opponentTurnRecruit",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "cardPlayed:secondCardMightReadySelf",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "combatStatic:spellCostModifier",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "conquer:drawIfUnitsAtBattlefield",
+      "status": "killed",
+      "harness": "independent-probe"
+    },
+    {
+      "effectKey": "conquer:payEnergyReturnSelfToHand",
+      "status": "killed",
+      "harness": "independent-probe"
+    },
+    {
+      "effectKey": "conquer:playSpellFromTrashMaxEnergy",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "conquer:readySelf",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "conquer:scoreIfExcessDamage",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "conquerHere:discardDraw",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "conquerHere:readyRunesEndTurn",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "conquerHere:recycleRunes",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "conquerHere:recycleTopDeck",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "conquerHere:spendBuffDraw",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "death:buffAnotherFriendlyOnBuffedUnitDeath",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "death:channelRunes",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "death:dealDamageAllHere",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "death:discardDraw",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "death:draw",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "death:drawIfAlone",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "death:drawOnFirstOtherFriendlyUnitDeath",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "death:gainXp",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "death:playRecruitOnOtherFriendlyNonRecruitDeath",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "death:playUnitToken",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "death:recycleSelfReadyRunes",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "death:revealOpponentHand",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "defendHere:giveShieldHere",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "defendHere:returnFriendlyUnitHereToBase",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "defendHere:revealTopSpellToHandElseRecycle",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "discard:readySelfMight",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "discarded:draw",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "discarded:playSelfFromTrashPayPower",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "endTurn:playTopDeckUnitIgnoreCost",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "endTurn:readyRunes",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "endTurn:readyRunesIfAtBattlefield",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "enemyKilled:drawIfStunned",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "firstBeginning:channelRunes",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "firstBeginning:gainPoint",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "hold:buffUnitHere",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "hold:channelRunes",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "hold:draw",
+      "status": "killed",
+      "harness": "independent-probe"
+    },
+    {
+      "effectKey": "hold:gainPoint",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "hold:playUnitToken",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "hold:returnChosenChampionToZone",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "hold:triggerConquerAbilitiesHere",
+      "status": "killed",
+      "harness": "independent-probe"
+    },
+    {
+      "effectKey": "hold:winIfFriendlyUnitsAtLeast",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "keyword:huntGainXp",
+      "status": "killed",
+      "harness": "independent-probe"
+    },
+    {
+      "effectKey": "keyword:quickDrawAttach",
+      "status": "killed",
+      "harness": "independent-probe"
+    },
+    {
+      "effectKey": "keyword:weaponmaster",
+      "status": "killed",
+      "harness": "independent-probe"
+    },
+    {
+      "effectKey": "levelStatic:gainKeywords",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onMove:buffMovedUnit",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onMove:discardDraw",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onMove:drawDiscardTypeBonus",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onMove:drawWhenOpponentMovesToOtherBattlefield",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onMove:moveWithFriendlyFromSameBattlefield",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onMove:playUnitToken",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onMove:readyAnotherExhaustedFirstTimeEachTurn",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onMove:scoreOnNthMoveEachTurn",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:buffSelfDrawIfControlTag",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:buffUnit",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:channelRunes",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:dealDamageAllBattlefieldUnits",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:dealDamageUnit",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:discard",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:discardDraw",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:discardOpponentHand",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:draw",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:drawPerFriendlyMightyUnit",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:duelEnemy",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:killGear",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:killUnit",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:modifyEnemyUnits",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:modifyMight",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:modifySelfMight",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:moveEnemyToThisBattlefield",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:nextSpellEnergyReduction",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:optionalPowerDraw",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:playSpellFromTrashMaxEnergy",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:playUnitFromTrash",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:playUnitToken",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:predict",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:preventOpponentsPlayCardsThisTurn",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:readySelf",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:readyUnit",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:returnBattlefieldUnitToHand",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:returnTrashUnitToHand",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:returnUnitToBase",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:spendBuffsChannelRunes",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:spendFriendlyBuffBuffSelfReady",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:stealEnemyGear",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:stunOrKillEnemy",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:stunUnit",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "onPlay:swapWithControlledUnit",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "opponentPlaysUnit:stunAndCantMove",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "replacement:saveBuffedFriendlyUnitBySett",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "replacement:saveFriendlyUnitByKillingThis",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "score:buffSelf",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "score:draw",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "score:drawOrChannelRunes",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "score:killGearThenBuffSelf",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "score:returnSelfToHand",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "secondDrawEachTurn:modifyMight",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "showdownBeginsHere:payEnergyPredictDrawSpell",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:alphaStrike",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:banishFriendlyUnitPlayToBase",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:channelRunes",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:channelRunesOrDraw",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:chooseTopDeck",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:counterSpell",
+      "status": "killed",
+      "harness": "independent-probe"
+    },
+    {
+      "effectKey": "spell:counterUnlessPayEnergy",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:damageEnemyUnitsAtBattlefieldByReadyRunes",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:dealDamageAllBattlefieldUnits",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:dealDamageAllEnemyUnitsAtBattlefield",
+      "status": "killed",
+      "harness": "independent-probe"
+    },
+    {
+      "effectKey": "spell:dealDamageUnit",
+      "status": "killed",
+      "harness": "independent-probe"
+    },
+    {
+      "effectKey": "spell:discardEnergyDamageUnit",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:discardHandDraw",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:divineJudgment",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:doubleMightTemporary",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:dragonsRage",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:draw",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:duelFriendlyEnemy",
+      "status": "killed",
+      "harness": "independent-probe"
+    },
+    {
+      "effectKey": "spell:eachOtherPlayerKillUncontrolledUnit",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:eachPlayerKillGear",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:eachPlayerKillUnit",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:eachPlayerReturnUnitToHand",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:eachPlayerTopDeckBanishPlay",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:enGarde",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:exhaustFriendlyUnits",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:extraTurn",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:facebreaker",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:gainControlOfSpell",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:giveKeyword",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:giveTemporaryGear",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:giveTemporaryUnitOrGear",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:killAllGear",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:killBattlefieldUnitsTotalMightMax",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:killDamagedUnitsThisTurn",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:killGear",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:killOnNextDamageOrNowIfLegion",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:killUnit",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:lastBreath",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:matchFriendlyMight",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:modifyFriendlyUnits",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:modifyMight",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:moonfall",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:moveFriendlyAndReady",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:moveFriendlyUnitsToBase",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:moveUnit",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:partyFavors",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:playOpponentTopDeckCard",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:playTopDeckUnitFromLook",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:playUnitFromTrash",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:playUnitToken",
+      "status": "killed",
+      "harness": "independent-probe"
+    },
+    {
+      "effectKey": "spell:possession",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:preventSpellAbilityDamageThisTurn",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:readyUnitAny",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:recycleOpponentNonUnit",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:returnBattlefieldUnitToHand",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:returnFriendlyAndEnemyToHand",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:returnHiddenTrashToHand",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:returnTrashUnitToHand",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:returnUnitToBase",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:saveFriendlyUnitThisTurn",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:showstopper",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:siphonPower",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:spendBuffsReadyThenBuffFriendlyUnits",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:standUnited",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:stormbringer",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:stunOrReturnAttackingEnemy",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:stunUnit",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:unitsEnterReadyThisTurn",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spell:zenithBlade",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spellPlayed:battlefieldBuffUnitHere",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spellPlayed:drawIfChoosesFriendlyUnitHereFirstTime",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "spellPlayed:selfBuff",
+      "status": "killed",
+      "harness": "independent-probe"
+    },
+    {
+      "effectKey": "static:additionalHiddenSlots",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:attachedMight",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:attackingTieRecallsAllUnits",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:bonusDamageToUnitsHere",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:buffFriendlyUnitPayExhaustReady",
+      "status": "killed",
+      "harness": "independent-probe"
+    },
+    {
+      "effectKey": "static:canEnterEnemyBattlefield",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:canEnterOpenBattlefield",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:cannotBeChosenByEnemy",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:cantMoveFromHereToBase",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:combatDamageAssignmentLast",
+      "status": "killed",
+      "harness": "independent-probe"
+    },
+    {
+      "effectKey": "static:copyFriendlyActivatedAbilities",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:costModifier",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:deathTriggersAdditionalTime",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:defendAloneMight",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:enemyAttacksControlledBattlefieldMightReduction",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:enterReadyIfOpponentControlsBattlefield",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:enterReadyIfOpponentNearVictory",
+      "status": "killed",
+      "harness": "independent-probe"
+    },
+    {
+      "effectKey": "static:entersReady",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:friendlyBuffedUnitsGainKeywords",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:friendlyUnitsCanEnterOpenBattlefields",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:gainKeywordsIfDiscardedThisTurn",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:gainKeywordsWhileBuffed",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:gainKeywordsWhileMighty",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:globalBonusDamage",
+      "status": "killed",
+      "harness": "independent-probe"
+    },
+    {
+      "effectKey": "static:killFriendlyUnitsCostReduction",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:opponentsHiddenCantRevealHere",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:opponentsUnitsOnlyToBase",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:otherBuffedFriendlyHereMight",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:otherFriendlyHereGainKeywords",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:otherFriendlyHereMight",
+      "status": "killed",
+      "harness": "independent-probe"
+    },
+    {
+      "effectKey": "static:otherFriendlyUnitsEnterReady",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:playFromTopReveal",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:playSelfFromTrashWhenSpellKillsUnit",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:preventDamageAfterSecondMove",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:readyFriendlyUnitMightThisTurn",
+      "status": "killed",
+      "harness": "independent-probe"
+    },
+    {
+      "effectKey": "static:runeThresholdMight",
+      "status": "killed",
+      "harness": "independent-probe"
+    },
+    {
+      "effectKey": "static:selfMightByBuffedFriendlyHere",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:selfMightByPoints",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:selfMightByTrash",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:selfMightWhileAloneCombat",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:selfMightWhileBuffed",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:spendBuffsCostReduction",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:stunnedEnemyHereMight",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:suppressWeakerEnemyCombatDamage",
+      "status": "killed",
+      "harness": "independent-probe"
+    },
+    {
+      "effectKey": "static:unitsHereGainKeywords",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:unitsHereMight",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "static:victoryScoreModifier",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "stun:buffFriendlyUnit",
+      "status": "killed",
+      "harness": "focused-tests"
+    },
+    {
+      "effectKey": "stun:readySelfMight",
+      "status": "killed",
+      "harness": "focused-tests"
+    }
+  ]
+}

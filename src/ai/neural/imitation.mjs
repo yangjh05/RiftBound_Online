@@ -15,7 +15,14 @@ export function collectBaselineImitation(options) {
     const pair = pickPair(options.decks, random, options.meta, options.metaFraction ?? 0.7);
     const gameNumber = (options.gameOffset || 0) + attempt;
     const gameId = `baseline-${gameNumber}`;
-    const game = createGame({ decks: pair, firstPlayerId: gameNumber % 2 ? "p2" : "p1", interactive: true, manualActionChainPriority: true });
+    const game = createGame({
+      decks: pair,
+      firstPlayerId: gameNumber % 2 ? "p2" : "p1",
+      interactive: true,
+      manualActionChainPriority: true,
+      random,
+      randomSeed: deterministicGameSeed(options.seed, gameNumber)
+    });
     const stepsByPlayer = new Map(game.players.map((player) => [player.id, []]));
     let actionCount = 0;
     let failure = null;
@@ -82,7 +89,8 @@ export function collectBaselineImitation(options) {
       maxLegalActions: Math.max(0, ...[...stepsByPlayer.values()].flat().map((step) => step.originalLegalCount || 0)),
       actionKinds: countValues([...stepsByPlayer.values()].flat().map((step) => step.selectedKind)),
       deckByPlayer: Object.fromEntries(game.players.map((player, index) => [player.id, pair[index]?.id || null])),
-      failure
+      failure,
+      terminalState: didComplete ? null : publicProgressDiagnostic(game)
     });
     if (didComplete || options.includeTruncated) {
       for (const player of game.players) {
@@ -96,6 +104,52 @@ export function collectBaselineImitation(options) {
     options.onProgress?.({ attempted: attempt + 1, completed, targetGames, last: summaries.at(-1) });
   }
   return { trajectories, summaries, completedGames: completed, attemptedGames: summaries.length, targetGames };
+}
+
+function deterministicGameSeed(seed, gameNumber) {
+  const base = Number.isInteger(seed) ? seed >>> 0 : 0x9e3779b9;
+  return (base + Math.imul((gameNumber + 1) >>> 0, 0x85ebca6b)) >>> 0;
+}
+
+function publicProgressDiagnostic(game) {
+  const chain = game.showdown || game.actionChain;
+  return {
+    phase: game.phase,
+    turnNumber: game.turnNumber || 0,
+    turnSequence: game.turnSequence || 0,
+    currentPlayerId: game.currentPlayerId || null,
+    priorityPlayerId: chain?.priorityPlayerId || null,
+    consecutivePasses: chain?.consecutivePasses || 0,
+    chainKind: game.showdown ? "showdown" : game.actionChain ? "action" : null,
+    chainItems: (chain?.chain || []).map((item) => ({
+      itemType: item.itemType || null,
+      status: item.status || null,
+      playerId: item.playerId || null,
+      cardNumber: item.card?.cardNumber || null,
+      triggerKind: item.trigger?.kind || null
+    })),
+    pendingChoice: game.pendingChoice ? {
+      effect: game.pendingChoice.effect || null,
+      playerId: game.pendingChoice.playerId || null,
+      optionCount: game.pendingChoice.options?.length || 0
+    } : null,
+    pendingPayment: game.pendingPayment ? {
+      playerId: game.pendingPayment.playerId || null,
+      cardNumber: game.pendingPayment.card?.cardNumber || null
+    } : null,
+    stagedEvents: (game.stagedEvents || []).map((event) => ({
+      type: event.type,
+      battlefieldId: event.battlefieldId,
+      attackerId: event.attackerId,
+      defenderId: event.defenderId || null
+    })),
+    battlefields: game.battlefields.map((field) => ({
+      battlefieldId: field.instanceId,
+      controlledBy: field.controlledBy || null,
+      contestedBy: field.contestedBy || null,
+      unitControllers: field.units.map((unit) => unit.controllerId)
+    }))
+  };
 }
 
 export function weightedDeckPick(decks, random, meta = null, metaFraction = 0.7) {

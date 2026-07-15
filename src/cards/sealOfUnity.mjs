@@ -8,7 +8,7 @@ export default card({
   set: "Origins",
   rarity: "Epic",
   domains: [DOMAINS.ORDER],
-  tags: ["Reaction"],
+  tags: [],
   keywords: [],
   energy: 0,
   power: [{ domain: DOMAINS.ANY, amount: 1 }],
@@ -23,7 +23,8 @@ export default card({
       "Order"
     ],
     "restriction": null,
-    "nonReactive": true
+    "nonReactive": true,
+    "abilityKeywords": ["Reaction"]
   }
 ]
 });

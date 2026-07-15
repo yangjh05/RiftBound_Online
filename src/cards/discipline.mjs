@@ -21,6 +21,7 @@ export default card({
     "kind": "modifyMight",
     "target": "unit",
     "amount": 2,
+    "temporary": true,
     "draw": 1
   }
 ]

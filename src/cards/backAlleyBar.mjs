@@ -17,7 +17,8 @@ export default card({
     {
       timing: "onMove",
       kind: "buffMovedUnit",
-      amount: 1
+      amount: 1,
+      temporary: true
     }
   ]
 });

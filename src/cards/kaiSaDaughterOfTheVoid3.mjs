@@ -9,7 +9,7 @@ export default card({
   set: "Origins",
   rarity: "Showcase",
   domains: [DOMAINS.FURY, DOMAINS.MIND],
-  tags: ["Kai'Sa","Reaction"],
+  tags: ["Kai'Sa"],
   keywords: [],
   power: [],
   image: "https://cdn.piltoverarchive.com/cards/OGN-299s.webp",
@@ -24,7 +24,8 @@ export default card({
       "Mind"
     ],
     "restriction": "spell",
-    "nonReactive": true
+    "nonReactive": true,
+    "abilityKeywords": ["Reaction"]
   }
 ]
 });

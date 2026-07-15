@@ -41,7 +41,13 @@ export function captureResolutionContract(game, choice, optionId) {
     effect: choice.effect,
     playerId: choice.playerId,
     targetId: target.instanceId,
-    before: { damage: target.damage || 0, stunned: Boolean(target.stunned), exhausted: Boolean(target.exhausted), zone: locateCard(game, target.instanceId) }
+    before: {
+      damage: target.damage || 0,
+      stunned: Boolean(target.stunned),
+      exhausted: Boolean(target.exhausted),
+      zone: locateCard(game, target.instanceId),
+      deathRecallAllowed: hasDeathRecallReplacement(game, target)
+    }
   };
 }
 
@@ -54,10 +60,22 @@ export function validateResolutionContract(game, contract, result) {
   if (contract.effect === "playTrashUnit" && afterZone?.startsWith("trash:")) fail("chosen unit remained in trash");
   if (["returnUnitToHand"].includes(contract.effect) && !afterZone?.startsWith("hand:")) fail("chosen unit did not move to hand");
   if (contract.effect === "returnUnitToBase" && !afterZone?.startsWith("base:")) fail("chosen unit did not move to base");
-  if (["killUnit", "trashGear"].includes(contract.effect) && !afterZone?.startsWith("trash:")) fail("chosen permanent did not move to trash");
+  if (["killUnit", "trashGear"].includes(contract.effect) && !afterZone?.startsWith("trash:")) {
+    const replacementPending = ["deathReplacementSource", "deathReplacementEvent", "preparedDeathRecallPayment"]
+      .includes(game.pendingChoice?.effect)
+      && (game.pendingChoice?.data?.unitId === contract.targetId
+        || game.pendingChoice?.options?.some((option) => option.cardId === contract.targetId));
+    const legallyRecalled = contract.before.deathRecallAllowed && afterZone?.startsWith("base:");
+    if (!replacementPending && !legallyRecalled) fail("chosen permanent neither died nor used a declared death-replacement effect");
+  }
   if (["stunUnit"].includes(contract.effect) && target && !target.stunned) fail("chosen unit was not stunned");
   if (["readyUnit", "readyUnitAny"].includes(contract.effect) && target?.exhausted) fail("chosen unit was not readied");
-  if (contract.effect === "damageUnit" && target && afterZone === contract.before.zone && (target.damage || 0) <= contract.before.damage) fail("chosen unit took no damage");
+  if (contract.effect === "damageUnit") {
+    if (target && afterZone === contract.before.zone && (target.damage || 0) <= contract.before.damage) fail("chosen unit took no damage");
+    if (contract.before.zone?.startsWith("battlefield:") && afterZone?.startsWith("base:") && !contract.before.deathRecallAllowed) {
+      fail("damage moved a unit from a battlefield to base without a declared death-replacement effect");
+    }
+  }
 }
 
 export function semanticCoverageKey(choice) {
@@ -65,9 +83,22 @@ export function semanticCoverageKey(choice) {
 }
 
 export function validateStableGameState(game) {
+  for (const chain of [game.showdown, game.actionChain].filter(Boolean)) {
+    for (const item of chain.chain || []) {
+      const process = item.playOptions?.playProcess;
+      const isPlayerCardPlay = item.itemType === "card"
+        && ["hand", "champion", "hidden"].includes(process?.source)
+        && item.status === "pending"
+        && item.playOptions?.declarationsComplete !== true;
+      if (!isPlayerCardPlay || pendingInteractionOwnsChainItem(game, item.id)) continue;
+      throw new Error(`Lifecycle violation: Pending Chain item ${item.id} has incomplete declarations without a choice or payment owner`);
+    }
+  }
   const blockers = Boolean(
     game.pendingChoice || game.pendingPayment || game.actionChain
     || game.triggerQueue?.length || game.triggerQueueContinuation || game.pendingEndTurnPlayerId
+    || game.cleanupPendingTriggerBatches?.length || game.deferredTriggerContinuations?.length
+    || game.combatCleanupProcess || game.showdownExitProcess || game.resolvingGameEffect || game.effectSequenceContinuation
   );
   const pendingOperations = (game.operations || []).filter((operation) => operation.status === "pending");
   if (game.phase === "showdown" && pendingOperations.length) {
@@ -82,6 +113,10 @@ export function validateStableGameState(game) {
       || containsOperationId(game.pendingPayment, operation.id)
       || containsOperationId(game.actionChain?.continuation, operation.id)
       || containsOperationId(game.triggerQueueContinuation, operation.id)
+      || containsOperationId(game.cleanupPendingTriggerBatches, operation.id)
+      || containsOperationId(game.deferredTriggerContinuations, operation.id)
+      || containsOperationId(game.combatCleanupProcess, operation.id)
+      || containsOperationId(game.showdownExitProcess, operation.id)
       || (game.triggerQueue || []).some((trigger) => containsOperationId(trigger, operation.id));
     if (!referenced) throw new Error(`Lifecycle violation: pending operation ${operation.id}:${operation.kind} has no continuation owner (choice=${game.pendingChoice?.effect || "none"}, chain=${Boolean(game.actionChain)}, triggers=${game.triggerQueue?.length || 0})`);
   }
@@ -95,21 +130,60 @@ export function validateStableGameState(game) {
   }
 }
 
-export function interactionCoverageKeys(game, eventKey) {
-  const effects = new Set();
-  for (const card of activeCards(game)) {
-    for (const effect of card.effects || []) effects.add(`${effect.timing}:${effect.kind}`);
-  }
-  if (eventKey) effects.add(`event:${eventKey}`);
-  const values = [...effects].sort();
-  const keys = [];
-  for (let first = 0; first < values.length; first += 1) {
-    for (let second = first + 1; second < values.length; second += 1) {
-      keys.push(`2|${values[first]}|${values[second]}`);
-      for (let third = second + 1; third < values.length; third += 1) {
-        keys.push(`3|${values[first]}|${values[second]}|${values[third]}`);
-        if (keys.length >= 500) return keys;
+function pendingInteractionOwnsChainItem(game, itemId) {
+  return game.pendingPayment?.playProcess?.chainItemId === itemId
+    || game.pendingChoice?.data?.completion?.chainItemId === itemId
+    || game.pendingChoice?.completion?.chainItemId === itemId;
+}
+
+export function captureInteractionState(game) {
+  const cards = {};
+  for (const player of game.players) {
+    for (const card of playerCards(game, player)) {
+      if (!card?.instanceId || cards[card.instanceId]) continue;
+      cards[card.instanceId] = interactionCardState(game, card);
+      for (const attachment of card.attachments || []) {
+        if (attachment?.instanceId && !cards[attachment.instanceId]) cards[attachment.instanceId] = interactionCardState(game, attachment);
       }
+    }
+  }
+  return {
+    cards,
+    activeEffects: [...new Set(activeCards(game).flatMap((card) => (card.effects || [])
+      .map((effect) => `${card.cardNumber || card.id}:${effect.timing}:${effect.kind}`)))].sort(),
+    lifecycle: interactionLifecycleState(game)
+  };
+}
+
+export function causalInteractionCoverageKeys(before, game, eventKey) {
+  const after = captureInteractionState(game);
+  const transitions = new Set();
+  const cardIds = new Set([...Object.keys(before.cards || {}), ...Object.keys(after.cards || {})]);
+  for (const id of cardIds) {
+    const prior = before.cards?.[id];
+    const next = after.cards?.[id];
+    if (!prior || !next) {
+      transitions.add(`card-${prior ? "removed" : "created"}`);
+      continue;
+    }
+    if (prior.zone !== next.zone) transitions.add(`zone:${zoneKind(prior.zone)}>${zoneKind(next.zone)}`);
+    if (prior.damage !== next.damage) transitions.add(`damage:${Math.sign(next.damage - prior.damage)}`);
+    if (prior.exhausted !== next.exhausted) transitions.add(`exhausted:${next.exhausted}`);
+    if (prior.stunned !== next.stunned) transitions.add(`stunned:${next.stunned}`);
+    if (prior.buffs !== next.buffs) transitions.add(`buffs:${Math.sign(next.buffs - prior.buffs)}`);
+    if (prior.mightModifier !== next.mightModifier) transitions.add(`might-modifier:${Math.sign(next.mightModifier - prior.mightModifier)}`);
+  }
+  for (const key of Object.keys(before.lifecycle || {})) {
+    if (before.lifecycle[key] !== after.lifecycle[key]) transitions.add(`lifecycle:${key}:${String(before.lifecycle[key])}>${String(after.lifecycle[key])}`);
+  }
+  if (!transitions.size) transitions.add("no-observable-state-change");
+
+  const cause = `event:${eventKey || "unknown"}`;
+  const keys = [...transitions].map((transition) => `cause|${cause}|${transition}`);
+  for (const effect of before.activeEffects || []) {
+    for (const transition of transitions) {
+      keys.push(`interaction|${cause}|${effect}|${transition}`);
+      if (keys.length >= 500) return keys;
     }
   }
   return keys;
@@ -123,12 +197,51 @@ function containsOperationId(value, operationId, seen = new Set()) {
 }
 
 function activeCards(game) {
-  return game.players.flatMap((player) => [
+  const topLevel = game.players.flatMap((player) => [
     player.legend,
     player.champion?.zone === "played" ? player.champion : null,
     ...player.base,
     ...game.battlefields.flatMap((field) => field.units.filter((unit) => unit.controllerId === player.id))
   ]).filter(Boolean);
+  return topLevel.flatMap((card) => [card, ...(card.attachments || [])]);
+}
+
+function hasDeathRecallReplacement(game, target) {
+  if (target.saveWithRuneUntilTurnSequence === (game.turnSequence || 0)) return true;
+  return activeCards(game).some((card) => card.controllerId === target.controllerId
+    && (card.effects || []).some((effect) => effect.timing === "replacement"
+      && ["saveFriendlyUnitByKillingThis", "saveBuffedFriendlyUnitBySett"].includes(effect.kind)));
+}
+
+function interactionCardState(game, card) {
+  return {
+    zone: locateCard(game, card.instanceId),
+    damage: card.damage || 0,
+    exhausted: Boolean(card.exhausted),
+    stunned: Boolean(card.stunned),
+    buffs: card.buffs || 0,
+    mightModifier: card.mightModifier || 0
+  };
+}
+
+function interactionLifecycleState(game) {
+  return {
+    phase: game.phase,
+    choice: game.pendingChoice?.effect || null,
+    payment: Boolean(game.pendingPayment),
+    actionChain: Boolean(game.actionChain),
+    triggerQueue: game.triggerQueue?.length || 0,
+    cleanupTriggerBatches: game.cleanupPendingTriggerBatches?.length || 0,
+    deferredTriggerContinuations: game.deferredTriggerContinuations?.length || 0,
+    combatCleanup: Boolean(game.combatCleanupProcess),
+    showdownExit: Boolean(game.showdownExitProcess),
+    resolvingGameEffect: Boolean(game.resolvingGameEffect),
+    showdown: game.showdown?.battlefieldId || null
+  };
+}
+
+function zoneKind(zone) {
+  return zone?.split(":")[0] || "missing";
 }
 
 function findCard(game, id) {
