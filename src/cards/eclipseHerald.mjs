@@ -19,7 +19,8 @@ export default card({
     {
       timing: "stun",
       kind: "readySelfMight",
-      amount: 1
+      amount: 1,
+      temporary: true
     }
   ]
 });

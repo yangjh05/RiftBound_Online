@@ -16,6 +16,6 @@ export default card({
   image: "https://cdn.piltoverarchive.com/cards/OGN-016.webp",
   text: "LEGION - When you play me, give a unit +2 Might this turn. (Get the effect if you've played another card this turn.)",
   effects: [
-    { timing: "onPlay", kind: "modifyMight", target: "unit", amount: 2, requiresLegion: true }
+    { timing: "onPlay", kind: "modifyMight", target: "unit", amount: 2, temporary: true, requiresLegion: true }
   ]
 });

@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "set": "OGS",
+  "observedAt": "2026-07-14",
+  "source": {
+    "authority": "Riot Games / Riftbound",
+    "title": "Official Riftbound Card Gallery",
+    "url": "https://playriftbound.com/en-us/card-gallery/",
+    "filter": "Origins - Proving Grounds"
+  },
+  "cards": [
+    {"cardNumber":"OGS-001/024","name":"Annie, Fiery","type":"unit","domains":["Fury"],"energy":5,"powerAmount":1,"might":4,"superTypes":["Champion"],"tags":["Annie","Noxus"]},
+    {"cardNumber":"OGS-002/024","name":"Firestorm","type":"spell","domains":["Fury"],"energy":6,"powerAmount":1,"might":null,"superTypes":[],"tags":[]},
+    {"cardNumber":"OGS-003/024","name":"Incinerate","type":"spell","domains":["Fury"],"energy":2,"powerAmount":0,"might":null,"superTypes":[],"tags":[]},
+    {"cardNumber":"OGS-004/024","name":"Yi, Meditative","type":"unit","domains":["Calm"],"energy":5,"powerAmount":1,"might":4,"superTypes":["Champion"],"tags":["Master Yi","Ionia"]},
+    {"cardNumber":"OGS-005/024","name":"Zephyr Sage","type":"unit","domains":["Calm"],"energy":6,"powerAmount":1,"might":6,"superTypes":[],"tags":["Ionia","Bird"]},
+    {"cardNumber":"OGS-006/024","name":"Lux, Illuminated","type":"unit","domains":["Mind"],"energy":6,"powerAmount":1,"might":5,"superTypes":["Champion"],"tags":["Lux","Demacia"]},
+    {"cardNumber":"OGS-007/024","name":"Garen, Rugged","type":"unit","domains":["Body"],"energy":6,"powerAmount":1,"might":5,"superTypes":["Champion"],"tags":["Elite","Garen","Demacia"]},
+    {"cardNumber":"OGS-008/024","name":"Gentlemen's Duel","type":"spell","domains":["Body"],"energy":6,"powerAmount":1,"might":null,"superTypes":[],"tags":[]},
+    {"cardNumber":"OGS-009/024","name":"Yi, Honed","type":"unit","domains":["Body"],"energy":7,"powerAmount":1,"might":6,"superTypes":["Champion"],"tags":["Master Yi","Ionia"]},
+    {"cardNumber":"OGS-010/024","name":"Annie, Stubborn","type":"unit","domains":["Chaos"],"energy":4,"powerAmount":1,"might":3,"superTypes":["Champion"],"tags":["Annie","Noxus"]},
+    {"cardNumber":"OGS-011/024","name":"Flash","type":"spell","domains":["Chaos"],"energy":2,"powerAmount":0,"might":null,"superTypes":[],"tags":[]},
+    {"cardNumber":"OGS-012/024","name":"Blast of Power","type":"spell","domains":["Order"],"energy":6,"powerAmount":1,"might":null,"superTypes":[],"tags":[]},
+    {"cardNumber":"OGS-013/024","name":"Garen, Commander","type":"unit","domains":["Order"],"energy":6,"powerAmount":1,"might":5,"superTypes":["Champion"],"tags":["Elite","Garen","Demacia"]},
+    {"cardNumber":"OGS-014/024","name":"Lux, Crownguard","type":"unit","domains":["Order"],"energy":4,"powerAmount":0,"might":2,"superTypes":["Champion"],"tags":["Lux","Demacia"]},
+    {"cardNumber":"OGS-015/024","name":"Recruit the Vanguard","type":"spell","domains":["Order"],"energy":6,"powerAmount":0,"might":null,"superTypes":[],"tags":[]},
+    {"cardNumber":"OGS-016/024","name":"Vanguard Attendant","type":"unit","domains":["Order"],"energy":6,"powerAmount":1,"might":5,"superTypes":[],"tags":["Elite","Demacia"]},
+    {"cardNumber":"OGS-017/024","name":"Dark Child - Starter","type":"legend","domains":["Fury","Chaos"],"energy":null,"powerAmount":0,"might":null,"superTypes":["Champion"],"tags":["Annie"]},
+    {"cardNumber":"OGS-018/024","name":"Tibbers","type":"unit","domains":["Fury","Chaos"],"energy":8,"powerAmount":2,"might":7,"superTypes":["Signature"],"tags":["Annie"]},
+    {"cardNumber":"OGS-019/024","name":"Wuju Bladesman - Starter","type":"legend","domains":["Calm","Body"],"energy":null,"powerAmount":0,"might":null,"superTypes":["Champion"],"tags":["Master Yi"]},
+    {"cardNumber":"OGS-020/024","name":"Highlander","type":"spell","domains":["Calm","Body"],"energy":4,"powerAmount":0,"might":null,"superTypes":["Signature"],"tags":["Master Yi"]},
+    {"cardNumber":"OGS-021/024","name":"Lady of Luminosity - Starter","type":"legend","domains":["Mind","Order"],"energy":null,"powerAmount":0,"might":null,"superTypes":["Champion"],"tags":["Lux"]},
+    {"cardNumber":"OGS-022/024","name":"Final Spark","type":"spell","domains":["Mind","Order"],"energy":8,"powerAmount":0,"might":null,"superTypes":["Signature"],"tags":["Lux"]},
+    {"cardNumber":"OGS-023/024","name":"Might of Demacia - Starter","type":"legend","domains":["Body","Order"],"energy":null,"powerAmount":0,"might":null,"superTypes":["Champion"],"tags":["Garen"]},
+    {"cardNumber":"OGS-024/024","name":"Decisive Strike","type":"spell","domains":["Body","Order"],"energy":5,"powerAmount":1,"might":null,"superTypes":["Signature"],"tags":["Garen"]}
+  ]
+}

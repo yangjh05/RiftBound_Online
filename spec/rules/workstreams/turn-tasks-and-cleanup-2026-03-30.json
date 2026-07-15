@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "rulesVersion": "2026-03-30",
+  "workstreamId": "turn-tasks-and-cleanup",
+  "range": [300, 324],
+  "scope": "all-leaf-clauses-in-range",
+  "cases": [
+    {
+      "id": "section-headings",
+      "status": "verified",
+      "disposition": "structural",
+      "ruleIds": ["300", "301", "307", "311", "314", "318"],
+      "evidenceTests": ["Core Rules contracts are versioned, sourced, and backed by executable evidence"],
+      "remaining": "None; these clauses label sections and introduce no independent state transition."
+    },
+    {
+      "id": "turn-sequencing-and-completion",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["302", "303.1", "303.2.a", "304", "305", "306"],
+      "evidenceTests": ["turn tasks cannot pause without an explicit continuation owner", "one player explicitly orders all abilities triggered by the same spell-play event", "the turn player orders their simultaneous triggers before the next player", "a Combat-only staged task begins Combat before the pending Ending Step"],
+      "remaining": "None for duel turn order, one-at-a-time simultaneous event ordering, task completion, and pending structured phases before turn advancement."
+    },
+    {
+      "id": "turn-states-priority-and-focus",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["308.1.a", "308.2", "309.1.a", "309.2", "310.1.a", "310.2", "310.3", "310.4", "312.1.a", "312.1.b.1", "312.2.a", "312.2.b", "312.2.c", "312.2.d", "312.3", "313.1.a", "313.2", "313.3", "313.4", "313.5"],
+      "evidenceTests": ["card categories follow the independent Neutral/Showdown Open/Closed permission matrix", "activated abilities follow the same independent state permission matrix as cards", "Neutral and Showdown Chains require one uninterrupted all-player Pass cycle per resolved Item", "standard and effect movement give Showdown Focus to the player who applied Contested", "a Showdown Chain opened by a triggered ability does not pass Focus when it empties", "a Showdown Chain opened by a played card passes Focus when it empties"],
+      "remaining": "None for the duel Neutral/Showdown and Open/Closed matrix, exclusive Priority, Focus retention and transfer, and Limited Action exception."
+    },
+    {
+      "id": "ordered-start-tasks",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["315.1.a", "315.1.b", "315.2.a.1", "315.2.b.1", "315.2.b.2", "315.3.a", "315.4.a", "315.4.c", "315.4.d"],
+      "evidenceTests": ["start, cleanup, and Ending tasks follow the independent official order"],
+      "remaining": "None for the ordered tasks listed here."
+    },
+    {
+      "id": "start-task-shortages-and-burn-out",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["315.3.b.1", "315.4.b.1", "315.4.b.2"],
+      "evidenceTests": ["Channel Phase channels as many runes as possible when fewer than two remain", "Burn Out recycles trash, awards a point, and resumes the interrupted draw"],
+      "remaining": "None for the Rune Deck shortage and Burn Out continuation boundaries."
+    },
+    {
+      "id": "team-start-and-main-permissions",
+      "status": "verified",
+      "disposition": "other-mode",
+      "ruleIds": ["315.2.b.3", "316.2.b.1"],
+      "evidenceTests": ["duel verification explicitly classifies team-only turn clauses as out of scope"],
+      "remaining": "None for duel scope; both clauses are catalogued as other-mode and are excluded from the 1v1 completion gate."
+    },
+    {
+      "id": "main-combat-and-showdown-structure",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["316.1", "316.2.a", "316.3", "316.4.a", "316.4.b", "316.4.c", "316.4.d", "316.4.e", "316.4.f", "316.5.a.1", "316.5.b.1.a", "316.5.c", "316.6.a", "316.6.b"],
+      "evidenceTests": ["card categories follow the independent Neutral/Showdown Open/Closed permission matrix", "standard and effect movement give Showdown Focus to the player who applied Contested", "non-combat showdown becomes combat when an opposing Action unit enters during it", "a Combat-only staged task begins Combat before the pending Ending Step", "cleanup downgrades an invalid staged combat to the remaining contested showdown before Ending"],
+      "remaining": "None for duel Main-phase permissions and the structural entry paths from Standard Move, spell/effect movement, Non-Combat Showdown, and staged Combat into the shared Showdown/Combat flow."
+    },
+    {
+      "id": "ordered-ending-special-cleanup",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["317.1.a", "317.1.b", "317.2.a", "317.2.b", "317.2.c", "317.2.d", "317.2.e", "317.3"],
+      "evidenceTests": ["start, cleanup, and Ending tasks follow the independent official order", "Ending expiration removes turn-limited Might and empties Rune Pools", "stunned status expires before end-of-turn triggered abilities enter the chain"],
+      "remaining": "None for the ordered Ending tasks listed here."
+    },
+    {
+      "id": "ending-expiration-fepr-repeat",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["317.2.f"],
+      "evidenceTests": ["start, cleanup, and Ending tasks follow the independent official order", "Ending Expiration repeats exactly once after a Pending item undergoes FEPR"],
+      "remaining": "None; a Pending trigger produced during Expiration completes FEPR, restarts the complete Expiration sequence once, then advances the turn."
+    },
+    {
+      "id": "cleanup-request-causes-and-exclusion",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["319.1", "319.2", "319.3", "319.4", "319.5", "319.6", "319.7", "319.8", "320.1", "321.1", "322.1"],
+      "evidenceTests": ["every Cleanup request cause is recorded at its shared engine boundary", "lethal damage waits for every later instruction in the same Chain item", "noncombat cleanup uses current Might and repeats after an aura leaves"],
+      "remaining": "None; one cause registry records state, phase, Pending add/finalize, Item removal, Board, status, Move, Resolution deferral, and Cleanup-repeat boundaries, with an independent runtime oracle."
+    },
+    {
+      "id": "cleanup-board-state-order",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["323.1", "323.2.a", "323.2.b", "323.2.c", "323.3", "323.4", "323.5", "323.6", "323.7"],
+      "evidenceTests": ["Cleanup corrects every missing, opposite, and misplaced combat designation", "cleanup assigns combat designations before lethal damage uses Shield Might", "simultaneous cleanup deaths are removed before other-unit death triggers are evaluated", "cleanup recalls unattached Gear and board objects from the wrong controller's base", "hidden cards are trashed during cleanup when their controller loses the battlefield", "Open-state cleanup removes control when the controller has no unit without awarding it to an occupant"],
+      "remaining": "None for the ordered victory, designation, Deathknell/lethal, control, unattached Gear, foreign Base permanent/rune, and invalid Hidden repairs."
+    },
+    {
+      "id": "cleanup-staging",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["323.8.a", "323.9.a", "323.10", "323.11", "323.12", "323.13", "323.14"],
+      "evidenceTests": ["turn player chooses the order when multiple combats are staged", "a Combat-only staged task begins Combat before the pending Ending Step", "cleanup downgrades an invalid staged combat to the remaining contested showdown before Ending", "non-combat showdown becomes combat when an opposing Action unit enters during it"],
+      "remaining": "None; Showdown persistence, Combat persistence/removal, turn-player staging order, Combat-only initiation, combined Showdown/Combat initiation, and Non-Combat upgrade have focused evidence."
+    },
+    {
+      "id": "special-cleanup-contract",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["324.1", "324.2"],
+      "evidenceTests": ["combat special cleanup heals an aura survivor before the next normal cleanup", "start, cleanup, and Ending tasks follow the independent official order"],
+      "remaining": "None for insertion and normal-follow-up behavior; each new Special Cleanup must add its own ordered-task case."
+    }
+  ]
+}

@@ -12,6 +12,7 @@ export default card({
         DOMAINS.MIND
       ],
       "tags": [
+        "Champion",
         "Diana",
         "Mount Targon"
       ],

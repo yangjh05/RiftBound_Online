@@ -15,10 +15,5 @@ export default card({
   might: 3,
   image: "https://cdn.piltoverarchive.com/cards/OGN-100.webp",
   text: "VISION (When you play me, look at the top card of your Main Deck. You may recycle it.)\nOther friendly units have VISION.",
-  effects: [
-  {
-    "timing": "onPlay",
-    "kind": "predict"
-  }
-]
+  effects: [{ timing: "static", kind: "otherFriendlyUnitsGainKeywords", keywords: ["Vision"] }]
 });

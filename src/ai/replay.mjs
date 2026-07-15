@@ -1,4 +1,4 @@
-import { analyzeDecision, buildMatchReport } from "./coach.mjs";
+import { analyzeDecision, analyzeDecisionWithRollouts, buildMatchReport } from "./coach.mjs";
 import { actionFromCommand, isStrategicAction } from "./actions.mjs";
 import { DEFAULT_AI_MODEL } from "./policy.mjs";
 import { encodeHumanDecisionSample } from "./human-data.mjs";
@@ -65,7 +65,7 @@ export async function refineAiReplay(replay, model = DEFAULT_AI_MODEL, options =
     .sort((left, right) => (right.analysis?.regret || 0) - (left.analysis?.regret || 0))
     .slice(0, options.limit || 5);
   for (const decision of candidates) {
-    decision.analysis = analyzeDecision(decision.gameState, decision.actorId, decision.command, model, {
+    decision.analysis = await analyzeDecisionWithRollouts(decision.gameState, decision.actorId, decision.command, model, {
       rollouts: options.rollouts || 8,
       rolloutDepth: options.rolloutDepth || 32,
       neuralModel: options.neuralModel

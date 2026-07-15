@@ -8,7 +8,7 @@ export default card({
   set: "Origins",
   rarity: "Epic",
   domains: [DOMAINS.MIND, DOMAINS.CHAOS],
-  tags: ["Signature Spell","Teemo"],
+  tags: ["Signature", "Signature Spell", "Teemo"],
   keywords: ["Hidden"],
   energy: 2,
   power: [{ domain: DOMAINS.ANY, amount: 1 }],

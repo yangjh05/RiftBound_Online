@@ -19,6 +19,7 @@ export const EFFECT_TIMINGS = Object.freeze([
   "onMove",
   "onPlay",
   "opponentPlaysUnit",
+  "recycle",
   "replacement",
   "score",
   "secondDrawEachTurn",
@@ -28,6 +29,24 @@ export const EFFECT_TIMINGS = Object.freeze([
   "stun",
   "enemyKilled",
   "static"
+]);
+
+export const ABILITY_CLASSES = Object.freeze([
+  "activated",
+  "triggered",
+  "passive",
+  "replacement",
+  "instruction",
+  "keyword"
+]);
+
+export const ABILITY_ACTIVE_ZONES = Object.freeze([
+  "board",
+  "chain",
+  "mainDeck",
+  "trash",
+  "playable",
+  "rules"
 ]);
 
 export const TARGET_PROVIDERS = Object.freeze({
@@ -144,6 +163,11 @@ export const SPELL_TARGET_DECLARATIONS = Object.freeze({
     provider: TARGET_PROVIDERS.ALL_UNITS,
     defaultScope: "any"
   },
+  saveFriendlyUnitThisTurn: {
+    choiceEffect: "saveFriendlyUnitThisTurn",
+    provider: TARGET_PROVIDERS.ALL_UNITS,
+    defaultScope: "friendly"
+  },
   possession: {
     choiceEffect: "possession",
     provider: TARGET_PROVIDERS.BATTLEFIELD_UNITS,
@@ -168,7 +192,7 @@ export const SPELL_TARGET_DECLARATIONS = Object.freeze({
   alphaStrike: {
     steps: [
       { choiceEffect: "alphaStrike", provider: TARGET_PROVIDERS.ALPHA_STRIKE, defaultScope: "friendly" },
-      { choiceEffect: "alphaStrikeDamage", provider: "alphaStrikeAllocation", multi: true, allocation: true }
+      { choiceEffect: "alphaStrikeDamageTarget", provider: "alphaStrikeTargets", multi: true, minTargets: 1, maxTargetsFromSelectedMight: true }
     ]
   },
   discardEnergyDamageUnit: {
@@ -255,6 +279,10 @@ export const SPELL_TARGET_DECLARATIONS = Object.freeze({
       { choiceEffect: "runeDamagePaymentRune", provider: "readyRunes", optional: true, multi: true }
     ]
   },
+  dealDamageAllEnemyUnitsAtBattlefield: {
+    choiceEffect: "dealDamageAllEnemyUnitsAtBattlefield",
+    provider: TARGET_PROVIDERS.BATTLEFIELDS
+  },
   killBattlefieldUnitsTotalMightMax: {
     steps: [
       { choiceEffect: "killBattlefieldUnitsTotalMightMax", provider: TARGET_PROVIDERS.BATTLEFIELDS },
@@ -310,19 +338,22 @@ const effectDefinitions = [
   effect("activated", "moveFriendlyUnit", { sourceTypes: ["legend"], targetProvider: TARGET_PROVIDERS.ALL_UNITS }),
   effect("activated", "returnOwnedTagUnitToHand", { sourceTypes: ["legend"], targetProvider: TARGET_PROVIDERS.ALL_UNITS }),
   effect("activated", "playUnitToken", { sourceTypes: ["legend", "unit", "gear"], targetless: true }),
-  effect("activated", "addEnergy", { sourceTypes: ["legend", "gear", "unit"], targetless: true }),
+  effect("activated", "addEnergy", { sourceTypes: ["legend", "gear", "unit", "rune"], targetless: true, resolvesOnFinalize: true, addsResources: true }),
+  effect("activated", "addPower", { sourceTypes: ["legend", "gear", "unit", "rune"], targetless: true, resolvesOnFinalize: true, addsResources: true }),
   effect("attackOrDefend", "ifEnemyAloneBuffAndXp", { sourceTypes: ["unit"], targetless: true }),
   effect("attackOrDefend", "dealDamageEnemyHere", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.TARGETABLE_UNITS }),
   effect("attackOrDefend", "splitDamageEnemyHere", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.TARGETABLE_UNITS }),
   effect("attackOrDefend", "dealDamageAllEnemiesHere", { sourceTypes: ["unit"], targetless: true }),
+  effect("attackOrDefend", "killDamagedEnemiesHere", { sourceTypes: ["unit"], targetless: true }),
   effect("attackOrDefend", "modifySelfIfReadyEnemyHere", { sourceTypes: ["unit"], targetless: true }),
   effect("attackOrDefend", "modifyFriendlyAlone", { sourceTypes: ["gear", "unit"], targetless: true }),
   effect("attackOrDefend", "modifyEnemyHere", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.TARGETABLE_UNITS }),
   effect("attackOrDefend", "stunEnemyHere", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.TARGETABLE_UNITS }),
-  effect("attackOrDefend", "playHiddenFromHand", { sourceTypes: ["unit"], targetless: true }),
+  effect("attackOrDefend", "playHiddenFromHand", { sourceTypes: ["unit"], targetless: true, optionalTrigger: true, triggerCost: { kind: "power", choose: "hiddenCard" } }),
   effect("attackOrDefend", "damageEnemyByHiddenTopDeck", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.TARGETABLE_UNITS }),
   effect("attackOrDefend", "runeDeckGambit", { sourceTypes: ["unit"], targetless: true }),
   effect("battlefieldControl", "legendAttachEquipment", { sourceTypes: ["battlefield"], targetless: true }),
+  effect("battlefieldControl", "discardReturnSelfFromTrash", { sourceTypes: ["spell"], targetless: true, flow: "choice", continuation: "triggerQueue", optionalTrigger: true, triggerCost: { kind: "discardCard" }, activeZones: ["trash"] }),
   effect("beginning", "drawIfHandSizeAtMost", { sourceTypes: ["legend", "unit", "gear"], targetless: true }),
   effect("beginning", "drawIfControlsHidden", { sourceTypes: ["gear", "unit", "legend"], targetless: true }),
   effect("beginning", "recycleTrash", { sourceTypes: ["unit", "gear", "legend"], targetless: true }),
@@ -332,14 +363,13 @@ const effectDefinitions = [
   effect("cardPlayed", "opponentTurnRecruit", { sourceTypes: ["unit"], targetless: true }),
   effect("cardPlayed", "secondCardMightReadySelf", { sourceTypes: ["unit"], targetless: true }),
   effect("cardPlayed", "fromHiddenBuffSelf", { sourceTypes: ["unit"], targetless: true }),
-  effect("cardPlayed", "exhaustSelfChannelOnMightyUnit", { sourceTypes: ["legend"], targetless: true }),
+  effect("cardPlayed", "exhaustSelfChannelOnMightyUnit", { sourceTypes: ["legend"], targetless: true, optionalTrigger: true, triggerCost: { kind: "exhaustSource" } }),
   effect("cardPlayed", "highCostSpellBuffSelf", { sourceTypes: ["unit"], targetless: true }),
   effect("cardPlayed", "highCostSpellDraw", { sourceTypes: ["legend"], targetless: true }),
-  effect("buff", "exhaustPayReadyBuffedUnit", { sourceTypes: ["gear"], targetless: true }),
   effect("conquerHere", "readyRunesEndTurn", { sourceTypes: ["battlefield"], targetless: true }),
   effect("conquerHere", "discardDraw", { sourceTypes: ["battlefield"], targetless: true }),
   effect("conquerHere", "recycleRunes", { sourceTypes: ["battlefield"], targetless: true }),
-  effect("conquerHere", "spendBuffDraw", { sourceTypes: ["battlefield"], targetless: true }),
+  effect("conquerHere", "spendBuffDraw", { sourceTypes: ["battlefield"], targetless: true, optionalTrigger: true, triggerCost: { kind: "spendFriendlyBuff" } }),
   effect("conquerHere", "recycleTopDeck", { sourceTypes: ["battlefield"], targetless: true }),
   effect("death", "drawIfAlone", { sourceTypes: ["unit"], targetless: true }),
   effect("death", "draw", { sourceTypes: ["unit", "gear"], targetless: true }),
@@ -357,21 +387,25 @@ const effectDefinitions = [
   effect("endTurn", "readyRunes", { sourceTypes: ["legend"], targetless: true }),
   effect("endTurn", "playTopDeckUnitIgnoreCost", { sourceTypes: ["gear"], targetless: true }),
   effect("discard", "readySelfMight", { sourceTypes: ["unit"], targetless: true }),
-  effect("discarded", "draw", { sourceTypes: ["unit", "gear", "spell"], targetless: true }),
+  effect("discarded", "draw", { sourceTypes: ["unit", "gear", "spell"], targetless: true, activeZones: ["trash"] }),
+  effect("recycle", "buffFriendlyUnit", { sourceTypes: ["unit", "gear", "legend"], targetProvider: TARGET_PROVIDERS.ALL_UNITS }),
   effect("defendHere", "revealTopSpellToHandElseRecycle", { sourceTypes: ["battlefield"], targetless: true }),
   effect("defendHere", "giveShieldHere", { sourceTypes: ["battlefield"], targetProvider: TARGET_PROVIDERS.ALL_UNITS }),
-  effect("defendHere", "returnFriendlyUnitHereToBase", { sourceTypes: ["battlefield"], targetProvider: TARGET_PROVIDERS.BATTLEFIELD_UNITS }),
+  effect("defendHere", "returnFriendlyUnitHereToBase", { sourceTypes: ["battlefield"], targetProvider: TARGET_PROVIDERS.BATTLEFIELD_UNITS, optionalTrigger: true }),
   effect("firstBeginning", "gainPoint", { sourceTypes: ["battlefield"], targetless: true }),
   effect("firstBeginning", "channelRunes", { sourceTypes: ["battlefield"], targetless: true }),
   effect("hold", "draw", { sourceTypes: ["unit", "battlefield"], targetless: true }),
   effect("hold", "gainPoint", { sourceTypes: ["unit", "battlefield"], targetless: true }),
-  effect("hold", "channelRunes", { sourceTypes: ["battlefield"], targetless: true }),
+  effect("hold", "channelRunes", { sourceTypes: ["battlefield"], targetless: true, optionalTrigger: true }),
   effect("hold", "buffUnitHere", { sourceTypes: ["battlefield"], targetProvider: TARGET_PROVIDERS.ALL_UNITS }),
-  effect("hold", "returnChosenChampionToZone", { sourceTypes: ["battlefield"], targetless: true }),
+  effect("hold", "returnChosenChampionToZone", { sourceTypes: ["battlefield"], targetless: true, optionalTrigger: true }),
   effect("hold", "playUnitToken", { sourceTypes: ["battlefield"], targetless: true }),
   effect("hold", "winIfFriendlyUnitsAtLeast", { sourceTypes: ["battlefield"], targetless: true }),
   effect("hold", "triggerConquerAbilitiesHere", { sourceTypes: ["battlefield"], targetless: true }),
-  effect("keyword", "ambush", { sourceTypes: ["unit"], targetless: true }),
+  effect("keyword", "quickDrawAttach", { sourceTypes: ["gear"], targetProvider: TARGET_PROVIDERS.ALL_UNITS }),
+  effect("keyword", "weaponmaster", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.ALL_GEAR }),
+  effect("keyword", "predict", { sourceTypes: ["unit", "gear"], targetless: true }),
+  effect("keyword", "huntGainXp", { sourceTypes: ["unit"], targetless: true }),
   effect("levelStatic", "gainKeywords", { sourceTypes: ["unit"], targetless: true }),
   effect("onMove", "drawDiscardTypeBonus", { sourceTypes: ["unit"], targetless: true, flow: "choice", continuation: "afterMove" }),
   effect("onMove", "discardDraw", { sourceTypes: ["unit"], targetless: true, flow: "choice", continuation: "afterMove" }),
@@ -380,7 +414,7 @@ const effectDefinitions = [
   effect("onMove", "drawWhenOpponentMovesToOtherBattlefield", { sourceTypes: ["unit"], targetless: true, flow: "sync", continuation: "inline" }),
   effect("onMove", "scoreOnNthMoveEachTurn", { sourceTypes: ["unit"], targetless: true, flow: "sync", continuation: "inline" }),
   effect("onMove", "readyAnotherExhaustedFirstTimeEachTurn", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.ALL_UNITS, flow: "choice", continuation: "afterMove" }),
-  effect("onMove", "moveWithFriendlyFromSameBattlefield", { sourceTypes: ["unit"], targetless: true, flow: "choice", continuation: "afterMove" }),
+  effect("onMove", "moveWithFriendlyFromSameBattlefield", { sourceTypes: ["unit"], targetless: true, flow: "choice", continuation: "afterMove", optionalTrigger: true }),
   effect("onPlay", "draw", { sourceTypes: ["unit", "gear"], targetless: true }),
   effect("onPlay", "drawPerFriendlyMightyUnit", { sourceTypes: ["unit"], targetless: true }),
   effect("onPlay", "buffUnit", { sourceTypes: ["unit", "gear"], targetProvider: TARGET_PROVIDERS.ALL_UNITS }),
@@ -389,16 +423,15 @@ const effectDefinitions = [
   effect("onPlay", "discard", { sourceTypes: ["unit"], targetless: true }),
   effect("onPlay", "dealDamageUnit", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.TARGETABLE_UNITS }),
   effect("onPlay", "discardDraw", { sourceTypes: ["unit"], targetless: true }),
-  effect("onPlay", "killGear", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.ALL_GEAR }),
+  effect("onPlay", "killGear", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.ALL_GEAR, optionalTrigger: true }),
   effect("onPlay", "killUnit", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.TARGETABLE_UNITS }),
   effect("onPlay", "duelEnemy", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.TARGETABLE_UNITS }),
   effect("onPlay", "modifyMight", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.ALL_UNITS }),
   effect("onPlay", "nextSpellEnergyReduction", { sourceTypes: ["unit", "gear"], targetless: true }),
   effect("onPlay", "optionalPowerDraw", { sourceTypes: ["unit"], targetless: true }),
-  effect("onPlay", "playSpellFromTrashMaxEnergy", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.CHAIN_SPELLS }),
+  effect("onPlay", "playSpellFromTrashMaxEnergy", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.CHAIN_SPELLS, optionalTrigger: true }),
   effect("onPlay", "playUnitFromTrash", { sourceTypes: ["unit"], targetless: true }),
   effect("onPlay", "playUnitToken", { sourceTypes: ["unit", "gear"], targetless: true }),
-  effect("onPlay", "predict", { sourceTypes: ["unit"], targetless: true }),
   effect("onPlay", "readySelf", { sourceTypes: ["unit"], targetless: true }),
   effect("onPlay", "readyUnit", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.ALL_UNITS }),
   effect("onPlay", "returnBattlefieldUnitToHand", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.BATTLEFIELD_UNITS }),
@@ -408,38 +441,38 @@ const effectDefinitions = [
   effect("onPlay", "stunUnit", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.TARGETABLE_UNITS }),
   effect("onPlay", "stunOrKillEnemy", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.TARGETABLE_UNITS }),
   effect("onPlay", "modifySelfMight", { sourceTypes: ["unit"], targetless: true }),
-  effect("onPlay", "spendFriendlyBuffBuffSelfReady", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.ALL_UNITS }),
+  effect("onPlay", "spendFriendlyBuffBuffSelfReady", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.ALL_UNITS, optionalTrigger: true, triggerCost: { kind: "spendFriendlyBuff" } }),
   effect("onPlay", "spendBuffsChannelRunes", { sourceTypes: ["unit"], targetless: true }),
   effect("onPlay", "preventOpponentsPlayCardsThisTurn", { sourceTypes: ["unit"], targetless: true }),
-  effect("onPlay", "moveEnemyToThisBattlefield", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.ALL_UNITS }),
+  effect("onPlay", "moveEnemyToThisBattlefield", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.ALL_UNITS, optionalTrigger: true }),
   effect("onPlay", "stealEnemyGear", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.ALL_GEAR }),
-  effect("onPlay", "swapWithControlledUnit", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.ALL_UNITS }),
+  effect("onPlay", "swapWithControlledUnit", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.ALL_UNITS, optionalTrigger: true }),
   effect("opponentPlaysUnit", "stunAndCantMove", { sourceTypes: ["unit"], targetless: true }),
   effect("replacement", "saveFriendlyUnitByKillingThis", { sourceTypes: ["gear"], targetless: true }),
   effect("replacement", "saveBuffedFriendlyUnitBySett", { sourceTypes: ["legend"], targetless: true }),
   effect("conquer", "readySelf", { sourceTypes: ["legend"], targetless: true }),
   effect("conquer", "drawIfUnitsAtBattlefield", { sourceTypes: ["legend"], targetless: true }),
-  effect("conquer", "playSpellFromTrashMaxEnergy", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.CHAIN_SPELLS }),
-  effect("score", "gainXp", { sourceTypes: ["unit"], targetless: true }),
+  effect("conquer", "playSpellFromTrashMaxEnergy", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.CHAIN_SPELLS, optionalTrigger: true }),
   effect("score", "buffSelf", { sourceTypes: ["unit"], targetless: true }),
   effect("score", "draw", { sourceTypes: ["unit"], targetless: true }),
   effect("score", "drawOrChannelRunes", { sourceTypes: ["unit"], targetless: true }),
   effect("score", "killGearThenBuffSelf", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.ALL_GEAR }),
+  effect("score", "swapBackReplacedBattlefield", { sourceTypes: ["battlefield"], targetless: true, optionalTrigger: true }),
   effect("score", "returnSelfToHand", { sourceTypes: ["unit"], targetless: true }),
   effect("secondDrawEachTurn", "modifyMight", { sourceTypes: ["gear"], targetProvider: TARGET_PROVIDERS.ALL_UNITS }),
-  effect("showdownBeginsHere", "payEnergyPredictDrawSpell", { sourceTypes: ["unit"], targetless: true }),
+  effect("showdownBeginsHere", "payEnergyPredictDrawSpell", { sourceTypes: ["unit"], targetless: true, optionalTrigger: true, triggerCost: { kind: "energy" } }),
   effect("spell", "alphaStrike", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.ALPHA_STRIKE, declaration: SPELL_TARGET_DECLARATIONS.alphaStrike }),
   effect("spell", "chooseTopDeck", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.TOP_DECK }),
   effect("spell", "counterSpell", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.CHAIN_SPELLS, declaration: SPELL_TARGET_DECLARATIONS.counterSpell }),
   effect("spell", "counterUnlessPayEnergy", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.CHAIN_SPELLS, declaration: SPELL_TARGET_DECLARATIONS.counterUnlessPayEnergy }),
   effect("spell", "dealDamageUnit", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.TARGETABLE_UNITS, declaration: SPELL_TARGET_DECLARATIONS.dealDamageUnit }),
   effect("spell", "dealDamageAllBattlefieldUnits", { sourceTypes: ["spell"], targetless: true }),
+  effect("spell", "dealDamageAllEnemyUnitsAtBattlefield", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.BATTLEFIELDS, declaration: SPELL_TARGET_DECLARATIONS.dealDamageAllEnemyUnitsAtBattlefield }),
   effect("spell", "banishFriendlyUnitPlayToBase", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.ALL_UNITS, declaration: SPELL_TARGET_DECLARATIONS.banishFriendlyUnitPlayToBase }),
   effect("spell", "duelFriendlyEnemy", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.FRIENDLY_AND_ENEMY_UNITS, declaration: SPELL_TARGET_DECLARATIONS.duelFriendlyEnemy }),
   effect("spell", "draw", { sourceTypes: ["spell"], targetless: true }),
   effect("spell", "channelRunes", { sourceTypes: ["spell"], targetless: true }),
   effect("spell", "channelRunesOrDraw", { sourceTypes: ["spell"], targetless: true }),
-  effect("spell", "discard", { sourceTypes: ["spell"], targetless: true }),
   effect("spell", "discardEnergyDamageUnit", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.TARGETABLE_UNITS, declaration: SPELL_TARGET_DECLARATIONS.discardEnergyDamageUnit }),
   effect("spell", "extraTurn", { sourceTypes: ["spell"], targetless: true }),
   effect("spell", "unitsEnterReadyThisTurn", { sourceTypes: ["spell"], targetless: true }),
@@ -471,10 +504,15 @@ const effectDefinitions = [
   effect("spell", "matchFriendlyMight", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.ALL_UNITS, declaration: SPELL_TARGET_DECLARATIONS.matchFriendlyMight }),
   effect("spell", "modifyMight", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.ALL_UNITS, declaration: SPELL_TARGET_DECLARATIONS.modifyMight }),
   effect("spell", "modifyFriendlyUnits", { sourceTypes: ["spell"], targetless: true }),
-  effect("spell", "spendBuffsReadyThenBuffFriendlyUnits", { sourceTypes: ["spell"], targetless: true }),
+  effect("spell", "spendBuffsReadyThenBuffFriendlyUnits", {
+    sourceTypes: ["spell"],
+    targetless: true,
+    flow: "choice",
+    continuation: "finishSpell"
+  }),
   effect("spell", "readyUnitAny", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.ALL_UNITS, declaration: SPELL_TARGET_DECLARATIONS.readyUnitAny }),
-  effect("spell", "saveFriendlyUnitThisTurn", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.ALL_UNITS }),
-  effect("spell", "playUnitToken", { sourceTypes: ["spell"], targetless: true }),
+  effect("spell", "saveFriendlyUnitThisTurn", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.ALL_UNITS, declaration: SPELL_TARGET_DECLARATIONS.saveFriendlyUnitThisTurn }),
+  effect("spell", "playUnitToken", { sourceTypes: ["spell"], targetless: true, flow: "choice", continuation: "finishSpell" }),
   effect("spell", "playUnitFromTrash", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.TOP_DECK, declaration: SPELL_TARGET_DECLARATIONS.playUnitFromTrash }),
   effect("onPlay", "modifyEnemyUnits", { sourceTypes: ["unit"], targetless: true }),
   effect("onPlay", "dealDamageAllBattlefieldUnits", { sourceTypes: ["unit"], targetless: true }),
@@ -491,7 +529,6 @@ const effectDefinitions = [
   effect("spell", "moveFriendlyAndReady", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.ALL_UNITS, declaration: SPELL_TARGET_DECLARATIONS.moveFriendlyAndReady }),
   effect("spell", "moveFriendlyUnitsToBase", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.BATTLEFIELD_UNITS, declaration: SPELL_TARGET_DECLARATIONS.moveFriendlyUnitsToBase }),
   effect("spell", "moveUnit", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.ALL_UNITS, declaration: SPELL_TARGET_DECLARATIONS.moveUnit }),
-  effect("spell", "predict", { sourceTypes: ["spell"], targetless: true }),
   effect("spell", "recycleOpponentNonUnit", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.OPPONENT_NON_UNIT_HAND, declaration: SPELL_TARGET_DECLARATIONS.recycleOpponentNonUnit }),
   effect("spell", "returnBattlefieldUnitToHand", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.BATTLEFIELD_UNITS, declaration: SPELL_TARGET_DECLARATIONS.returnBattlefieldUnitToHand }),
   effect("spell", "eachPlayerReturnUnitToHand", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.BATTLEFIELD_UNITS }),
@@ -500,35 +537,37 @@ const effectDefinitions = [
   effect("spell", "returnFriendlyAndEnemyToHand", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.FRIENDLY_AND_ENEMY_UNITS, declaration: SPELL_TARGET_DECLARATIONS.returnFriendlyAndEnemyToHand }),
   effect("spell", "stunOrReturnAttackingEnemy", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.TARGETABLE_UNITS, declaration: SPELL_TARGET_DECLARATIONS.stunOrReturnAttackingEnemy }),
   effect("spell", "stunUnit", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.TARGETABLE_UNITS, declaration: SPELL_TARGET_DECLARATIONS.stunUnit }),
-  effect("spellPlayed", "battlefieldBuffUnitHere", { sourceTypes: ["battlefield"], targetProvider: TARGET_PROVIDERS.ALL_UNITS }),
+  effect("spellPlayed", "battlefieldBuffUnitHere", { sourceTypes: ["battlefield"], targetProvider: TARGET_PROVIDERS.ALL_UNITS, optionalTrigger: true }),
   effect("spellPlayed", "drawIfChoosesFriendlyUnitHereFirstTime", { sourceTypes: ["battlefield"], targetless: true }),
   effect("spellPlayed", "selfBuff", { sourceTypes: ["unit"], targetless: true }),
   effect("stun", "readySelfMight", { sourceTypes: ["unit"], targetless: true }),
   effect("stun", "buffFriendlyUnit", { sourceTypes: ["legend", "unit", "gear"], targetProvider: TARGET_PROVIDERS.ALL_UNITS }),
-  effect("enemyKilled", "drawIfStunned", { sourceTypes: ["gear", "unit", "legend"], targetless: true }),
+  effect("enemyKilled", "drawIfStunned", { sourceTypes: ["gear", "unit", "legend"], targetless: true, optionalTrigger: true, triggerCost: { kind: "exhaustSource" } }),
   effect("static", "attachedMight", { sourceTypes: ["gear"], targetless: true }),
   effect("static", "canEnterEnemyBattlefield", { sourceTypes: ["unit"], targetless: true }),
   effect("static", "canEnterOpenBattlefield", { sourceTypes: ["unit"], targetless: true }),
   effect("static", "cannotBeChosenByEnemy", { sourceTypes: ["unit"], targetless: true }),
   effect("static", "cantMoveFromHereToBase", { sourceTypes: ["battlefield"], targetless: true }),
-  effect("static", "costModifier", { sourceTypes: ["unit", "gear", "legend", "spell"], targetless: true }),
-  effect("static", "discardAdditionalCostEnergyReduction", { sourceTypes: ["unit"], targetless: true }),
+  effect("static", "costModifier", { sourceTypes: ["unit", "gear", "legend", "spell"], targetless: true, activeZones: ["board", "playable"] }),
   effect("static", "spendBuffsCostReduction", { sourceTypes: ["unit"], targetless: true }),
   effect("static", "copyFriendlyActivatedAbilities", { sourceTypes: ["unit"], targetless: true }),
   effect("static", "preventDamageAfterSecondMove", { sourceTypes: ["unit"], targetless: true }),
-  effect("static", "playFromTopReveal", { sourceTypes: ["unit"], targetless: true }),
+  effect("static", "combatDamageAssignmentLast", { sourceTypes: ["unit"], targetless: true }),
+  effect("static", "playFromTopReveal", { sourceTypes: ["unit"], targetless: true, activeZones: ["mainDeck"] }),
   effect("static", "attackingTieRecallsAllUnits", { sourceTypes: ["gear"], targetless: true }),
   effect("static", "killFriendlyUnitsCostReduction", { sourceTypes: ["unit"], targetless: true }),
   effect("static", "enemyAttacksControlledBattlefieldMightReduction", { sourceTypes: ["legend"], targetless: true }),
-  effect("static", "exhaustPayReadyBuffedUnit", { sourceTypes: ["gear"], targetless: true }),
-  effect("static", "playSelfFromTrashWhenSpellKillsUnit", { sourceTypes: ["unit"], targetless: true }),
+  effect("static", "readyFriendlyUnitMightThisTurn", { sourceTypes: ["gear"], targetless: true }),
+  effect("static", "buffFriendlyUnitPayExhaustReady", { sourceTypes: ["gear"], targetless: true, optionalTrigger: true, triggerCost: { kind: "powerAndExhaustSource" }, abilityClass: "triggered" }),
+  effect("static", "playSelfFromTrashWhenSpellKillsUnit", { sourceTypes: ["unit"], targetless: true, optionalTrigger: true, triggerCost: { kind: "power" }, abilityClass: "triggered", activeZones: ["trash"] }),
   effect("static", "defendAloneMight", { sourceTypes: ["legend"], targetless: true }),
-  effect("static", "deflect", { sourceTypes: ["unit"], targetless: true }),
   effect("static", "entersReady", { sourceTypes: ["unit"], targetless: true }),
   effect("static", "enterReadyIfOpponentControlsBattlefield", { sourceTypes: ["unit"], targetless: true }),
+  effect("static", "enterReadyIfOpponentNearVictory", { sourceTypes: ["unit"], targetless: true }),
   effect("static", "gainKeywordsWhileBuffed", { sourceTypes: ["unit"], targetless: true }),
   effect("static", "gainKeywordsIfDiscardedThisTurn", { sourceTypes: ["unit"], targetless: true }),
   effect("static", "gainKeywordsWhileMighty", { sourceTypes: ["unit"], targetless: true }),
+  effect("static", "otherFriendlyUnitsGainKeywords", { sourceTypes: ["unit"], targetless: true }),
   effect("static", "otherFriendlyHereGainKeywords", { sourceTypes: ["unit"], targetless: true }),
   effect("static", "unitsHereGainKeywords", { sourceTypes: ["battlefield"], targetless: true }),
   effect("static", "bonusDamageToUnitsHere", { sourceTypes: ["battlefield"], targetless: true }),
@@ -544,17 +583,19 @@ const effectDefinitions = [
   effect("static", "opponentsUnitsOnlyToBase", { sourceTypes: ["unit"], targetless: true }),
   effect("static", "otherFriendlyUnitsEnterReady", { sourceTypes: ["unit"], targetless: true }),
   effect("static", "selfMightWhileAloneCombat", { sourceTypes: ["unit"], targetless: true }),
-  effect("static", "shield", { sourceTypes: ["unit"], targetless: true }),
   effect("static", "stunnedEnemyHereMight", { sourceTypes: ["unit"], targetless: true }),
   effect("static", "unitsHereMight", { sourceTypes: ["battlefield"], targetless: true }),
+  effect("static", "taggedUnitsHereMight", { sourceTypes: ["battlefield"], targetless: true }),
+  effect("static", "unitsCanMoveHereFromAnywhere", { sourceTypes: ["battlefield"], targetless: true }),
   effect("static", "suppressWeakerEnemyCombatDamage", { sourceTypes: ["unit"], targetless: true }),
   effect("static", "victoryScoreModifier", { sourceTypes: ["battlefield"], targetless: true }),
   effect("static", "additionalHiddenSlots", { sourceTypes: ["battlefield"], targetless: true }),
   effect("static", "deathTriggersAdditionalTime", { sourceTypes: ["unit"], targetless: true }),
   effect("static", "globalBonusDamage", { sourceTypes: ["unit"], targetless: true }),
   effect("static", "runeThresholdMight", { sourceTypes: ["unit"], targetless: true }),
-  effect("discarded", "playSelfFromTrashPayPower", { sourceTypes: ["unit"], targetless: true }),
+  effect("discarded", "playSelfFromTrashPayPower", { sourceTypes: ["unit"], targetless: true, optionalTrigger: true, triggerCost: { kind: "power" }, activeZones: ["trash"] }),
   effect("conquer", "scoreIfExcessDamage", { sourceTypes: ["unit"], targetless: true }),
+  effect("conquer", "payEnergyReturnSelfToHand", { sourceTypes: ["unit"], targetless: true, flow: "choice", continuation: "triggerQueue", optionalTrigger: true, triggerCost: { kind: "energy" } }),
   effect("activated", "saveFriendlyUnitThisTurn", { sourceTypes: ["gear"], targetProvider: TARGET_PROVIDERS.ALL_UNITS }),
   effect("activated", "udyrChooseMode", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.ALL_UNITS })
 ];
@@ -582,14 +623,37 @@ export function effectNeedsPlayDeclaration(effect) {
 }
 
 function effect(timing, kind, options = {}) {
+  const abilityClass = options.abilityClass || defaultAbilityClass(timing);
+  const activeZones = options.activeZones || defaultActiveZones(abilityClass);
   return {
     timing,
     kind,
+    abilityClass,
+    activeZones: Object.freeze([...activeZones]),
     sourceTypes: options.sourceTypes || [],
     targetProvider: options.targetProvider || null,
     targetless: Boolean(options.targetless),
     declaration: options.declaration || null,
     flow: options.flow || null,
-    continuation: options.continuation || null
+    continuation: options.continuation || null,
+    optionalTrigger: Boolean(options.optionalTrigger),
+    triggerCost: options.triggerCost ? Object.freeze(structuredClone(options.triggerCost)) : null,
+    resolvesOnFinalize: Boolean(options.resolvesOnFinalize),
+    addsResources: Boolean(options.addsResources)
   };
+}
+
+function defaultAbilityClass(timing) {
+  if (timing === "activated") return "activated";
+  if (timing === "replacement") return "replacement";
+  if (timing === "spell") return "instruction";
+  if (timing === "keyword") return "keyword";
+  if (["static", "combatStatic", "levelStatic"].includes(timing)) return "passive";
+  return "triggered";
+}
+
+function defaultActiveZones(abilityClass) {
+  if (abilityClass === "instruction") return ["chain"];
+  if (abilityClass === "keyword") return ["rules"];
+  return ["board"];
 }

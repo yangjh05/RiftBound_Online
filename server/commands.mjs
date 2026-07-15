@@ -20,6 +20,7 @@ import {
   toggleMulliganCard,
   toggleOptionalPaymentEffect,
   togglePaymentPoolEnergy,
+  togglePaymentPoolPower,
   togglePaymentRune
 } from "../src/engine.mjs";
 
@@ -61,6 +62,8 @@ export function applyGameCommand(room, playerId, command) {
       return togglePaymentRune(game, command.runeId, command.mode);
     case "togglePaymentPoolEnergy":
       return togglePaymentPoolEnergy(game, command.energyId);
+    case "togglePaymentPoolPower":
+      return togglePaymentPoolPower(game, command.powerId);
     case "toggleOptionalPaymentEffect":
       return toggleOptionalPaymentEffect(game, command.effectId);
     case "confirmPayment":

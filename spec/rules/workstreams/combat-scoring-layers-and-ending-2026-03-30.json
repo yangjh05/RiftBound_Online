@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "rulesVersion": "2026-03-30",
+  "workstreamId": "combat-scoring-layers-and-ending",
+  "ranges": [[454, 481], [649, 652]],
+  "scope": "all-duel-leaf-clauses-in-ranges",
+  "cases": [
+    {
+      "id": "combat-opening-designation-and-damage",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleRanges": [[454, 460]],
+      "evidenceTests": ["turn player chooses the order when multiple combats are staged", "a non-combat showdown upgrade checks attack triggers exactly at the new designation", "interactive combat damage is assigned by players after showdown passes", "manual combat damage must assign lethal damage to Tank units first", "manual combat damage assigns Backline units only after non-Backline units", "a unit with both Tank and Backline may satisfy either exclusionary assignment rule", "combat assignment deals damage simultaneously and creates normal damage events", "Kayn, Unleashed prevents damage after his second move in a turn"],
+      "remaining": "None for duel combat entry, role designation, trigger order, Might totals, legal assignment priorities, prevention-aware lethal amounts, indamageable exemptions, and simultaneous Deal actions."
+    },
+    {
+      "id": "combat-cleanup-results-control-and-restaging",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleRanges": [[461, 461]],
+      "evidenceTests": ["combat special cleanup heals an aura survivor before the next normal cleanup", "hidden cards are trashed during cleanup when their controller loses the battlefield", "Open-state cleanup removes control when the controller has no unit without awarding it to an occupant"],
+      "remaining": "None; Heal, surviving-attacker Recall, win/loss/no-result records, no-result restaging, Contested clearing, Hidden cleanup, Control, Conquer, designations, and combat-duration expiry are ordered."
+    },
+    {
+      "id": "scoring-winning-point-and-victory",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleRanges": [[462, 467]],
+      "evidenceTests": ["Conquer and Hunt trigger exactly when the battlefield is scored", "holding a battlefield can score the winning point", "the winning point cannot come from a single conquest", "a battlefield can only score once for the same player each turn", "aspirant's climb increases the points needed to win"],
+      "remaining": "None for duel Scoring versus ordinary point gain, once-per-field-per-turn limits, Hold/Conquer triggers, draw versus Winning Point, dynamic Victory Score, and cleanup victory comparison."
+    },
+    {
+      "id": "layers-dependencies-and-timestamps",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleRanges": [[468, 475]],
+      "evidenceTests": ["numeric layers apply assignment, all increases, then all decreases", "ability layers repeat to a fixed point after arithmetic enables an ability", "same-layer dependencies override timestamp ordering and cycles are rejected", "production Might calculation does not clamp decreases before later increases", "attached Rules Text is inactive while Effect Text is appended to the Top-Most card"],
+      "remaining": "None for traits, copied/assigned values, ability alteration, appended Effect Text, arithmetic increase-before-decrease, fixed-point reevaluation, dependencies, and timestamp ordering used by the registered duel card pool."
+    },
+    {
+      "id": "duel-and-match-modes",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleRanges": [[476, 481]],
+      "evidenceTests": ["Duel setup randomly selects and simultaneously places one Battlefield per player", "Match setup excludes every Battlefield that player already used in the Match", "score rail maps both players onto the 1-8-1 track", "Channel Phase channels as many runes as possible when fewer than two remain"],
+      "remaining": "None for the supported 1v1 Duel and Match configuration, Battlefield use, Victory Score, best-of structure, and second-player first-turn extra Rune."
+    },
+    {
+      "id": "concession-and-unreachable-multiplayer-removal",
+      "status": "verified",
+      "disposition": "other-mode",
+      "ruleRanges": [[649, 652]],
+      "evidenceTests": ["a player can surrender immediately and awards the game to the opponent"],
+      "remaining": "None for duel scope; rules 649-651.1 resolve concession immediately to the sole opponent, while the remaining-player-removal branches require more than two players and are unreachable in a 1v1 game."
+    }
+  ]
+}

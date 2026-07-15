@@ -8,7 +8,7 @@ export default card({
   set: "Origins",
   rarity: "Showcase",
   domains: [DOMAINS.CHAOS],
-  tags: ["Basic Rune"],
+  tags: ["Basic", "Basic Rune"],
   keywords: [],
   power: [],
   image: "https://cdn.piltoverarchive.com/cards/OGN-166a.webp",

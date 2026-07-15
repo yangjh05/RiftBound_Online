@@ -16,11 +16,5 @@ export default card({
   might: 2,
   image: "https://exburst.dev/riftbound/cards/sd/tr_w-828,q-80 (1)_fx_1772200531274.webp",
   text: "[Shield] (+1 Might while I'm a defender.)",
-  effects: [
-  {
-    "timing": "static",
-    "kind": "shield",
-    "amount": 1
-  }
-]
+  effects: []
 });

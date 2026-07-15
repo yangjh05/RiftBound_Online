@@ -19,7 +19,8 @@ export default card({
     {
       timing: "cardPlayed",
       kind: "fromHiddenBuffSelf",
-      amount: 2
+      amount: 2,
+      temporary: true
     }
   ]
 });

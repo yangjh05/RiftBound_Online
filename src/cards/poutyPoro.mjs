@@ -15,11 +15,5 @@ export default card({
   might: 2,
   image: "https://cdn.piltoverarchive.com/cards/OGN-013.webp",
   text: "Deflect (Opponents must pay rune to choose me with an ability or spell)",
-  effects: [
-      {
-          "timing": "static",
-          "kind": "deflect",
-          "amount": 1
-      }
-  ]
+  effects: []
 });

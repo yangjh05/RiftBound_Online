@@ -1,0 +1,358 @@
+{
+  "schemaVersion": 1,
+  "rulesVersion": "2026-03-30",
+  "sourceSha256": "3733EAFFA8B412CE37458D62E7CD22AA93D59F0A6925241BCE5B0B5FD5ED1878",
+  "updatedAt": "2026-07-16",
+  "scope": {
+    "catalogClauses": 2085,
+    "catalogLeaves": 1421,
+    "duelApplicableLeaves": 1381,
+    "otherModeLeaves": 40
+  },
+  "statusDefinitions": {
+    "verified": "Every leaf in the workstream has executable boundary evidence and its relevant oracle or mutation can detect a broken implementation.",
+    "partial": "Representative behavior is implemented and tested, but the workstream does not yet have leaf-complete boundary and mutation evidence.",
+    "unverified": "The official clauses are inventoried, but no sufficient executable behavior evidence exists yet."
+  },
+  "completionGate": {
+    "readyForAiTraining": true,
+    "requirements": [
+      "Every duel-applicable family is verified, not merely assigned to a family.",
+      "Every focused contract, runtime oracle, regression mutant, effect mutant, interaction scenario, fixed-seed fuzz run, and generated scenario passes.",
+      "The 40 other-mode leaves are either implemented or explicitly accepted as non-applicable to the two-player product scope."
+    ]
+  },
+  "verifiedMilestones": [
+    {
+      "id": "chain-item-effect-and-cleanup-boundary",
+      "ruleIds": ["321", "359.3.e.14.b"],
+      "summary": "Choices and later instructions remain inside the resolving Chain item; cleanup and nested triggers wait until the complete effect finishes.",
+      "evidenceTests": [
+        "a choice in a multi-effect card explicitly continues the remaining effects before finishing the spell",
+        "triggers created during an effect wait until every instruction and draw has finished",
+        "lethal damage waits for every later instruction in the same Chain item"
+      ],
+      "anchors": ["src/engine.mjs#resolveEffectSpecs", "src/engine.mjs#checkState"]
+    },
+    {
+      "id": "lethal-and-combat-special-cleanup-order",
+      "ruleIds": ["322", "323.2", "323.4", "323.5", "324.2", "461.1", "461.3"],
+      "summary": "Combat roles affect current Might, lethal deaths are captured and moved in the official order, and combat healing/attacker recall occurs only at the inserted special-cleanup steps.",
+      "evidenceTests": [
+        "cleanup assigns combat designations before lethal damage uses Shield Might",
+        "combat special cleanup heals an aura survivor before the next normal cleanup",
+        "simultaneous cleanup deaths are removed before other-unit death triggers are evaluated"
+      ],
+      "anchors": ["src/engine.mjs#resolveCleanupLethalUnits", "src/engine.mjs#applyCombatSpecialCleanup"]
+    },
+    {
+      "id": "death-trigger-zone-and-event-batches",
+      "ruleIds": ["383.2.c.1", "383.2.c.2", "383.3.d", "428.1.a.1.b"],
+      "summary": "Deathknell and later death-observer events retain separate batches; post-death triggers evaluate their source zone after simultaneous movement.",
+      "evidenceTests": [
+        "a spell-killed Immortal Phoenix can trigger from trash after its simultaneous death",
+        "later other-unit death triggers resolve above an earlier Deathknell event",
+        "simultaneous cleanup deaths are removed before other-unit death triggers are evaluated"
+      ],
+      "anchors": ["src/engine.mjs#collectDeathknellTriggers", "src/engine.mjs#triggerResolutionGroups"]
+    },
+    {
+      "id": "kill-replacement-continuations",
+      "ruleIds": ["357.2.a", "372", "373", "373.1"],
+      "summary": "Direct Kill, prepared replacement payments, multiple Kill sequences, and Kill additional costs explicitly resume their owning operation.",
+      "evidenceTests": [
+        "a direct Kill resumes its owning spell after an optional death replacement choice",
+        "a prepared death payment resumes the interrupted direct Kill exactly once",
+        "a replaced Kill additional cost remains paid and resumes the card-play process",
+        "a multi-Kill trigger resumes every remaining unit after a death replacement choice"
+      ],
+      "anchors": ["src/engine.mjs#continueExplicitDeathContinuation", "src/engine.mjs#continueConfirmedPayment"]
+    },
+    {
+      "id": "exact-damage-kill-followup",
+      "ruleIds": ["359.3.e.14.b", "428.1.a.1"],
+      "summary": "An 'if this kills' follow-up is tied to the exact damage event and resolves only after cleanup confirms that event caused the death.",
+      "evidenceTests": ["Disintegrate draws only when its own damage event kills the unit"],
+      "anchors": ["src/engine.mjs#resolveDamageKillFollowups"]
+    },
+    {
+      "id": "open-state-control-and-trigger-focus",
+      "ruleIds": ["187.4", "323.6", "346.1"],
+      "summary": "A Battlefield controller without a unit there loses Control only in an Open state without automatically awarding it to an occupant, and a Chain created only by a trigger does not incorrectly pass Focus when it empties.",
+      "evidenceTests": [
+        "Open-state cleanup removes control when the controller has no unit without awarding it to an occupant",
+        "non-showdown chain gives Priority to the newest remaining item's controller",
+        "diana lunari showdown trigger can be declined",
+        "a Showdown Chain opened by a triggered ability does not pass Focus when it empties"
+      ],
+      "anchors": ["src/engine.mjs#updateBattlefieldControl", "src/engine.mjs#continueShowdownAfterChainResolution"]
+    },
+    {
+      "id": "turn-state-card-and-ability-permissions",
+      "ruleIds": ["326.1", "326.2", "331.1.a", "331.1.b", "331.2", "338.1.a.1", "338.1.a.2", "338.1.a.6", "338.1.b.1", "343.1.a", "343.1.b", "343.2", "822.1.b", "822.3.a"],
+      "summary": "Every card category and activated-ability timing class follows one independent Neutral/Showdown Open/Closed matrix; Focus and Priority are both enforced, conditional Reaction permissions are rechecked at Finalize, and Champion-Zone plays use the same Chain path.",
+      "evidenceTests": [
+        "card categories follow the independent Neutral/Showdown Open/Closed permission matrix",
+        "activated abilities follow the same independent state permission matrix as cards",
+        "direct and interactive card entry points share the Closed-state Reaction gate",
+        "a legally timed Reaction Chosen Champion follows normal Chain rules from the Champion Zone",
+        "a Hidden card gains its conditional Reaction permission beginning on the next turn",
+        "Check Legality rejects Ambush when its destination loses the friendly unit before Finalize"
+      ],
+      "anchors": ["src/engine.mjs#canPlayCardAtCurrentTiming", "src/engine.mjs#canActivateAbilityAtCurrentTiming", "src/engine.mjs#ambushGrantsReaction", "scripts/reference-rules.mjs#referenceOpportunityPermission"]
+    },
+    {
+      "id": "registered-card-timing-exceptions",
+      "ruleIds": ["338.1.a.3", "811.6.a", "813.1.c.1", "813.4.a", "813.4.b", "819.1.b", "822.1.b", "822.3.a"],
+      "summary": "Every current card-level exception that grants Reaction timing—printed Reaction, Quick-Draw, a previously Hidden card, and destination-qualified Ambush—routes through one reviewed registry and shared engine gate; new exception kinds fail static validation until reviewed.",
+      "evidenceTests": [
+        "registered play-timing exceptions route through one reviewed Reaction permission contract",
+        "Quick-Draw can be played and attached with Reaction timing by the player holding showdown priority",
+        "a Hidden card gains its conditional Reaction permission beginning on the next turn",
+        "Ambush grants Reaction only while playing to a battlefield with a friendly unit",
+        "Check Legality rejects Ambush when its destination loses the friendly unit before Finalize"
+      ],
+      "anchors": ["src/rules/keywords.mjs#CARD_REACTION_PERMISSION_KINDS", "src/rules/keywords.mjs#cardReactionPermissionSources", "src/engine.mjs#cardHasReactionTimingPermission"]
+    },
+    {
+      "id": "single-chain-placement",
+      "ruleIds": ["328.1", "328.2", "330.1", "330.2"],
+      "summary": "Cards, activated abilities, and triggers reuse the one existing Chain; a Closed turn cannot create a sibling Showdown Chain, and simultaneous Chain representations are rejected by the runtime oracle.",
+      "evidenceTests": [
+        "cards, abilities, and their triggers join the one existing Chain",
+        "Finalize repeats when an immediately played Unit creates a Pending trigger",
+        "showdown start choices resume remaining battlefield defend triggers",
+        "Core Rules runtime oracle rejects illegal zone, player, chain, attachment, and numeric states"
+      ],
+      "anchors": ["src/engine.mjs#ensureActionChain", "src/engine.mjs#addPendingChainItem", "src/engine.mjs#addPendingTriggerChainItem", "scripts/reference-rules.mjs#referenceSingleChainPlacement"]
+    },
+    {
+      "id": "finalize-immediate-items-and-add",
+      "ruleIds": ["337.1.c.1.a", "337.1.c.2", "429.1", "429.2.a", "429.3.a"],
+      "summary": "Units and Gear resolve during Finalize, newly created Pending triggers repeat Finalize, and only actual Rune Pool Add abilities use the shared immediate-Finalize path without passing Priority or Focus; Channel abilities remain ordinary Chain items.",
+      "evidenceTests": [
+        "Units and Gear resolve during Finalize without waiting for the Pass step",
+        "Finalize repeats when an immediately played Unit creates a Pending trigger",
+        "only Rune Pool Add effects use the immediate-Finalize ability classification",
+        "an Add Reaction finalizes during payment without passing Priority or Focus",
+        "malzahar fanatic uses the normal Chain before killing a permanent and channeling"
+      ],
+      "anchors": ["src/engine.mjs#finalizeAndResolveAddAbility", "src/engine.mjs#resolveFinalizedImmediateItems", "src/effects/registry.mjs#addsResources"]
+    },
+    {
+      "id": "two-player-chain-pass-cycle",
+      "ruleIds": ["339.1", "339.2"],
+      "summary": "Neutral and Showdown Chains share one uninterrupted two-player Pass-cycle contract: adding any card, ability, or trigger clears earlier passes, fewer than two consecutive passes cannot resolve an Item, and exactly the newest Item resolves after both players pass.",
+      "evidenceTests": [
+        "adding a Chain Item resets prior passes before the next Pass cycle",
+        "Neutral and Showdown Chains require one uninterrupted all-player Pass cycle per resolved Item",
+        "adding an Action Chain Item resets prior passes through the shared Pass-cycle contract"
+      ],
+      "anchors": ["src/engine.mjs#resetChainPassCycle", "src/engine.mjs#recordChainPass", "scripts/reference-rules.mjs#resolvePassCycleReference"]
+    },
+    {
+      "id": "two-player-execute-windows",
+      "ruleIds": ["338.1.a.4", "338.1.a.5", "338.1.a.7", "338.1.b.2", "338.1.c.1"],
+      "summary": "At both the first and later Execute windows, the Priority player may append only legally timed cards or abilities, retains Priority through the resulting Finalize pass, may append again before passing, and transfers Priority to the other duel player only by passing.",
+      "evidenceTests": [
+        "cards and abilities use every first and later two-player Execute window through Finalize",
+        "card categories follow the independent Neutral/Showdown Open/Closed permission matrix",
+        "activated abilities follow the same independent state permission matrix as cards"
+      ],
+      "anchors": ["src/engine.mjs#canPlayInActionChain", "src/engine.mjs#canActivateInActionChain", "src/engine.mjs#completeActivatedAbility", "scripts/reference-rules.mjs#resolveExecuteWindowReference"]
+    },
+    {
+      "id": "resolve-cycle-and-created-pending-items",
+      "ruleIds": ["340.1", "340.2.a", "340.3", "340.4"],
+      "summary": "The newest Item resolves in full, including explicit choice continuations; triggers created during Resolve remain on the same Chain and re-enter Finalize, while an emptied played-card Showdown Chain passes Focus and a nonempty Chain returns Priority to its newest remaining controller.",
+      "evidenceTests": [
+        "a Pending trigger created during Resolve re-enters Finalize before the next Execute window",
+        "a choice in a multi-effect card explicitly continues the remaining effects before finishing the spell",
+        "triggers created during an effect wait until every instruction and draw has finished",
+        "Defy counters an eligible opposing spell on the chain",
+        "targeted spell does not retarget if declared unit leaves before resolution",
+        "a Showdown Chain opened by a played card passes Focus when it empties"
+      ],
+      "anchors": ["src/engine.mjs#resolveActionChainTop", "src/engine.mjs#resolveShowdownTop", "src/engine.mjs#flushGameEffectTriggers", "scripts/reference-rules.mjs#resolvePostResolutionReference"]
+    },
+    {
+      "id": "duel-showdown-opening-and-focus",
+      "ruleIds": ["342.1", "344.1", "344.2", "345", "346.1"],
+      "summary": "Controlled opposing and uncontrolled Battlefield contests created by standard or effect movement stage the correct Combat or non-combat Showdown, and the player who applied Contested receives initial Focus and Priority; played-card Chains pass Focus on empty while trigger/Add-only Chains do not.",
+      "evidenceTests": [
+        "standard and effect movement give Showdown Focus to the player who applied Contested",
+        "an Add ability that opens and empties its transient Showdown Chain does not pass Focus",
+        "a Showdown Chain opened by a triggered ability does not pass Focus when it empties",
+        "a Showdown Chain opened by a played card passes Focus when it empties"
+      ],
+      "anchors": ["src/engine.mjs#stageBattlefieldEvent", "src/engine.mjs#startShowdown", "src/engine.mjs#continueShowdownAfterChainResolution", "scripts/reference-rules.mjs#referenceShowdownOpening"]
+    },
+    {
+      "id": "hot-fepr-task-reentry",
+      "ruleIds": ["334.1", "335.1", "335.2.a", "335.3", "336.1"],
+      "summary": "Cleanup, Start, Combat, and Ending Tasks retain an explicit owner while Chain work is produced; a Task incurred during Handle or any FEPR stage pauses and resumes that stage exactly once, and Pending Items created during Resolve restart FEPR at Finalize.",
+      "evidenceTests": [
+        "turn tasks cannot pause without an explicit continuation owner",
+        "the independent HOT/FEPR model resumes every interrupted stage exactly once",
+        "Start and Ending Tasks survive Chain Pass, Resolve, and choice re-entry without skip or duplication",
+        "cleanup finishes hidden removal before resolving deathknell draw choices",
+        "combat special cleanup heals an aura survivor before the next normal cleanup",
+        "a Pending trigger created during Resolve re-enters Finalize before the next Execute window"
+      ],
+      "anchors": ["src/engine.mjs#continueStartTurnProcess", "src/engine.mjs#continueEndTurnProcess", "src/engine.mjs#checkState", "scripts/rules-oracle.mjs#checkTurnTaskContinuation", "scripts/reference-rules.mjs#resolveOutstandingTaskFeprReference"]
+    },
+    {
+      "id": "showdown-exit-cleanup-and-settlement",
+      "ruleIds": ["347.1.a", "347.2", "347.3.a.1", "347.4", "348.1", "348.2.a.1"],
+      "summary": "The first empty Showdown Pass transfers Focus, the final uninterrupted Pass closes the Showdown into a Cleanup-owned exit Task, and only units surviving that Cleanup can proceed to Combat or establish Control and Conquer.",
+      "evidenceTests": [
+        "card categories follow the independent Neutral/Showdown Open/Closed permission matrix",
+        "activated abilities follow the same independent state permission matrix as cards",
+        "Showdown exit Cleanup precedes Combat and Conquer settlement",
+        "combat showdown skips combat damage if the attacking side leaves after reactions",
+        "a battlefield can only score once for the same player each turn"
+      ],
+      "anchors": ["src/engine.mjs#finishShowdown", "src/engine.mjs#completeShowdownExitTask", "src/engine.mjs#checkState", "scripts/reference-rules.mjs#referenceShowdownExit"]
+    },
+    {
+      "id": "chain-fepr-finalization-and-priority",
+      "ruleIds": ["329.1", "329.2", "329.3", "333.1", "337.1.a", "337.1.b", "337.1.c.3", "340.4"],
+      "summary": "Completed Pending Items finalize in append order without passing Priority; the Chain creator receives the first Execute window, and every later Execute window with items remaining belongs to the newest remaining Item's controller while Showdown Focus stays unchanged.",
+      "evidenceTests": [
+        "Chain oracle rejects stable Pending Items and incorrect newest-controller Priority",
+        "Chain finalization and post-resolution Priority follow the independent FEPR model",
+        "ordinary activated abilities use the action Chain before resolving",
+        "showdown chain keeps Focus but gives Priority to the newest remaining item's controller"
+      ],
+      "anchors": ["src/engine.mjs#finalizeOutstandingChainItems", "src/engine.mjs#continueActionChainAfterResolution", "src/engine.mjs#continueShowdownAfterChainResolution", "scripts/reference-rules.mjs#resolveChainTransitionReference"]
+    },
+    {
+      "id": "ability-timing-belongs-to-ability",
+      "ruleIds": ["376", "377", "380", "381", "806", "813"],
+      "summary": "Action and Reaction timing on activated abilities does not turn the source card itself into an Action or Reaction card.",
+      "evidenceTests": [
+        "activated ability timing keywords do not make their source cards Action or Reaction cards",
+        "ordinary Legend activated abilities use their controller's neutral open action timing",
+        "Action belongs to Malzahar's ability rather than the unit card"
+      ],
+      "anchors": ["src/engine.mjs#activatedAbilityHasKeyword", "src/engine.mjs#canActivateAbilityAtCurrentTiming"]
+    },
+    {
+      "id": "ordered-start-and-ending-tasks",
+      "ruleIds": ["315.1.b", "315.2.a.1", "315.2.b.2", "315.3", "315.4", "317.1.a", "317.2.a", "317.2.b", "317.2.c", "317.2.d", "317.2.e", "317.3", "423.1.a.2"],
+      "summary": "Awaken, Beginning, Hold, Channel, Draw, Rune Pool expiration, Ending effects, Ending Special Cleanup, and turn advancement execute in the official order and retain their process owner through Chain Pass, Resolve, and choice re-entry. Expiration-created FEPR repetition remains tracked in the turn/cleanup subledger.",
+      "evidenceTests": [
+        "turn tasks cannot pause without an explicit continuation owner",
+        "start, cleanup, and Ending tasks follow the independent official order",
+        "stunned status expires before end-of-turn triggered abilities enter the chain",
+        "Ending expiration removes turn-limited Might and empties Rune Pools"
+      ],
+      "anchors": ["src/engine.mjs#continueStartTurnProcess", "src/engine.mjs#continueEndTurnProcess", "src/engine.mjs#applyEndingSpecialCleanup", "scripts/reference-rules.mjs#resolveTurnTaskOrderReference"]
+    },
+    {
+      "id": "cleanup-staging-and-noncombat-conversion",
+      "ruleIds": ["323.8.a", "323.9.a", "323.10", "323.11", "323.12", "323.14"],
+      "summary": "Cleanup refreshes staged Showdowns and Combats from current occupancy, downgrades an invalid staged Combat when its Contested Showdown remains, lets the turn player order staged events, and upgrades an ongoing non-combat Showdown when opposition appears.",
+      "evidenceTests": [
+        "turn player chooses the order when multiple combats are staged",
+        "cleanup downgrades an invalid staged combat to the remaining contested showdown before Ending",
+        "non-combat showdown becomes combat when an opposing Action unit enters during it"
+      ],
+      "anchors": ["src/engine.mjs#refreshStagedBattlefieldEvents", "src/engine.mjs#upgradeNonCombatShowdownIfOpposed", "src/engine.mjs#resolveStagedEvents"]
+    },
+    {
+      "id": "staged-events-precede-ending-step",
+      "ruleIds": ["305", "316.6.a", "316.6.b", "323.11", "323.12"],
+      "summary": "A declared end turn remains pending while staged Showdowns or Combats are outstanding; the Ending Step, including Stunned expiration, begins only after those structured phases finish.",
+      "evidenceTests": [
+        "cleanup downgrades an invalid staged combat to the remaining contested showdown before Ending"
+      ],
+      "anchors": ["src/engine.mjs#beginEndingPhase", "src/engine.mjs#resolveStagedEvents"]
+    },
+    {
+      "id": "card-play-lifecycle-and-effect-deferral",
+      "ruleIds": ["349", "350.1", "350.2", "351.1", "351.2", "352.1", "352.2", "353", "354.1", "354.2", "354.3", "354.4"],
+      "summary": "Cards and tokens complete distinct Played lifecycles; every card enters the one Chain as Pending, and cards played by a resolving effect wait until that effect and its Tasks finish before Finalize and response.",
+      "evidenceTests": [
+        "cards and tokens follow the independent complete play lifecycle",
+        "playing a token is a Unit play but not a card play",
+        "a card played by a resolving effect waits for that effect and grants a new response window"
+      ],
+      "anchors": ["src/engine.mjs#recordResolvedPlay", "src/engine.mjs#playCardIgnoringCostFromEffect", "scripts/reference-rules.mjs#resolvePlayLifecycleReference"]
+    }
+  ],
+  "remainingWorkstreams": [
+    {
+      "id": "interpretation-and-deck-setup",
+      "priority": 2,
+      "status": "verified",
+      "familyIds": ["interpretation", "deck-and-setup"],
+      "verifiedSoFar": "All leaves in rules 000-119 are assigned to 12 verified cases covering interpretation hierarchy, prohibition and impossible instructions, ownership redirection, Core versus tournament deck size, Champion and Signature restrictions, Rune and Battlefield registration, zone privacy, Facedown capacity/control, temporary-state reset, setup, and mulligan.",
+      "remaining": "None for the 1v1 rules scope.",
+      "exitCriteria": "Every applicable leaf in rules 000-119 has a structural or executable disposition with negative evidence where behavior can fail."
+    },
+    {
+      "id": "objects-zones-resources-and-control",
+      "priority": 2,
+      "status": "verified",
+      "familyIds": ["objects-cards-and-zones", "units-gear-damage", "spells-runes-resources", "battlefields-legends-tokens-control", "buffs-mighty-and-bonuses", "attachments-and-inactive-text", "xp-extra-turns-and-terms", "keyword-framework"],
+      "verifiedSoFar": "Every duel leaf in rules 120-189 and 700-742 is assigned once to five verified cases covering object identity and privacy, board types and zones, resources and control, Buff/Mighty/Bonus Damage, attachments and inactive text, XP, additional turns, and relationship terms.",
+      "remaining": "None for the 1v1 rules scope.",
+      "exitCriteria": "Rules 120-189 and 700-742 have per-leaf state or transition evidence and mutants for every writable invariant."
+    },
+    {
+      "id": "turn-tasks-and-cleanup",
+      "priority": 0,
+      "status": "verified",
+      "familyIds": ["turn-structure", "cleanup"],
+      "verifiedSoFar": "All 98 leaves in rules 300-324 are assigned to 13 verified cases. Ordered Start/Ending tasks, the complete duel Priority/Focus matrix, all Cleanup request causes, Resolution/Cleanup exclusion, fixed-point repetition, board repair ordering, staged event flow, Combat-only initiation, and Expiration FEPR repetition have focused evidence, an independent oracle, and killed mutants.",
+      "remaining": "None for the 1v1 rules scope.",
+      "exitCriteria": "A reference transition model and mutants cover every ordered task and every pause/resume boundary in rules 300-324."
+    },
+    {
+      "id": "chains-showdowns-playing-and-triggers",
+      "priority": 0,
+      "status": "verified",
+      "familyIds": ["chains-and-showdowns", "playing-cards", "passive-and-replacement-effects", "abilities-and-triggers"],
+      "verifiedSoFar": "All 285 leaves in rules 325-406 are assigned to 22 verified cases covering the duel permission matrix, Chain placement and FEPR, targeting, costs and payments, resolution and mistargeting, passive/replacement events, activated/triggered abilities, simultaneous ordering, delayed/linked abilities, and ability finalization with independent models and killed mutants.",
+      "remaining": "None for the 1v1 rules scope.",
+      "exitCriteria": "Rules 325-406 are represented by an executable transition table whose illegal transitions are mutation-tested."
+    },
+    {
+      "id": "core-zone-and-movement-actions",
+      "priority": 1,
+      "status": "verified",
+      "familyIds": ["core-game-actions", "zone-and-state-actions", "movement-and-recall"],
+      "verifiedSoFar": "Every duel leaf in rules 407-453 is assigned once to five verified action cases with shared-event boundaries, simultaneous batches, owner destinations, cost and no-op checks, movement staging, and continuation evidence.",
+      "remaining": "None for the 1v1 rules scope.",
+      "exitCriteria": "Rules 407-453 have boundary tests and at least one killed mutant per state-changing action family."
+    },
+    {
+      "id": "combat-scoring-layers-and-ending",
+      "priority": 0,
+      "status": "verified",
+      "familyIds": ["combat-and-scoring", "layers", "modes-and-ending", "concession-and-player-removal"],
+      "verifiedSoFar": "Every duel leaf in rules 454-481 and 649-652 is assigned once to six verified cases covering combat, special cleanup and results, scoring and victory, layers, duel/match setup, and 1v1 concession behavior.",
+      "remaining": "None for the 1v1 rules scope.",
+      "exitCriteria": "Rules 454-481 and 649-652 pass a reference combat/scoring/layer model plus mutation tests for task reordering."
+    },
+    {
+      "id": "keyword-semantics",
+      "priority": 1,
+      "status": "verified",
+      "familyIds": ["keyword-accelerate", "keyword-action", "keyword-assault", "keyword-deathknell", "keyword-deflect", "keyword-ganking", "keyword-hidden", "keyword-legion", "keyword-reaction", "keyword-shield", "keyword-tank", "keyword-temporary", "keyword-vision", "keyword-equip", "keyword-quick-draw", "keyword-repeat", "keyword-weaponmaster", "keyword-ambush", "keyword-hunt", "keyword-level", "keyword-unique", "keyword-backline"],
+      "verifiedSoFar": "Every duel leaf in rules 805-826 is assigned once to its keyword case, with positive, negative, multiple-instance, timing, control, payment, targeting, and characteristic evidence as applicable.",
+      "remaining": "None for the 1v1 rules scope.",
+      "exitCriteria": "Rules 805-826 have leaf-complete positive, negative, and interaction evidence."
+    },
+    {
+      "id": "other-game-modes",
+      "priority": 3,
+      "status": "verified",
+      "familyIds": [],
+      "verifiedSoFar": "The catalog labels 40 clauses as other-mode, including the two team-only turn clauses, and excludes them from the 1v1 completion gate.",
+      "remaining": "None for the explicitly requested 1v1 scope; multiplayer, team, and match variants remain separate product modes.",
+      "exitCriteria": "Satisfied by the explicit 1v1 scope decision and executable catalog classification evidence."
+    }
+  ]
+}

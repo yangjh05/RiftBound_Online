@@ -8,7 +8,7 @@ export default card({
   set: "Origins",
   rarity: "Rare",
   domains: [DOMAINS.FURY, DOMAINS.ORDER],
-  tags: ["Darius","Reaction"],
+  tags: ["Darius"],
   keywords: ["Legion"],
   power: [],
   image: "https://cdn.piltoverarchive.com/cards/OGN-253.webp",
@@ -24,7 +24,8 @@ export default card({
     ],
     "restriction": null,
     "nonReactive": true,
-    "requiresLegion": true
+    "requiresLegion": true,
+    "abilityKeywords": ["Reaction"]
   }
 ]
 });

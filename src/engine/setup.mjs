@@ -9,6 +9,7 @@ export function createPlayers(sourceDecks) {
     damage: 0,
     stunned: false,
     buffs: 0,
+    mightModifier: 0,
     attachments: []
   });
   const players = [
@@ -41,10 +42,10 @@ function createPlayer(id, deck, instantiate) {
     champion: null,
     championPlayed: false,
     chosenChampionName: null,
-    availableChampions: startingChampionCards(deck).map((card) => instantiate(card, id)),
+    availableChampions: startingChampionCards(deck, deck.legend).map((card) => instantiate(card, id)),
     availableBattlefields: deck.battlefields.map((field) => instantiate(field, id)),
     selectedBattlefieldId: null,
-    mainDeck: startingMainDeckCards(deck).map((card) => instantiate(card, id)),
+    mainDeck: startingMainDeckCards(deck, deck.legend).map((card) => instantiate(card, id)),
     runeDeck: deck.runes.map((card) => instantiate(card, id)),
     hand: [],
     base: [],
@@ -69,13 +70,13 @@ function championCards(deck) {
   return Array.from({ length: Math.max(1, deck.championCount || 1) }, () => deck.champion);
 }
 
-function startingChampionCards(deck) {
-  return uniqueCardsById(playableDeckCards(deck).filter(isChampionCard));
+function startingChampionCards(deck, legend) {
+  return uniqueCardsByName(playableDeckCards(deck).filter((card) => championMatchesLegend(card, legend)));
 }
 
-function startingMainDeckCards(deck) {
+function startingMainDeckCards(deck, legend) {
   const pool = playableDeckCards(deck);
-  for (const champion of startingChampionCards(deck)) {
+  for (const champion of startingChampionCards(deck, legend)) {
     const index = pool.findIndex((card) => card.id === champion.id);
     if (index >= 0) pool.splice(index, 1);
   }
@@ -86,11 +87,11 @@ function playableDeckCards(deck) {
   return [...deck.main, ...championCards(deck)];
 }
 
-function uniqueCardsById(cards) {
+function uniqueCardsByName(cards) {
   const seen = new Set();
   return cards.filter((card) => {
-    if (seen.has(card.id)) return false;
-    seen.add(card.id);
+    if (seen.has(card.name)) return false;
+    seen.add(card.name);
     return true;
   });
 }

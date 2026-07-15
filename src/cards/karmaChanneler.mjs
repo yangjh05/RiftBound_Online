@@ -16,10 +16,5 @@ export default card({
   isChampion: true,
   image: "https://cdn.piltoverarchive.com/cards/OGN-235.webp",
   text: "𝗖𝗮𝗿𝗱 𝗘𝗿𝗿𝗮𝘁𝗮 𝗧𝗲𝘅𝘁 - 𝗙𝗿𝗼𝗺 𝗢𝗿𝗶𝗴𝗶𝗻𝘀 𝗖𝗮𝗿𝗱 𝗘𝗿𝗿𝗮𝘁𝗮:\nVision (When you play me, look at the top card of your\nMain Deck. You may recycle it.)\nWhen you recycle one or more cards to your Main Deck, buff a friendly unit. (If it doesn't have a buff, it gets a +1 Might buff. Runes aren't cards.)",
-  effects: [
-  {
-    "timing": "onPlay",
-    "kind": "predict"
-  }
-]
+  effects: [{ timing: "recycle", kind: "buffFriendlyUnit", amount: 1 }]
 });

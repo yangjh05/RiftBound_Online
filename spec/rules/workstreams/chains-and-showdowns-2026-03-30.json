@@ -1,0 +1,185 @@
+{
+  "schemaVersion": 1,
+  "rulesVersion": "2026-03-30",
+  "workstreamId": "chains-showdowns-playing-and-triggers",
+  "range": [325, 406],
+  "scope": "all-leaf-clauses-in-range",
+  "cases": [
+    {
+      "id": "section-headings",
+      "status": "verified",
+      "disposition": "structural",
+      "ruleIds": ["325", "327", "332", "341"],
+      "evidenceTests": ["Core Rules contracts are versioned, sourced, and backed by executable evidence"],
+      "remaining": "None; these clauses label the Chain, resolution-step, and Showdown sections without adding an independent transition."
+    },
+    {
+      "id": "opportunity-and-state-permission-matrix",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["326.1", "326.2", "331.1.a", "331.1.b", "331.2", "338.1.a.1", "338.1.a.2", "338.1.a.6", "338.1.b.1", "343.1.a", "343.1.b", "343.2"],
+      "evidenceTests": ["card categories follow the independent Neutral/Showdown Open/Closed permission matrix", "activated abilities follow the same independent state permission matrix as cards", "direct and interactive card entry points share the Closed-state Reaction gate", "a legally timed Reaction Chosen Champion follows normal Chain rules from the Champion Zone", "a Hidden card gains its conditional Reaction permission beginning on the next turn", "Check Legality rejects Ambush when its destination loses the friendly unit before Finalize"],
+      "remaining": "None for the default category/ability matrix, Priority/Focus gates, Check Legality re-evaluation, and the current Reaction, Hidden, Ambush, Quick-Draw, and Champion-Zone entry paths."
+    },
+    {
+      "id": "effect-created-timing-exceptions",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["338.1.a.3"],
+      "evidenceTests": ["registered play-timing exceptions route through one reviewed Reaction permission contract", "Quick-Draw can be played and attached with Reaction timing by the player holding showdown priority", "a Hidden card gains its conditional Reaction permission beginning on the next turn", "Ambush grants Reaction only while playing to a battlefield with a friendly unit", "Check Legality rejects Ambush when its destination loses the friendly unit before Finalize"],
+      "remaining": "None for the registered two-player card pool. Reaction, Quick-Draw, Hidden, and Ambush route through one reviewed permission registry; changing that registry fails static validation until a new rule boundary is explicitly reviewed."
+    },
+    {
+      "id": "chain-zone-and-single-chain",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["328.1", "328.2", "330.1", "330.2"],
+      "evidenceTests": ["cards, abilities, and their triggers join the one existing Chain", "Finalize repeats when an immediately played Unit creates a Pending trigger", "showdown start choices resume remaining battlefield defend triggers", "Core Rules runtime oracle rejects illegal zone, player, chain, attachment, and numeric states"],
+      "remaining": "None; cards, activated abilities, and triggers have transition evidence for reusing the existing Chain, standard actions cannot open a Showdown while that Chain keeps the turn Closed, and the runtime oracle rejects simultaneous Chain representations."
+    },
+    {
+      "id": "pending-finalization-and-initial-priority",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["329.1", "329.2", "329.3", "333.1", "337.1.a", "337.1.b", "337.1.c.3"],
+      "evidenceTests": ["Chain oracle rejects stable Pending Items and incorrect newest-controller Priority", "Chain finalization and post-resolution Priority follow the independent FEPR model", "interactive showdown spells can enter manual payment and join the chain", "ordinary activated abilities use the action Chain before resolving"],
+      "remaining": "None for stable Pending-to-Finalized conversion, append-order finalization, no Priority pass during Finalize, and newest-controller Priority."
+    },
+    {
+      "id": "outstanding-tasks-and-fepr-reentry",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["334.1", "335.1", "335.2.a", "335.3", "336.1"],
+      "evidenceTests": ["turn tasks cannot pause without an explicit continuation owner", "the independent HOT/FEPR model resumes every interrupted stage exactly once", "Start and Ending Tasks survive Chain Pass, Resolve, and choice re-entry without skip or duplication", "cleanup finishes hidden removal before resolving deathknell draw choices", "combat special cleanup heals an aura survivor before the next normal cleanup", "a Pending trigger created during Resolve re-enters Finalize before the next Execute window", "Chain finalization and post-resolution Priority follow the independent FEPR model"],
+      "remaining": "None for the two-player game; Cleanup, Start, Combat, and Ending Task owners have runtime evidence, the independent model covers Task creation during Handle and every FEPR stage, Start/Ending continuations survive Pass/Resolve/choice re-entry, and Pending Items created during Resolve restart at Finalize without skip or duplication."
+    },
+    {
+      "id": "finalize-immediate-items-and-repeat",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["337.1.c.1.a", "337.1.c.2"],
+      "evidenceTests": ["Units and Gear resolve during Finalize without waiting for the Pass step", "Finalize repeats when an immediately played Unit creates a Pending trigger", "only Rune Pool Add effects use the immediate-Finalize ability classification", "an Add Reaction finalizes during payment without passing Priority or Focus", "malzahar fanatic uses the normal Chain before killing a permanent and channeling"],
+      "remaining": "None; Unit and Gear immediate Finalize, Add-resource classification and transient Chain placement, no Priority/Focus pass for Add, exclusion of Channel from Add, and Finalize repetition after a newly produced Pending trigger all have focused evidence."
+    },
+    {
+      "id": "execute-reactions-abilities-and-pass",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["338.1.a.4", "338.1.a.5", "338.1.a.7", "338.1.b.2", "338.1.c.1"],
+      "evidenceTests": ["cards and abilities use every first and later two-player Execute window through Finalize", "card categories follow the independent Neutral/Showdown Open/Closed permission matrix", "activated abilities follow the same independent state permission matrix as cards", "interactive showdown spells can enter manual payment and join the chain", "ordinary activated abilities use the action Chain before resolving"],
+      "remaining": "None for the two-player game; the Chain creator and the next player can use their first and later Execute windows, only legally timed cards and abilities append, each appended Item returns through Finalize, and passing transfers Priority in player order."
+    },
+    {
+      "id": "pass-cycle",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["339.1", "339.2"],
+      "evidenceTests": ["showdown chain resolves after both players pass", "adding a Chain Item resets prior passes before the next Pass cycle", "Neutral and Showdown Chains require one uninterrupted all-player Pass cycle per resolved Item", "adding an Action Chain Item resets prior passes through the shared Pass-cycle contract"],
+      "remaining": "None for the two-player game; Neutral and Showdown Chains share the same pass counter, any appended card, ability, or trigger invalidates earlier passes, and exactly one newest Item resolves after one uninterrupted all-player Pass cycle."
+    },
+    {
+      "id": "resolve-cycle-and-remaining-item-priority",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["340.1", "340.2.a", "340.3", "340.4"],
+      "evidenceTests": ["a Pending trigger created during Resolve re-enters Finalize before the next Execute window", "Chain finalization and post-resolution Priority follow the independent FEPR model", "a choice in a multi-effect card explicitly continues the remaining effects before finishing the spell", "triggers created during an effect wait until every instruction and draw has finished", "Defy counters an eligible opposing spell on the chain", "targeted spell does not retarget if declared unit leaves before resolution", "non-showdown chain gives Priority to the newest remaining item's controller", "showdown chain keeps Focus but gives Priority to the newest remaining item's controller", "a Showdown Chain opened by a played card passes Focus when it empties"],
+      "remaining": "None for the two-player game; newest Items execute in full across choices, stale targets and counters do not retarget or skip the remaining Chain, Pending triggers created during Resolve re-enter Finalize, remaining Items return Priority to their newest controller, and an emptied played-card Showdown Chain passes Focus."
+    },
+    {
+      "id": "showdown-creation-focus-and-trigger-exception",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["342.1", "344.1", "344.2", "345", "346.1"],
+      "evidenceTests": ["standard and effect movement give Showdown Focus to the player who applied Contested", "an Add ability that opens and empties its transient Showdown Chain does not pass Focus", "a Showdown Chain opened by a triggered ability does not pass Focus when it empties", "a Showdown Chain opened by a played card passes Focus when it empties", "cleanup downgrades an invalid staged combat to the remaining contested showdown before Ending"],
+      "remaining": "None for the two-player game; standard and effect movement cover controlled opposing and uncontrolled Contested sources, Focus and initial Priority belong to the player who applied Contested, played-card Chains pass Focus on empty, and trigger/Add-created Chains retain it."
+    },
+    {
+      "id": "showdown-resolution-and-conquest",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["347.1.a", "347.2", "347.3.a.1", "347.4", "348.1", "348.2.a.1"],
+      "evidenceTests": ["card categories follow the independent Neutral/Showdown Open/Closed permission matrix", "activated abilities follow the same independent state permission matrix as cards", "a Showdown Chain opened by a played card passes Focus when it empties", "Showdown exit Cleanup precedes Combat and Conquer settlement", "combat showdown skips combat damage if the attacking side leaves after reactions", "a battlefield can only score once for the same player each turn"],
+      "remaining": "None for the two-player game; Focus card/ability actions use normal Chains, one empty Pass transfers Focus, the final uninterrupted Pass closes the Showdown into an explicit Cleanup-owned exit Task, and only Cleanup survivors can enter Combat or establish Control and Conquer without duplicate scoring."
+    },
+    {
+      "id": "card-play-definition-and-pending-entry",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["349", "350.1", "350.2", "351.1", "351.2", "352.1", "352.2", "353", "354.1", "354.2", "354.3", "354.4"],
+      "evidenceTests": ["resolved and countered card plays agree with the independent 419.4 oracle", "cards and tokens follow the independent complete play lifecycle", "playing a token is a Unit play but not a card play", "a card played by a resolving effect waits for that effect and grants a new response window", "cards, abilities, and their triggers join the one existing Chain", "triggers created during an effect wait until every instruction and draw has finished", "the independent HOT/FEPR model resumes every interrupted stage exactly once"],
+      "remaining": "None for the two-player game; cards and tokens have separate Played accounting, permanents and spells complete in their official zones, every card starts as a Pending Chain Item in the Closed state, and effect-created plays wait for the enclosing effect and Outstanding Tasks before Finalize and a new response window."
+    },
+    {
+      "id": "play-choices-targeting-and-split-damage",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["355.1", "355.2.a", "355.2.b", "355.3", "355.4.a", "355.5.a", "355.5.b", "355.6", "355.7", "355.8", "355.9.a.1", "355.9.a.2", "355.9.a.3", "355.9.a.4", "355.9.a.5", "355.9.b", "355.9.c", "355.10.a.1", "355.10.b", "355.10.c.1", "355.10.d.1", "355.10.d.2", "355.10.e", "355.10.f", "355.11.a", "355.11.b", "355.12", "355.13", "355.14.a", "355.14.b", "355.14.c", "355.14.d", "355.14.e", "355.14.f", "355.14.g", "355.14.h", "355.14.i", "355.15", "355.16", "355.17"],
+      "evidenceTests": ["spells with mandatory targets cannot be started without legal targets", "the independent target classifier covers public, secret, restriction, cost, programmatic, and other-player choices", "aggregate targets repair only from the original legal target set at resolution", "Highlander declares its public friendly-unit target before payment", "an up-to target declaration may explicitly choose zero before payment", "split damage fixes targets before resolution but divides amounts only during resolution", "play declarations reject a target that its own chosen additional cost will certainly remove", "a deterministically removed target remains legal only when no alternative choice exists"],
+      "remaining": "None for the two-player card pool; the independent classifier covers public, secret, restriction, cost, programmatic, and other-player choices, while aggregate repair, up-to zero, split allocation, immutable declarations, and deterministic illegality each have focused transition and mutation evidence."
+    },
+    {
+      "id": "card-cost-calculation-payment-and-legality",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["356.1.a", "356.1.b.1", "356.1.b.2", "356.1.b.3", "356.2.a.1", "356.2.a.2", "356.2.b.1", "356.3", "356.4.a", "356.4.b", "356.4.c.1", "356.4.d.1", "356.4.e", "356.4.f.1", "356.5", "356.6", "357.1.a", "357.2.a", "357.3", "358.1", "358.2", "358.3", "358.4"],
+      "evidenceTests": ["ignoring a base cost preserves Accelerate's optional Energy and Power costs", "cost increases apply after an effect ignores the played card's base cost", "component minima do not prevent a later total discount from reducing Energy to zero", "a chosen optional additional cost remains paid when discounts reduce it to zero", "playing a revealed card for a replacement cost replaces both base cost components", "permanent additional costs are paid before the permanent enters play", "a replaced Kill additional cost remains paid and resumes the card-play process", "an Add Reaction finalizes during payment without passing Priority or Focus", "a hand card is Pending before choices and cancellation restores its exact origin", "Check Legality rejects Ambush when its destination loses the friendly unit before Finalize"],
+      "remaining": "None for the two-player card pool; base replacement and ignore variants, mandatory and optional additions, increase-before-discount ordering, component and total minima, zero-paid optional choices, Add, payment restrictions, legality prediction/recheck, cancellation, and rollback have focused evidence and killed regression mutants."
+    },
+    {
+      "id": "card-finalization-resolution-and-mistargeting",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["359.1", "359.2.a", "359.2.b", "359.2.c", "359.2.d", "359.3.a", "359.3.b", "359.3.c", "359.3.d", "359.3.e.1", "359.3.e.2", "359.3.e.3", "359.3.e.4", "359.3.e.5", "359.3.e.6", "359.3.e.7", "359.3.e.8", "359.3.e.9", "359.3.e.10", "359.3.e.11", "359.3.e.12.a", "359.3.e.13", "359.3.e.14.a", "359.3.e.14.b", "359.3.e.15", "359.3.f.1", "359.3.f.2", "359.3.f.3.a", "359.3.f.4"],
+      "evidenceTests": ["Units and Gear resolve during Finalize without waiting for the Pass step", "controlled spells enter their owners trash or corresponding deck after resolution", "a target that visits a non-Board zone is a new object even after returning to the Board", "a target that moves only between Board locations remains the same object", "a mistargeted instruction is ignored while later instructions still resolve", "a spell that leaves the Chain during resolution stops its remaining instructions", "Disintegrate draws only when its own damage event kills the unit", "chain trigger source references do not place their source card in a second zone"],
+      "remaining": "None for the two-player card pool; permanent Finalize, spell response/completion, board versus non-Board identity, partial mistargets, later instructions, look-back damage events, linked continuations, leaving the Chain, and source snapshots have focused evidence."
+    },
+    {
+      "id": "ability-and-passive-ability-foundations",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["360", "361.1", "362", "363", "364.1", "364.2", "364.3.a", "365.1", "366.1", "366.2.a"],
+      "evidenceTests": ["every registered effect declares its ability class and active zones", "one card can carry independent ability structures without changing their classifications", "conditional and shared static keywords affect combat, movement, and Deflect targeting", "activated abilities cannot be used from the non-board Champion Zone", "static entry permissions and restrictions follow their declared shared effects"],
+      "remaining": "None for the registered two-player card pool; every effect pair declares an official ability class and active-zone contract, mixed structures remain independent, Board passives and the explicitly declared Trash, Main Deck, playable, Chain, and rules-zone exceptions are statically validated."
+    },
+    {
+      "id": "replacement-effect-application-order",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["367", "368.1", "369.1", "369.2", "370.1.a", "370.2", "370.3", "371.1", "371.2", "372.1", "372.2", "373.1", "373.2.a.1", "374", "375"],
+      "evidenceTests": ["prepared death recall replaces killing without Deathknell", "sett's optional death replacement can be explicitly declined", "a mandatory card replacement applies automatically even when the affected unit has a different owner", "the affected object's owner orders multiple mandatory replacement effects", "a player chooses which simultaneous death one zhonya replaces", "a simultaneous replacement event can be declined without consuming its source", "a replacement applies only once across the events that replace its original event", "an empty deck and empty trash repeatedly burns out until the opponent wins"],
+      "remaining": "None for two-player play; replacement events carry root/event identity, applied-source history, simultaneous candidate snapshots, inherited modifications, and explicit nested continuations. Mandatory and optional application, object-owner ordering, replacement-controller event sequencing, apply-once recursion, zone timing, Burn Out, and damage prevention have focused oracle evidence. Player and uncontrolled-Battlefield ordering reduce to the affected player and current-turn player in duel rules and are covered by the independent replacement-sequence oracle."
+    },
+    {
+      "id": "activated-ability-definition-and-timing",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["376", "377.1", "377.2.a", "377.2.b", "377.3.a.1", "377.3.b.1", "377.3.b.2", "377.3.b.3", "378", "379", "380", "381"],
+      "evidenceTests": ["every registered effect declares its ability class and active zones", "using an activated ability becomes true only when that ability resolves", "activated ability use conditions are checked before paying costs or exhausting the source", "ordinary activated abilities use the action Chain before resolving", "activated abilities cannot be used from the non-board Champion Zone", "activated ability timing keywords do not make their source cards Action or Reaction cards", "cards and abilities use every first and later two-player Execute window through Finalize"],
+      "remaining": "None for the registered two-player card pool; classification, resolution-time use, source zones/types, controller use, default Open timing, Action/Reaction ability exceptions, Add exceptions, and response/no-response paths are covered by static contracts, focused transitions, and mutants."
+    },
+    {
+      "id": "triggered-ability-evaluation-order-and-named-events",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["382", "383.1.a", "383.1.b", "383.2.a", "383.2.b", "383.2.c.1", "383.2.c.2", "383.3.a", "383.3.b.1", "383.3.b.2", "383.3.c", "383.3.d.1", "383.3.e", "383.3.f.1", "383.3.f.2", "383.4.a.1", "383.4.a.2", "383.4.a.3", "383.4.a.4", "383.4.b.1", "383.4.b.2", "383.4.b.3", "383.4.b.4", "383.4.c.1", "383.4.c.2.a", "383.4.c.2.b", "383.4.c.2.c", "383.4.c.3", "383.4.d.1", "383.4.d.2.a", "383.4.d.2.b", "383.4.d.2.c", "383.4.d.3", "383.4.e.1", "383.4.e.2.a", "383.4.e.2.b", "383.4.e.3", "383.4.f.1", "383.4.f.2.a", "383.4.f.2.b", "383.4.f.3", "384.1", "384.2", "385.1", "385.2"],
+      "evidenceTests": ["the turn player orders their simultaneous triggers before the next player", "one player explicitly orders all abilities triggered by the same spell-play event", "optional triggered ability placement proceeds directly to its cost", "diana lunari pays its trigger cost while Pending before the showdown response window", "a spell-killed Immortal Phoenix can trigger from trash after its simultaneous death", "simultaneous cleanup deaths are removed before other-unit death triggers are evaluated", "Beginning, first-Beginning, hold, and end-turn effects resolve through their shared trigger queue", "a non-combat showdown upgrade checks attack triggers exactly at the new designation", "losing and regaining a combat role does not check that role twice in one combat"],
+      "remaining": "None for the registered two-player card pool; conditions and effects, Nth-event selection, zone entry/exit snapshots, optional placement, trigger costs, conditional placement, APNAP ordering, named event boundaries, and once-per-role-per-combat designation checks have focused and mutation evidence."
+    },
+    {
+      "id": "reflexive-delayed-and-linked-abilities",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["386", "387.1.a", "387.2", "387.3", "388.1", "388.2", "389", "390.1", "390.2", "390.3", "390.4", "390.5.a", "390.5.b", "392", "393", "394", "395", "396", "397"],
+      "evidenceTests": ["reflexive instructions create separate response windows instead of resolving inside their parent effect", "Dragon's Rage finishes moving before its separately targeted reflexive duel", "Twisted Fate's rune outcome is a child trigger with its own pass cycle", "delayed triggers keep independent linked sets and resolve after their source leaves", "independent Ravenborn Tome delayed passives stack after their sources leave", "Ending expiration clears every shared this-turn flag before the opponent's turn"],
+      "remaining": "None for the registered two-player card pool; reflexive multiplicity and Pending response windows, delayed triggered/passive classification and expiration, source independence, object identity, response timing, and linked-set isolation are checked by runtime oracle and killed regression mutants."
+    },
+    {
+      "id": "ability-play-finalization-process",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["398", "399", "400.1", "400.2", "401.1", "401.2", "402.1", "402.2", "402.3.a", "402.3.b", "403.1.a", "403.1.b.1", "403.2", "403.3", "404.1", "404.2.a", "405.1", "405.2", "406.1", "406.2", "406.3", "406.4", "406.5"],
+      "evidenceTests": ["cards and abilities use every first and later two-player Execute window through Finalize", "a trigger created inside an unfinished game effect is already Pending but defers its choices", "activated ability costs apply shared increases, component discounts, and discount minima", "an activated ability legality failure rolls back its complete Pending transaction", "using an activated ability becomes true only when that ability resolves", "an Add Reaction finalizes during payment without passing Priority or Focus", "Udyr declares an unused mode and its target before activation resolves", "activated ability use conditions are checked before paying costs or exhausting the source"],
+      "remaining": "None for the registered two-player card pool; activated and triggered abilities now share Pending Closed entry, enclosing-effect deferral, choice and cost declaration, modifier/payment order, final legality, rollback, Finalized conversion, response, execution, and Chain removal contracts."
+    }
+  ]
+}

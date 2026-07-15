@@ -842,6 +842,79 @@ h1 {
   background: var(--rune);
 }
 
+.selected-rune-list {
+  display: grid;
+  gap: 6px;
+}
+
+.rune-deck-row {
+  min-height: 54px;
+}
+
+.rune-row-art {
+  width: 34px;
+  height: 46px;
+  flex: 0 0 auto;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 5px;
+  object-fit: cover;
+}
+
+.rune-variant-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(66px, 1fr));
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.rune-variant {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+  border: 1px solid rgba(129, 153, 188, 0.16);
+  border-radius: 8px;
+  padding: 5px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.rune-variant.selected {
+  border-color: rgba(255, 196, 0, 0.58);
+  background: rgba(255, 196, 0, 0.07);
+}
+
+.rune-variant-preview {
+  position: relative;
+  width: 54px;
+  min-width: 54px;
+  height: 76px;
+  min-height: 76px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 6px;
+  padding: 0;
+  background: #050914;
+}
+
+.rune-variant-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.rune-variant-preview em {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  border-radius: 999px;
+  padding: 2px 5px;
+  background: rgba(3, 8, 18, 0.9);
+  color: white;
+  font-size: 0.62rem;
+  font-style: normal;
+  font-weight: 900;
+}
+
 .card-search-panel {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
@@ -1376,6 +1449,56 @@ h1 {
   transform: rotate(-10deg);
 }
 
+.rune.rune-card-chip {
+  position: relative;
+  display: block;
+  width: 38px;
+  min-width: 38px;
+  height: 53px;
+  min-height: 53px;
+  overflow: hidden;
+  border-radius: 6px;
+  padding: 0;
+  background: #050914;
+}
+
+.rune-card-chip img,
+.payment-rune-card img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.rune-card-caption {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  left: 2px;
+  overflow: hidden;
+  border-radius: 3px;
+  padding: 2px 3px;
+  background: rgba(2, 7, 16, 0.84);
+  color: white;
+  font-size: 0.5rem;
+  font-weight: 900;
+  line-height: 1.1;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rune-card-chip strong {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: block;
+  border-radius: 3px;
+  padding: 1px 3px;
+  background: rgba(3, 8, 18, 0.88);
+  color: #d5dbe6;
+  font-size: 0.48rem;
+}
+
 .battlefield-mat {
   position: relative;
   z-index: 1;
@@ -1523,10 +1646,11 @@ h1 {
   top: 126px;
   z-index: 12;
   display: grid;
-  grid-template-columns: minmax(170px, 220px) minmax(0, 1fr) minmax(220px, 300px);
+  grid-template-columns: minmax(170px, 220px) minmax(0, 1fr) minmax(240px, 320px);
   gap: 10px;
   align-items: stretch;
-  min-height: 82px;
+  min-height: 148px;
+  max-height: min(238px, calc(100vh - 210px));
   border: 1px solid rgba(255, 196, 0, 0.32);
   border-radius: 8px;
   padding: 8px;
@@ -1550,9 +1674,7 @@ h1 {
 
 .chain-zone-head span,
 .chain-zone-head em,
-.response-prompt span,
-.chain-zone-item span,
-.chain-zone-item small {
+.response-prompt span {
   overflow: hidden;
   color: var(--muted);
   font-size: 0.68rem;
@@ -1571,15 +1693,19 @@ h1 {
   gap: 8px;
   min-width: 0;
   overflow-x: auto;
+  overflow-y: auto;
+  align-items: stretch;
+  padding-bottom: 2px;
 }
 
 .chain-zone-item {
   position: relative;
   display: grid;
-  grid-template-rows: auto auto auto auto;
-  gap: 2px;
-  flex: 0 0 190px;
+  align-content: start;
+  gap: 4px;
+  flex: 0 0 270px;
   min-width: 0;
+  min-height: 128px;
   border: 1px solid rgba(137, 159, 190, 0.28);
   border-radius: 7px;
   padding: 7px;
@@ -1599,7 +1725,7 @@ button.chain-zone-item:focus-visible {
 .chain-zone-item strong {
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .chain-zone-item b {
@@ -1608,7 +1734,39 @@ button.chain-zone-item:focus-visible {
 }
 
 .chain-zone-item strong {
-  font-size: 0.78rem;
+  display: -webkit-box;
+  font-size: 0.82rem;
+  line-height: 1.25;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.chain-zone-item span,
+.chain-zone-item small {
+  overflow: visible;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 800;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.chain-zone-effect {
+  display: -webkit-box;
+  margin: 2px 0 0;
+  overflow: hidden;
+  color: rgba(238, 244, 255, 0.9);
+  font-size: 0.7rem;
+  font-weight: 650;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  text-align: left;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
 }
 
 .chain-zone-item em {
@@ -2523,6 +2681,30 @@ button.chain-zone-item:focus-visible {
   border-width: 4px;
   padding: 0;
   font-size: 0;
+}
+
+.pay-rune .payment-rune-card {
+  position: relative;
+  width: 64px;
+  height: 90px;
+  overflow: hidden;
+  border-width: 2px;
+  border-radius: 7px;
+}
+
+.pay-rune .payment-rune-card strong {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  left: 3px;
+  display: block;
+  border-radius: 3px;
+  padding: 2px;
+  background: rgba(3, 8, 18, 0.86);
+  color: white;
+  font-size: 0.5rem;
+  line-height: 1.1;
+  text-align: center;
 }
 
 .pay-rune .rune-swatch {
@@ -4068,6 +4250,14 @@ h1 {
   white-space: nowrap;
 }
 
+.rune-summary-art {
+  width: 16px;
+  height: 20px;
+  flex: 0 0 auto;
+  border-radius: 2px;
+  object-fit: cover;
+}
+
 .rune-count b {
   color: white;
 }
@@ -4337,12 +4527,12 @@ h1 {
 .chain-zone {
   z-index: 12;
   grid-template-columns: minmax(135px, 190px) minmax(0, 1fr) minmax(210px, 270px);
-  min-height: 76px;
+  min-height: 142px;
   padding: 7px;
 }
 
 .chain-zone-item {
-  flex-basis: 176px;
+  flex-basis: 260px;
   border-left: 3px solid var(--gold);
 }
 
@@ -4596,8 +4786,9 @@ button:focus-visible,
   .hand-panel > .cards { height: 210px; scroll-snap-type: x proximity; }
   .hand-panel .image-card,
   .hand-panel .champion-zone-slot { width: 104px; min-width: 104px; scroll-snap-align: center; }
-  .chain-zone { grid-template-columns: minmax(0, 1fr); max-height: 180px; overflow-y: auto; }
-  .chain-stack { min-height: 66px; }
+  .chain-zone { grid-template-columns: minmax(0, 1fr); max-height: 300px; overflow-y: auto; }
+  .chain-stack { min-height: 132px; }
+  .chain-zone-item { flex-basis: min(270px, calc(100vw - 48px)); }
   .realtime-feedback.persistent-feedback { top: 112px; width: calc(100% - 20px); }
   .payment-body { grid-template-columns: minmax(0, 1fr); }
   .payment-card-preview { display: none; }
@@ -5231,7 +5422,7 @@ button:focus-visible,
 
 .deflect-rune-option {
   display: grid;
-  grid-template-columns: 24px minmax(0, 1fr);
+  grid-template-columns: 42px minmax(0, 1fr);
   gap: 3px 10px;
   align-items: center;
   min-height: 64px;
@@ -5244,6 +5435,14 @@ button:focus-visible,
   height: 20px;
   border-radius: 50%;
   background: var(--rune);
+}
+
+.deflect-rune-art {
+  grid-row: span 2;
+  width: 38px;
+  height: 54px;
+  border-radius: 5px;
+  object-fit: cover;
 }
 
 @media (max-width: 640px) {
@@ -6735,12 +6934,21 @@ button:focus-visible,
   .rune-count {
     justify-content: center;
     width: 100%;
-    height: 18px;
+    height: 20px;
     min-width: 0;
     overflow: hidden;
     padding: 0 3px;
     font-size: 0.48rem;
     text-overflow: ellipsis;
+  }
+
+  .rune-count b {
+    display: none;
+  }
+
+  .rune-summary-art {
+    width: 14px;
+    height: 18px;
   }
 
   .base-zone {

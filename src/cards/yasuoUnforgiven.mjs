@@ -8,7 +8,7 @@ export default card({
   set: "Origins",
   rarity: "Rare",
   domains: [DOMAINS.CALM, DOMAINS.CHAOS],
-  tags: ["Yasuo"],
+  tags: ["Champion", "Yasuo"],
   keywords: [],
   power: [],
   image: "https://cdn.piltoverarchive.com/cards/OGN-259.webp",

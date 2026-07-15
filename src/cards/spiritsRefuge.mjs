@@ -9,7 +9,7 @@ export default card({
   rarity: "Uncommon",
   domains: [DOMAINS.CALM],
   tags: [],
-  keywords: ["Deflect"],
+  keywords: [],
   energy: 2,
   power: [{ domain: DOMAINS.ANY, amount: 1 }],
   image: "https://cdn.piltoverarchive.com/cards/OGN-063.webp",

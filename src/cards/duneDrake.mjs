@@ -16,6 +16,6 @@ export default card({
   image: "https://cdn.piltoverarchive.com/cards/OGN-131.webp",
   text: "𝗖𝗮𝗿𝗱 𝗘𝗿𝗿𝗮𝘁𝗮 𝗧𝗲𝘅𝘁 - 𝗙𝗿𝗼𝗺 𝗢𝗿𝗶𝗴𝗶𝗻𝘀 𝗖𝗮𝗿𝗱 𝗘𝗿𝗿𝗮𝘁𝗮:\nWhen I attack, give me +2 Might this turn if there is a ready\nenemy unit here.",
   effects: [
-    { timing: "attackOrDefend", kind: "modifySelfIfReadyEnemyHere", role: "attacker", amount: 2 }
+    { timing: "attackOrDefend", kind: "modifySelfIfReadyEnemyHere", role: "attacker", amount: 2, temporary: true }
   ]
 });

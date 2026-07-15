@@ -14,5 +14,5 @@ export default card({
   power: [],
   image: "https://cdn.piltoverarchive.com/cards/OGN-152.webp",
   text: "When you buff a friendly unit, you may pay Body and exhaust this to ready it.",
-  effects: [{ timing: "static", kind: "exhaustPayReadyBuffedUnit", domain: DOMAINS.BODY }]
+  effects: [{ timing: "static", kind: "buffFriendlyUnitPayExhaustReady", domain: DOMAINS.BODY }]
 });

@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 1,
+  "rulesVersion": "2026-03-30",
+  "workstreamId": "interpretation-and-deck-setup",
+  "range": [0, 119],
+  "scope": "all-leaf-clauses-in-range",
+  "cases": [
+    {
+      "id": "interpretation-and-self-reference",
+      "status": "verified",
+      "disposition": "structural",
+      "ruleIds": ["000", "001", "002", "050", "051", "052", "053.1", "053.2", "053.3", "053.4"],
+      "evidenceTests": ["Core Rules contracts are versioned, sourced, and backed by executable evidence"],
+      "remaining": "None; the authoritative source, Golden/Silver hierarchy, Card shorthand, and self-reference vocabulary are catalogued and used as interpretation constraints rather than mutable game state."
+    },
+    {
+      "id": "prohibition-and-impossible-instructions",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["054.1", "055.1"],
+      "evidenceTests": ["vilemaw's lair prevents Flash from moving units there to base", "a spell with every instruction impossible still finishes resolving"],
+      "remaining": "None; prohibitions override permissions and a fully impossible resolving effect still completes without inventing a replacement instruction."
+    },
+    {
+      "id": "non-board-zone-ownership",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["056.1", "056.2"],
+      "evidenceTests": ["controlled spells enter their owners trash or corresponding deck after resolution", "rebuke returns a battlefield unit to its owner's hand", "killed cards clear temporary board state before entering trash"],
+      "remaining": "None; every represented Non-Board destination resolves to the object's owner zone through shared zone-change helpers and the runtime owner-zone oracle."
+    },
+    {
+      "id": "deck-identity-and-legend",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["100", "101", "102", "103.1.a", "103.1.b.1", "103.1.b.2", "103.1.b.3", "103.1.b.4"],
+      "evidenceTests": ["default raw decklists satisfy the centralized deck construction rules", "deck validation enforces Main Deck identity, matching Chosen Champions, and unique Battlefields"],
+      "remaining": "None for Champion Legend placement and single- or multi-Domain identity validation."
+    },
+    {
+      "id": "main-deck-and-chosen-champion",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["103.2.a.1", "103.2.a.2", "103.2.a.3", "103.2.b.1", "103.2.b.2", "103.2.c"],
+      "evidenceTests": ["deck validation requires a real Champion card and rejects off-identity runes", "tournament decks require exactly 40 Main Deck cards and at most 8 Sideboard cards", "same-name copies of the chosen champion count as chosen champions"],
+      "remaining": "None; Core minimum and tournament exact-size formats are distinct, the matching Champion must be in the Main Deck, and same-name Chosen Champions retain their designation."
+    },
+    {
+      "id": "signature-and-main-deck-secrecy",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["103.2.d.1", "103.2.d.2", "103.2.d.3", "103.2.e.1"],
+      "evidenceTests": ["deck validation enforces the combined Signature limit and Legend champion identity", "multiplayer snapshots expose public zones and counts while redacting private and secret cards"],
+      "remaining": "None; Signature cards share one three-card registration limit, must match the Legend tag, cannot be Chosen Champions, and Main Deck contents remain secret absent an effect."
+    },
+    {
+      "id": "rune-and-battlefield-registration",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["103.3.a.1", "103.3.b", "103.4.a", "103.4.b", "103.4.c"],
+      "evidenceTests": ["deck validation requires a real Champion card and rejects off-identity runes", "deck validation enforces Main Deck identity, matching Chosen Champions, and unique Battlefields", "default raw decklists satisfy the centralized deck construction rules"],
+      "remaining": "None; Rune and Battlefield identity, Rune separation and exact tournament size, mode Battlefield count, and unique Battlefield names are validated centrally."
+    },
+    {
+      "id": "play-area-board-and-public-locations",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["104", "105", "106", "107.1.a", "107.1.b", "107.1.c.1", "107.1.d", "107.2.a", "107.2.b", "107.2.c"],
+      "evidenceTests": ["multiplayer snapshots expose public zones and counts while redacting private and secret cards", "selected battlefields leave the setup reserve instead of occupying two zones"],
+      "remaining": "None for the duel Play Area's Base and Battlefield locations, attached permanents, and public information boundary."
+    },
+    {
+      "id": "facedown-zone-capacity-and-control",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["107.3.a", "107.3.b.1", "107.3.b.2", "107.3.c", "107.3.d", "107.3.e"],
+      "evidenceTests": ["Bandle Tree allows one additional hidden card for its controller", "Cleanup lets the Facedown Zone controller choose cards discarded after its capacity decreases", "hidden cards are trashed during cleanup when their controller loses the battlefield"],
+      "remaining": "None; capacity changes, controller selection of overflow, control-qualified occupancy, and loss-of-control Cleanup all use the shared Facedown repair path."
+    },
+    {
+      "id": "legend-chain-trash-and-champion-zones",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["107.4.a", "107.4.b", "107.4.c", "107.4.d", "108.1.a", "108.1.b", "108.2.a", "108.2.b", "108.2.c", "108.2.d", "108.3.a", "108.3.b", "108.3.c.1", "108.3.d", "108.3.e"],
+      "evidenceTests": ["Core Rules runtime oracle rejects illegal zone, player, chain, attachment, and numeric states", "cards, abilities, and their triggers join the one existing Chain", "multiplayer snapshots expose public zones and counts while redacting private and secret cards", "starting champion leaves the champion zone after being played and cannot be played again"],
+      "remaining": "None for immutable Legend placement, public Chain/Trash/Champion information, unordered Trash, and ordinary Champion-Zone play."
+    },
+    {
+      "id": "private-secret-public-non-board-zones",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["108.4.a", "108.4.b", "108.4.c", "108.4.d", "108.5.a", "108.5.b", "108.5.c", "108.5.d", "108.6.a", "108.6.b", "108.6.c", "108.6.d", "108.6.e", "108.7.a", "108.7.b", "108.7.c", "108.7.d", "108.7.e", "109.1", "109.2", "110"],
+      "evidenceTests": ["multiplayer snapshots expose public zones and counts while redacting private and secret cards", "time warp grants an extra turn and banishes itself", "a target that visits a non-Board zone is a new object even after returning to the Board", "killed cards clear temporary board state before entering trash"],
+      "remaining": "None; Main/Rune Deck order and Hand contents are redacted, counts and public zones remain visible, and every Non-Board transition resets temporary object state and identity tracking."
+    },
+    {
+      "id": "ordered-setup-and-mulligan",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleIds": ["111", "112", "113", "114.1", "115.1", "115.2", "116.1.a", "116.1.b.1", "116.1.c", "116.2", "117", "118.1", "118.2", "118.3", "119"],
+      "evidenceTests": ["game starts with the supplied deck seats and first-player confirmation", "confirmed random first player controls setup and turn order", "players choose starting champions before battlefield selection and opening draw", "both players choose a battlefield before the first turn starts", "a player can mulligan up to two selected hand cards to the deck bottom and draw that many", "mulligan draws only the number of cards returned", "skipping both mulligans starts the first turn without changing opening hands"],
+      "remaining": "None for the generic duel setup: Legend and Chosen Champion separation, deck placement and shuffle, First Player and looping turn order, draw four, set-aside/draw/recycle mulligan order, and first turn entry. Mode-specific Battlefield selection remains verified with rules 480-481."
+    }
+  ]
+}

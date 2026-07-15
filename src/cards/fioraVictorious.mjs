@@ -9,7 +9,7 @@ export default card({
   rarity: "Rare",
   domains: [DOMAINS.ORDER],
   tags: ["Champion","Fiora","Demacia"],
-  keywords: ["Shield","Deflect","Ganking"],
+  keywords: [],
   energy: 4,
   power: [],
   might: 4,

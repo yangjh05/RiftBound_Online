@@ -16,5 +16,5 @@ export default card({
   image: "https://cdn.piltoverarchive.com/cards/OGN-002.webp",
   text: "As you play me, you may discard a card as an additional cost. If you do, reduce my cost by 2.",
   additionalCost: { kind: "optionalDiscardEnergyReduction", energyReduction: 2 },
-  effects: [{ timing: "static", kind: "discardAdditionalCostEnergyReduction", amount: 2 }]
+  effects: []
 });

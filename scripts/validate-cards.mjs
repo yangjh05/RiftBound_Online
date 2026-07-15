@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { cards, rawDecklists, DOMAINS } from "../src/cards.mjs";
 import { validateDeckRecord } from "../src/decks/rules.mjs";
 import { EFFECT_TIMINGS, effectDefinition, effectKey } from "../src/effects/registry.mjs";
+import { OFFICIAL_TOKEN_DEFINITIONS, officialTokenKinds } from "../src/rules/tokens.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cardsDir = path.join(root, "src", "cards");
@@ -12,6 +13,32 @@ const cardsIndexPath = path.join(root, "src", "cards.mjs");
 const VALID_TYPES = new Set(["unit", "spell", "gear", "battlefield", "legend", "rune"]);
 const VALID_DOMAINS = new Set(Object.values(DOMAINS));
 const VALID_TIMINGS = new Set(EFFECT_TIMINGS);
+const MIGHT_MODIFIER_KINDS = new Set([
+  "battlefieldBuffUnitHere",
+  "buffMovedUnit",
+  "doubleMightTemporary",
+  "drawDiscardTypeBonus",
+  "duelFriendlyEnemy",
+  "enGarde",
+  "enemyAttacksControlledBattlefieldMightReduction",
+  "fromHiddenBuffSelf",
+  "highCostSpellBuffSelf",
+  "ifEnemyAloneBuffAndXp",
+  "matchFriendlyMight",
+  "modifyEnemyHere",
+  "modifyEnemyUnits",
+  "modifyFriendlyAlone",
+  "modifyFriendlyUnits",
+  "modifyMight",
+  "modifySelfIfReadyEnemyHere",
+  "modifySelfMight",
+  "moonfall",
+  "readyFriendlyUnitMightThisTurn",
+  "readySelfMight",
+  "secondCardMightReadySelf",
+  "selfBuff",
+  "siphonPower"
+]);
 
 const errors = [];
 const warnings = [];
@@ -65,6 +92,15 @@ for (const [key, card] of Object.entries(cards)) {
   expect(Array.isArray(card.power), `${label}: power must be an array.`);
   expect(Array.isArray(card.effects), `${label}: effects must be an array.`);
 
+  const hasTurnLimitedMightText = /(?:Might this turn|this turn[^.\n]*Might)/i.test(card.text || "");
+  const mightModifierEffects = (card.effects || []).filter((effect) => MIGHT_MODIFIER_KINDS.has(effect.kind) && effect.buff !== true);
+  if (hasTurnLimitedMightText) {
+    expect(mightModifierEffects.some((effect) => effect.temporary === true), `${label}: text grants a turn-limited Might modifier, but no matching effect declares temporary: true.`);
+    for (const effect of mightModifierEffects) {
+      expect(effect.temporary === true, `${label}: '${effectKey(effect)}' changes Might under turn-limited text and must declare temporary: true.`);
+    }
+  }
+
   if (card.implementationReference) {
     const reference = cardByNumberMap.get(card.implementationReference);
     expect(reference, `${label}: implementationReference '${card.implementationReference}' does not identify a registered card.`);
@@ -109,6 +145,9 @@ for (const [key, card] of Object.entries(cards)) {
     expect(typeof effect?.kind === "string" && effect.kind.length > 0, `${label}: effects[${index}] missing kind.`);
     expect(VALID_TIMINGS.has(effect?.timing), `${label}: effects[${index}] has unknown timing '${effect?.timing}'.`);
     expect(definition, `${label}: effects[${index}] uses unsupported effect '${pair}'. Add engine support in src/effects/registry.mjs and src/engine.mjs before registering this card.`);
+    expect(["rules", "effect", "mightBonus"].includes(effect.textSection || "rules"), `${label}: effects[${index}].textSection must be rules, effect, or mightBonus.`);
+    if (effect.textSection === "mightBonus") expect(effect.kind === "attachedMight", `${label}: only attachedMight may use the mightBonus text section.`);
+    if (effect.temporary !== undefined) expect(typeof effect.temporary === "boolean", `${label}: effects[${index}].temporary must be boolean.`);
     if (definition?.sourceTypes?.length) {
       expect(definition.sourceTypes.includes(card.type), `${label}: effects[${index}] '${pair}' is only valid on ${definition.sourceTypes.join(", ")} cards, not ${card.type}.`);
     }
@@ -119,7 +158,7 @@ for (const [key, card] of Object.entries(cards)) {
         expect(definition.continuation === "afterMove", `${label}: choice-based onMove effect '${pair}' must resume through afterMove.`);
       }
     }
-    validateEffectPayload(label, index, effect, definition);
+    validateEffectPayload(label, index, effect, definition, card.type);
   }
 
   const previousNumber = seenNumbers.get(card.cardNumber);
@@ -145,6 +184,22 @@ for (const [deckId, deck] of Object.entries(rawDecklists)) {
   if (deck.legend) expect(seenNumbers.has(deck.legend), `${deckId}: unknown legend card number ${deck.legend}.`);
 }
 
+const expectedOfficialTokens = ["recruit", "sprite", "sandSoldier", "mech", "gold", "reflection", "bird", "brush", "baronPit"];
+expect(JSON.stringify(officialTokenKinds()) === JSON.stringify(expectedOfficialTokens),
+  "Official token registry must contain exactly the nine Core Rules 184 token definitions in rule order.");
+for (const [key, token] of Object.entries(OFFICIAL_TOKEN_DEFINITIONS)) {
+  const label = `official token ${key} (${token.name})`;
+  expect(token.isToken === true, `${label}: must be marked as a token Game Object.`);
+  expect(token.energy === 0 || token.energy === undefined, `${label}: tokens have no cost and are treated as cost 0.`);
+  expect(Array.isArray(token.domains) && token.domains.length === 0, `${label}: tokens must be domainless.`);
+  for (const [index, effect] of (token.effects || []).entries()) {
+    const definition = effectDefinition(effect);
+    expect(definition, `${label}: effects[${index}] uses unsupported effect '${effectKey(effect)}'.`);
+    expect(definition?.sourceTypes?.includes(token.type), `${label}: effects[${index}] is invalid for ${token.type}.`);
+    validateEffectPayload(label, index, effect, definition, token.type);
+  }
+}
+
 for (const warning of warnings) console.warn(`Warning: ${warning}`);
 if (errors.length) {
   console.error(`Card validation failed with ${errors.length} error(s):`);
@@ -154,14 +209,55 @@ if (errors.length) {
 
 console.log(`Validated ${Object.keys(cards).length} cards, ${registeredImportFiles.size} card imports, and ${Object.keys(rawDecklists).length} decklists.`);
 
-function validateEffectPayload(label, index, effect, definition) {
+function validateEffectPayload(label, index, effect, definition, sourceType = null) {
+  if (effect.kind === "costModifier") {
+    expect([undefined, "card", "activatedAbility"].includes(effect.appliesTo),
+      `${label}: effects[${index}].appliesTo must be card or activatedAbility.`);
+    if (effect.abilityKind !== undefined) {
+      expect(effect.appliesTo === "activatedAbility",
+        `${label}: effects[${index}].abilityKind is only valid for an activatedAbility cost modifier.`);
+      expect(typeof effect.abilityKind === "string" && effect.abilityKind.length > 0,
+        `${label}: effects[${index}].abilityKind must be a non-empty string.`);
+    }
+    if (effect.sourceType !== undefined) {
+      expect(effect.appliesTo === "activatedAbility",
+        `${label}: effects[${index}].sourceType is only valid for an activatedAbility cost modifier.`);
+      expect(VALID_TYPES.has(effect.sourceType),
+        `${label}: effects[${index}].sourceType is invalid '${effect.sourceType}'.`);
+    }
+    if (effect.sourceTag !== undefined) {
+      expect(effect.appliesTo === "activatedAbility" && typeof effect.sourceTag === "string" && effect.sourceTag.length > 0,
+        `${label}: effects[${index}].sourceTag must be a non-empty activatedAbility source tag.`);
+    }
+  }
+  if (effect.abilityKeywords !== undefined) {
+    expect(Array.isArray(effect.abilityKeywords), `${label}: effects[${index}].abilityKeywords must be an array.`);
+    const allowed = new Set(["Action", "Reaction"]);
+    for (const keyword of effect.abilityKeywords || []) {
+      expect(allowed.has(keyword), `${label}: effects[${index}].abilityKeywords contains unsupported timing keyword '${keyword}'.`);
+    }
+    expect(new Set(effect.abilityKeywords || []).size === (effect.abilityKeywords || []).length,
+      `${label}: effects[${index}].abilityKeywords must not contain duplicates.`);
+  }
+  if (effect.killSelfCost !== undefined) {
+    expect(effect.killSelfCost === true && effect.timing === "activated" && effect.kind === "addPower",
+      `${label}: effects[${index}].killSelfCost is only supported by the shared activated Add Power cost contract.`);
+  }
+  if (effect.recycleSelfCost !== undefined) {
+    expect(effect.recycleSelfCost === true && effect.timing === "activated" && effect.kind === "addPower" && sourceType === "rune",
+      `${label}: effects[${index}].recycleSelfCost is only supported by the shared activated Rune Add Power cost contract.`);
+  }
+  if (effect.sourceLocation !== undefined) {
+    expect(["base", "battlefield"].includes(effect.sourceLocation),
+      `${label}: effects[${index}].sourceLocation must be base or battlefield.`);
+  }
   if (effect.additionalPower) validatePowerRequirement(label, `effects[${index}].additionalPower`, effect.additionalPower);
   if (effect.domain) expect(VALID_DOMAINS.has(effect.domain), `${label}: effects[${index}].domain is invalid '${effect.domain}'.`);
   if (effect.domains) {
     expect(Array.isArray(effect.domains), `${label}: effects[${index}].domains must be an array.`);
     for (const domain of effect.domains || []) expect(VALID_DOMAINS.has(domain), `${label}: effects[${index}].domains contains invalid domain '${domain}'.`);
   }
-  for (const numericField of ["amount", "draw", "xp", "max", "maxEnergy", "maxPower", "maxMight", "repeatCostEnergy", "friendlyEnergy", "enemyEnergy", "friendlyPower", "enemyPower", "minEnergy", "minMight"]) {
+  for (const numericField of ["amount", "draw", "xp", "max", "maxEnergy", "maxPower", "maxMight", "repeatCostEnergy", "friendlyEnergy", "enemyEnergy", "friendlyPower", "enemyPower", "minEnergy", "minPower", "minMight"]) {
     if (effect[numericField] !== undefined) {
       expect(Number.isFinite(effect[numericField]), `${label}: effects[${index}].${numericField} must be numeric.`);
     }

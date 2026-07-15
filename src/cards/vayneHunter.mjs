@@ -20,6 +20,12 @@ export default card({
       {
           "timing": "static",
           "kind": "enterReadyIfOpponentControlsBattlefield"
+      },
+      {
+          "timing": "conquer",
+          "kind": "payEnergyReturnSelfToHand",
+          "amount": 1,
+          "optional": true
       }
   ]
 });

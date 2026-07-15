@@ -8,7 +8,7 @@ export default card({
   set: "Origins",
   rarity: "Common",
   domains: [DOMAINS.CALM],
-  tags: [],
+  tags: ["Shurima"],
   keywords: ["Shield","Tank"],
   energy: 3,
   power: [],

@@ -19,6 +19,11 @@ export default card({
   effects: [
       {
           "timing": "static",
+          "kind": "enterReadyIfOpponentNearVictory",
+          "points": 3
+      },
+      {
+          "timing": "static",
           "kind": "stunnedEnemyHereMight",
           "amount": -8,
           "minMight": 1

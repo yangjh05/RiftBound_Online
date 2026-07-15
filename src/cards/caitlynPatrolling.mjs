@@ -18,10 +18,15 @@ export default card({
   text: "I must be assigned combat damage last.\nTap: Deal damage equal to my Might to a unit at a battlefield. Use this ability only while I'm at a battlefield.",
   effects: [
       {
+          "timing": "static",
+          "kind": "combatDamageAssignmentLast"
+      },
+      {
           "timing": "activated",
           "kind": "dealDamageUnit",
           "target": "battlefieldUnit",
-          "amountFromSelfMight": true
+          "amountFromSelfMight": true,
+          "sourceLocation": "battlefield"
       }
   ]
 });

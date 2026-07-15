@@ -1,4 +1,5 @@
 import { effectiveMight } from "../engine.mjs";
+import { hiddenCardControllerId } from "../rules/zones.mjs";
 
 export function observeGame(game, viewerId) {
   const self = game.players.find((player) => player.id === viewerId);
@@ -22,7 +23,7 @@ export function observeGame(game, viewerId) {
       name: field.name,
       controlledBy: field.controlledBy,
       units: field.units.map(publicCard),
-      hidden: (field.hidden || []).map((item) => item.ownerId === viewerId || intel
+      hidden: (field.hidden || []).map((item) => hiddenCardControllerId(item) === viewerId || intel
         ? { ownerId: item.ownerId, card: publicCard(item.card) }
         : { ownerId: item.ownerId, card: { hidden: true } })
     })),
@@ -69,6 +70,7 @@ function publicCard(card) {
     might: card.type === "unit" ? effectiveMight(card) : 0,
     damage: card.damage || 0,
     buffs: card.buffs || 0,
+    mightModifier: card.mightModifier || 0,
     exhausted: Boolean(card.exhausted),
     tags: [...(card.tags || [])],
     keywords: [...(card.keywords || [])]

@@ -1,3 +1,5 @@
+import { hiddenCardControllerId } from "../src/rules/zones.mjs";
+
 export function publicRoom(room) {
   return {
     roomId: room.roomId,
@@ -40,6 +42,7 @@ export function snapshotForPlayer(room, playerId) {
 
 function redactGame(game, viewerId) {
   const snapshot = clonePlain(game);
+  delete snapshot.setupBattlefieldSelections;
   snapshot.players = game.players.map((player) => redactPlayer(game, player, viewerId));
   snapshot.battlefields = game.battlefields.map((field) => redactBattlefield(game, field, viewerId));
   snapshot.pendingChoice = game.pendingChoice?.playerId === viewerId ? clonePlain(game.pendingChoice) : null;
@@ -60,6 +63,12 @@ function redactPlayer(game, player, viewerId) {
   const intel = canViewPrivateInfo(game, viewerId, player.id);
   const showPrivate = ownsSeat || intel;
   const copy = clonePlain(player);
+  if (!showPrivate && player.champion?.zone === "hidden") {
+    copy.champion = {
+      ...redactedCard(player.champion, `hidden-champion-${player.id}`),
+      zone: "hidden"
+    };
+  }
   copy.hand = showPrivate
     ? clonePlain(player.hand)
     : player.hand.map((card, index) => redactedCard(card, `hand-${player.id}-${index}`));
@@ -76,6 +85,9 @@ function redactPlayer(game, player, viewerId) {
   copy.availableBattlefields = ownsSeat || battlefieldChoicesPublic
     ? clonePlain(player.availableBattlefields)
     : player.availableBattlefields.map((card, index) => redactedCard(card, `battlefield-${player.id}-${index}`));
+  if (!ownsSeat && !battlefieldChoicesPublic && player.selectedBattlefieldId) {
+    copy.selectedBattlefieldId = "hidden-battlefield-selection";
+  }
   copy.turnScoredBattlefields = Array.from(player.turnScoredBattlefields || []);
   return copy;
 }
@@ -83,7 +95,8 @@ function redactPlayer(game, player, viewerId) {
 function redactBattlefield(game, field, viewerId) {
   const copy = clonePlain(field);
   copy.hidden = (field.hidden || []).map((item, index) => {
-    const visible = item.ownerId === viewerId || canViewPrivateInfo(game, viewerId, item.ownerId);
+    const controllerId = hiddenCardControllerId(item);
+    const visible = controllerId === viewerId || canViewPrivateInfo(game, viewerId, controllerId);
     if (visible) return clonePlain(item);
     return {
       ownerId: item.ownerId,

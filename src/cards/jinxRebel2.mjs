@@ -20,7 +20,8 @@ export default card({
       {
           "timing": "discard",
           "kind": "readySelfMight",
-          "amount": 1
+          "amount": 1,
+          "temporary": true
       }
   ]
 });

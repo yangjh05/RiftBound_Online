@@ -12,6 +12,7 @@ export default card({
         DOMAINS.BODY
       ],
       "tags": [
+        "Champion",
         "Master Yi",
         "Ionia"
       ],
@@ -24,11 +25,6 @@ export default card({
       "image": "https://exburst.dev/riftbound/cards/sd/UNL-113-219.webp",
       "text": "[Hunt 2] (When I conquer or hold, gain 2 XP.)\n[Level 6][>] I have [Deflect] and [Ganking]. (While you have 6+ XP, opponents must pay Power to choose me with a spell or ability and I can move from battlefield to battlefield.)",
       "effects": [
-        {
-          "timing": "score",
-          "kind": "gainXp",
-          "amount": 2
-        },
         {
           "timing": "levelStatic",
           "level": 6,

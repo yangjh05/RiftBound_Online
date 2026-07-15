@@ -12,6 +12,7 @@ export default card({
         DOMAINS.CHAOS
       ],
       "tags": [
+        "Signature",
         "Diana",
         "Action"
       ],
@@ -30,7 +31,8 @@ export default card({
       "effects": [
         {
           "timing": "spell",
-          "kind": "moonfall"
+          "kind": "moonfall",
+          "temporary": true
         }
       ]
     });

@@ -3,7 +3,8 @@ import {
   chooseEffectOption, confirmFirstPlayer, createGame, moveUnit, passShowdown,
   selectBattlefield, selectChampion, skipMulligan
 } from "../src/engine.mjs";
-import { interactionCoverageKeys, validateSemanticChoice, validateStableGameState } from "./semantic-oracle.mjs";
+import { captureInteractionState, causalInteractionCoverageKeys, validateSemanticChoice, validateStableGameState } from "./semantic-oracle.mjs";
+import { assertRuleState, assertRuleTransition, captureRuleState } from "./rules-oracle.mjs";
 
 const movers = uniqueByBehavior(Object.values(cards).filter((card) => card.type === "unit" && card.effects?.some((effect) => effect.timing === "onMove")));
 const payloads = [cards.lonelyPoro, cards.confront, cards.trinityForce, cards.scrapheap].filter(Boolean);
@@ -31,9 +32,9 @@ for (const moverCard of movers) {
   }
 }
 
-const pairs = [...coverage].filter((key) => key.startsWith("2|")).length;
-const triples = [...coverage].filter((key) => key.startsWith("3|")).length;
-console.log(`Passed ${scenarios} synthesized interaction scenarios across ${movers.length} on-move cards, ${payloads.length} payloads, ${pairs} effect pairs, and ${triples} effect triples.`);
+const transitions = [...coverage].filter((key) => key.startsWith("cause|")).length;
+const contexts = [...coverage].filter((key) => key.startsWith("interaction|")).length;
+console.log(`Passed ${scenarios} synthesized interaction scenarios across ${movers.length} on-move cards and ${payloads.length} payloads; observed ${transitions} action-to-state transitions in ${contexts} active-effect contexts.`);
 
 function runScenario({ moverCard, payloadCard, destinationMode, withObserver, withSourceEffect }) {
   const game = createGame({ interactive: true, manualActionChainPriority: false });
@@ -50,22 +51,31 @@ function runScenario({ moverCard, payloadCard, destinationMode, withObserver, wi
   const observer = makeInstance(cards.volibearImposing || cards.volibearImposing2, opponent.id, `synth-observer-${scenarios}`);
   const source = game.battlefields[0];
   const destination = game.battlefields[1];
+  const observerField = game.battlefields[2];
   const needsCompanion = moverCard.name === "Stealthy Pursuer";
-  source.units = [mover, ...(needsCompanion ? [companion] : []), ...(withObserver && observer ? [observer] : [])];
+  source.units = [mover, ...(needsCompanion ? [companion] : [])];
   source.controlledBy = player.id;
   if (withSourceEffect && cards.backAlleyBar) source.effects = structuredClone(cards.backAlleyBar.effects || []);
   destination.units = destinationMode === "enemy" ? [defender] : [];
   destination.controlledBy = opponent.id;
+  if (withObserver && observer && observerField) {
+    observerField.units = [observer];
+    observerField.controlledBy = opponent.id;
+  }
   player.hand = [payload];
   player.base = [exhaustedAlly];
   player.mainDeck = Array.from({ length: 12 }, (_, index) =>
     makeInstance(index % 2 ? cards.confront : cards.lonelyPoro, player.id, `synth-draw-${scenarios}-${index}`));
 
+  const interactionBefore = captureInteractionState(game);
+  const rulesBefore = captureRuleState(game);
   const result = moveUnit(game, mover.instanceId, destination.instanceId);
   if (!result.ok) fail("move was rejected");
-  recordCoverage(game, "move");
+  assertRuleTransition(rulesBefore, game, { kind: "standardMove", unitIds: [mover.instanceId], ok: true });
   settle(game);
+  for (const key of causalInteractionCoverageKeys(interactionBefore, game, "move-and-settle")) coverage.add(key);
   validateStableGameState(game);
+  assertRuleState(game, { action: "synthesized movement settled" });
   const operation = (game.operations || []).find((candidate) => candidate.data?.unitIds?.includes(mover.instanceId));
   if (!operation || operation.status !== "completed") fail(`move operation did not complete (${operation?.status || "missing"})`);
   if (game.phase !== "showdown" || game.showdown?.battlefieldId !== destination.instanceId) {
@@ -90,22 +100,16 @@ function settle(game) {
       const option = game.pendingChoice.options.find((candidate) => !["decline", "done", "skip"].includes(candidate.id)) || game.pendingChoice.options[0];
       const result = chooseEffectOption(game, option.id ?? option.value);
       if (!result.ok) throw new Error(`choice ${option.id} failed`);
-      recordCoverage(game, `choice-${game.pendingChoice?.effect || "resolved"}`);
       continue;
     }
     if (game.actionChain) {
       passShowdown(game, game.actionChain.priorityPlayerId);
-      recordCoverage(game, "action-chain-pass");
       continue;
     }
     if (game.pendingPayment) throw new Error("synthesized movement unexpectedly requested payment");
     break;
   }
   if (safety >= 100) throw new Error("interaction scenario did not settle");
-}
-
-function recordCoverage(game, event) {
-  for (const key of interactionCoverageKeys(game, event)) coverage.add(key);
 }
 
 function finishSetup(game) {

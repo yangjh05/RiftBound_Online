@@ -12,11 +12,7 @@ export default card({
         DOMAINS.CHAOS
       ],
       "tags": [
-        "Diana",
-        "Reaction"
-      ],
-      "keywords": [
-        "Reaction"
+        "Diana"
       ],
       "power": [],
       "image": "https://exburst.dev/riftbound/cards/sd/image_fx_1773677896097.webp",
@@ -26,7 +22,8 @@ export default card({
           "timing": "activated",
           "kind": "addEnergy",
           "amount": 1,
-          "restriction": "showdown"
+          "restriction": "showdown",
+          "abilityKeywords": ["Reaction"]
         }
       ]
     });

@@ -20,7 +20,8 @@ export default card({
   {
     "timing": "onPlay",
     "kind": "modifySelfMight",
-    "amount": 3
+    "amount": 3,
+    "temporary": true
   }
 ]
 });

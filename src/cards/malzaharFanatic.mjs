@@ -8,7 +8,7 @@ export default card({
   set: "Origins",
   rarity: "Rare",
   domains: [DOMAINS.MIND],
-  tags: ["Champion","Malzahar","The Void","Action"],
+  tags: ["Champion","Malzahar","The Void"],
   keywords: [],
   energy: 4,
   power: [],
@@ -19,7 +19,8 @@ export default card({
   effects: [
     {
       timing: "activated",
-      kind: "killFriendlyPermanentChannelRune"
+      kind: "killFriendlyPermanentChannelRune",
+      abilityKeywords: ["Action"]
     }
   ]
 });

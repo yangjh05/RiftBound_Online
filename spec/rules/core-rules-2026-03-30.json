@@ -1,0 +1,379 @@
+{
+  "schemaVersion": 1,
+  "rulesVersion": "2026-03-30",
+  "source": {
+    "authority": "Riot Games / Riftbound",
+    "title": "Riftbound Core Rules",
+    "url": "https://cmsassets.rgpub.io/sanity/files/dsfx7636/news_live/861747d1d4d505b7c14d73aba9749d1c3a209a67.pdf",
+    "rulesHub": "https://playriftbound.com/en-us/rules-hub/",
+    "sha256": "3733EAFFA8B412CE37458D62E7CD22AA93D59F0A6925241BCE5B0B5FD5ED1878"
+  },
+  "contracts": [
+    {
+      "id": "RB-143.2.a",
+      "category": "lethal-threshold",
+      "summary": "A unit with nonzero damage greater than or equal to its current Might is killed.",
+      "boundaryAxes": ["damage=Might-1", "damage=Might", "damage=Might+1"],
+      "oracleChecks": ["lethal-unit"],
+      "evidenceTests": [
+        "lethal threshold scenarios agree with the independent rules oracle",
+        "noncombat cleanup uses current Might and repeats after an aura leaves",
+        "Incinerate sends a unit with lethal damage to its owner's trash",
+        "semantic resolution oracle rejects undeclared damage recall"
+      ]
+    },
+    {
+      "id": "RB-322",
+      "category": "cleanup-fixed-point",
+      "summary": "Cleanup repeats until a cleanup pass produces no new state change.",
+      "boundaryAxes": ["Might aura removed", "new lethal unit", "stable pass"],
+      "oracleChecks": ["battlefield-control", "facedown-control", "opposition-stages-combat"],
+      "evidenceTests": [
+        "combat special cleanup heals an aura survivor before the next normal cleanup",
+        "noncombat cleanup uses current Might and repeats after an aura leaves"
+      ]
+    },
+    {
+      "id": "RB-323.4-323.5",
+      "category": "lethal-destination",
+      "summary": "Deathknell information is captured, then lethally damaged units are killed and placed in their owners' trash.",
+      "boundaryAxes": ["owner differs from controller", "Deathknell", "no replacement"],
+      "oracleChecks": ["owned-zone", "non-board-reset"],
+      "evidenceTests": [
+        "lethal threshold scenarios agree with the independent rules oracle",
+        "Incinerate sends a unit with lethal damage to its owner's trash"
+      ]
+    },
+    {
+      "id": "RB-461.1",
+      "category": "combat-cleanup-order",
+      "summary": "Normal lethal cleanup happens before combat healing and before surviving attackers are recalled.",
+      "boundaryAxes": ["lethal attacker", "surviving defender", "attacker recall"],
+      "evidenceTests": [
+        "combat special cleanup heals an aura survivor before the next normal cleanup"
+      ]
+    },
+    {
+      "id": "RB-808.1.d",
+      "category": "death-replacement",
+      "summary": "When death is replaced by recall, the unit was not killed and Deathknell does not trigger.",
+      "boundaryAxes": ["replacement active", "replacement expired", "Deathknell source"],
+      "evidenceTests": [
+        "prepared death recall replaces killing without Deathknell",
+        "prepared death recall power payment is explicitly accepted or declined"
+      ]
+    },
+    {
+      "id": "RB-107.1.c/RB-323.7",
+      "category": "base-control",
+      "summary": "Permanents and runes in a base are controlled by that base's player; foreign controlled objects are recalled during cleanup.",
+      "boundaryAxes": ["permanent in own base", "foreign-controlled permanent", "rune"],
+      "oracleChecks": ["base-control"],
+      "evidenceTests": ["Core Rules runtime oracle rejects representative illegal states"]
+    },
+    {
+      "id": "RB-107.3.b-107.3.d",
+      "category": "facedown-zone",
+      "summary": "Facedown occupancy respects its limit and cards remain only while their controller controls the associated battlefield.",
+      "boundaryAxes": ["default occupancy", "increased occupancy", "control lost"],
+      "oracleChecks": ["facedown-capacity"],
+      "evidenceTests": ["Core Rules runtime oracle rejects representative illegal states"]
+    },
+    {
+      "id": "RB-107.4.d",
+      "category": "legend-zone",
+      "summary": "A Champion Legend cannot be removed, moved, or displaced from its Legend Zone.",
+      "boundaryAxes": ["legend present", "legend missing", "legend duplicated"],
+      "oracleChecks": ["legend-zone"],
+      "evidenceTests": ["Core Rules runtime oracle rejects representative illegal states"]
+    },
+    {
+      "id": "RB-110",
+      "category": "zone-change-reset",
+      "summary": "Temporary modifications cease to be tracked when an object changes to or from a non-board zone.",
+      "boundaryAxes": ["damage", "buff", "temporary keyword", "attachment"],
+      "oracleChecks": ["non-board-reset"],
+      "evidenceTests": ["killed cards clear temporary board state before entering trash"]
+    },
+    {
+      "id": "RB-128.1",
+      "category": "single-zone",
+      "summary": "A card always exists in exactly one game zone.",
+      "boundaryAxes": ["setup reserve", "board", "non-board", "chain"],
+      "oracleChecks": ["single-zone"],
+      "evidenceTests": ["selected battlefields leave the setup reserve instead of occupying two zones"]
+    },
+    {
+      "id": "RB-183",
+      "category": "token-lifetime",
+      "summary": "Tokens are created on the board or Chain and cannot exist elsewhere.",
+      "boundaryAxes": ["token on board", "token killed", "token returned to a non-board zone"],
+      "oracleChecks": ["token-zone"],
+      "evidenceTests": ["killed tokens cease to exist instead of entering trash"]
+    },
+    {
+      "id": "RB-187.4/RB-323.6",
+      "category": "battlefield-control",
+      "summary": "Outside an active or staged contest, battlefield control agrees with stable unit occupancy.",
+      "boundaryAxes": ["empty", "single controller", "active showdown"],
+      "oracleChecks": [],
+      "evidenceTests": ["Core Rules runtime oracle rejects representative illegal states"]
+    },
+    {
+      "id": "RB-319.8/RB-323.9",
+      "category": "combat-staging",
+      "summary": "After movement cleanup, opposing units at a battlefield stage a combat before normal action flow resumes.",
+      "boundaryAxes": ["opposing units", "staged combat", "active combat"],
+      "oracleChecks": [],
+      "evidenceTests": ["Core Rules runtime oracle rejects representative illegal states"]
+    },
+    {
+      "id": "RB-142/RB-143.3",
+      "category": "damage-state",
+      "summary": "Damage is a non-negative finite value tracked per unit.",
+      "boundaryAxes": ["zero", "positive", "negative", "non-unit"],
+      "oracleChecks": ["damage-state"],
+      "evidenceTests": ["Core Rules runtime oracle rejects representative illegal states"]
+    },
+    {
+      "id": "RB-144.2",
+      "category": "standard-move-cost",
+      "summary": "Exhausting each unit is the cost of its Standard Move.",
+      "boundaryAxes": ["single unit", "batch move", "failed move"],
+      "oracleChecks": ["standard-move-cost"],
+      "evidenceTests": ["Core Rules transition oracle rejects a Standard Move without its exhaust cost"]
+    },
+    {
+      "id": "RB-419.4.a/RB-419.4.b",
+      "category": "resolved-play-accounting",
+      "summary": "A card is played only after its play process completes by resolution; a countered card or one prevented from resolving was not played and causes no played trigger.",
+      "boundaryAxes": ["on Chain", "resolved", "countered", "resolution prevented"],
+      "oracleChecks": ["resolved-play-accounting"],
+      "evidenceTests": ["resolved and countered card plays agree with the independent 419.4 oracle"]
+    },
+    {
+      "id": "RB-416.1.c",
+      "category": "owner-corresponding-deck",
+      "summary": "When an object is recycled or otherwise moves to a player's private non-board zone, it goes to its owner's corresponding deck or zone.",
+      "boundaryAxes": ["controller is owner", "controller differs from owner", "trash", "recycle"],
+      "oracleChecks": ["owned-zone"],
+      "evidenceTests": ["controlled spells enter their owners trash or corresponding deck after resolution"]
+    },
+    {
+      "id": "RB-702.2/RB-702.3",
+      "category": "buff-state",
+      "summary": "A Buff is a distinct object on a Unit, a Unit can have at most one, and ordinary Might modifiers do not make a Unit Buffed.",
+      "boundaryAxes": ["no Buff", "one Buff", "second Buff prevented", "ordinary Might modifier"],
+      "oracleChecks": ["buff-state"],
+      "evidenceTests": ["Buff objects remain distinct from ordinary Might modifiers"]
+    },
+    {
+      "id": "RB-103.1.b.1",
+      "category": "deck-domain-identity",
+      "summary": "Every registered Main Deck and Sideboard card must fit the Champion Legend's Domain Identity.",
+      "boundaryAxes": ["single-domain card", "multi-domain card", "off-identity card"],
+      "oracleChecks": [],
+      "evidenceTests": ["deck validation enforces Main Deck identity, matching Chosen Champions, and unique Battlefields"]
+    },
+    {
+      "id": "RB-103.2.a.2",
+      "category": "chosen-champion-identity",
+      "summary": "The Chosen Champion must be a Champion Unit sharing the Champion Legend's Champion tag; Signature Units are ineligible.",
+      "boundaryAxes": ["matching Champion", "different Champion tag", "Signature Unit"],
+      "oracleChecks": [],
+      "evidenceTests": ["deck validation enforces Main Deck identity, matching Chosen Champions, and unique Battlefields", "players choose starting champions before battlefield selection and opening draw"]
+    },
+    {
+      "id": "RB-103.2.b",
+      "category": "deck-copy-limit",
+      "summary": "The registered card pool contains at most three copies of a card with the same name, including the Chosen Champion.",
+      "boundaryAxes": ["three copies", "four copies", "different names of one character"],
+      "oracleChecks": [],
+      "evidenceTests": ["deck validation enforces Main Deck identity, matching Chosen Champions, and unique Battlefields"]
+    },
+    {
+      "id": "RB-103.2.d.1/RB-103.2.d.2/RB-103.2.d.3",
+      "category": "signature-deck-limit",
+      "summary": "A deck has at most three total Signature cards, all matching the Legend tag, and a Signature is not a Chosen Champion.",
+      "boundaryAxes": ["three total", "different Signature names", "wrong Champion tag", "Champion-zone eligibility"],
+      "oracleChecks": [],
+      "evidenceTests": ["deck validation enforces the combined Signature limit and Legend champion identity"]
+    },
+    {
+      "id": "RB-103.3.a/RB-103.3.a.1",
+      "category": "rune-deck-construction",
+      "summary": "The separate Rune Deck contains exactly twelve Rune cards within the Legend's Domain Identity.",
+      "boundaryAxes": ["eleven runes", "twelve runes", "off-identity rune", "repeated basic rune"],
+      "oracleChecks": [],
+      "evidenceTests": ["default raw decklists satisfy the centralized deck construction rules", "deck validation requires a real Champion card and rejects off-identity runes"]
+    },
+    {
+      "id": "RB-103.4.c",
+      "category": "battlefield-name-uniqueness",
+      "summary": "A registered battlefield selection cannot include the same Battlefield name more than once.",
+      "boundaryAxes": ["three unique names", "same card number twice", "variant with same name"],
+      "oracleChecks": [],
+      "evidenceTests": ["deck validation enforces Main Deck identity, matching Chosen Champions, and unique Battlefields"]
+    },
+    {
+      "id": "RB-133.4.a.2/RB-133.4.b.1/RB-133.5.a.1",
+      "category": "zone-type",
+      "summary": "Main Deck cards, Runes, Permanents, Spells, Legends, and Battlefields occupy only zones permitted for their card type.",
+      "boundaryAxes": ["Rune Deck", "Main Deck", "Base", "Battlefield", "Chain"],
+      "oracleChecks": ["zone-type"],
+      "evidenceTests": ["Core Rules runtime oracle rejects illegal zone, player, chain, attachment, and numeric states"]
+    },
+    {
+      "id": "RB-127.1/RB-180",
+      "category": "player-reference",
+      "summary": "Owners and controllers recorded on cards and tokens identify players participating in the game.",
+      "boundaryAxes": ["owner", "controller", "token creator", "unknown player"],
+      "oracleChecks": ["player-reference"],
+      "evidenceTests": ["Core Rules runtime oracle rejects illegal zone, player, chain, attachment, and numeric states"]
+    },
+    {
+      "id": "RB-329.2/RB-329.3/RB-330.1/RB-310.1/RB-310.2/RB-310.3/RB-310.4/RB-337.1.c.3/RB-340.4",
+      "category": "chain-state",
+      "summary": "Only one Chain exists; stable Items are finalized; and each new Execute window gives Priority to the newest Item's controller.",
+      "boundaryAxes": ["Neutral Open", "Neutral Closed", "Showdown Open", "Showdown Closed", "two Chains", "pending after Tasks", "newest controller Priority"],
+      "oracleChecks": ["chain-state"],
+      "evidenceTests": ["Core Rules runtime oracle rejects illegal zone, player, chain, attachment, and numeric states"]
+    },
+    {
+      "id": "RB-718.5.d/RB-719.3.a",
+      "category": "attachment-state",
+      "summary": "An Attached card belongs to one Top-Most card on the board and moves with that attachment tree.",
+      "boundaryAxes": ["one Top-Most card", "non-board parent", "duplicate attachment", "Top-Most movement"],
+      "oracleChecks": ["attachment-state"],
+      "evidenceTests": ["Core Rules runtime oracle rejects illegal zone, player, chain, attachment, and numeric states"]
+    },
+    {
+      "id": "RB-137.1/RB-423.1.a/RB-729.1.a",
+      "category": "numeric-state",
+      "summary": "Might adjustments remain finite, Stunned is binary, and public player counters such as XP remain valid trackable values.",
+      "boundaryAxes": ["finite modifier", "NaN modifier", "binary Stunned", "negative XP"],
+      "oracleChecks": ["numeric-state"],
+      "evidenceTests": ["Core Rules runtime oracle rejects illegal zone, player, chain, attachment, and numeric states"]
+    },
+    {
+      "id": "RB-317.2.b/RB-317.2.c/RB-317.2.d",
+      "category": "turn-expiration",
+      "summary": "Ending cleanup heals Units, expires all previous 'this turn' effects simultaneously, and empties Rune Pools.",
+      "boundaryAxes": ["damage", "positive Might", "negative Might", "generated Energy", "generated Power"],
+      "oracleChecks": ["turn-expiration"],
+      "evidenceTests": ["Ending expiration removes turn-limited Might and empties Rune Pools"]
+    },
+    {
+      "id": "RB-166/RB-315.4.d/RB-317.2.d",
+      "category": "rune-pool-boundary",
+      "summary": "Every player's Rune Pool persists during ordinary play and Showdowns, then empties after each Draw Phase and at the end of each turn.",
+      "boundaryAxes": ["ordinary action", "Showdown completion", "Draw Phase end", "turn end"],
+      "oracleChecks": ["rune-pool-boundary"],
+      "evidenceTests": ["Rune Pools persist through a Showdown and expire only at rules-defined boundaries"]
+    },
+    {
+      "id": "RB-303.1/RB-321.1/RB-335.2.a",
+      "category": "turn-task-continuation",
+      "summary": "Beginning, scoring, draw, and ending tasks finish completely, including choices and Chains they create, before the next task begins.",
+      "boundaryAxes": ["Beginning trigger choice", "Hold trigger Chain", "Channel boundary", "Draw boundary", "Ending trigger Chain"],
+      "oracleChecks": ["turn-task-continuation"],
+      "evidenceTests": ["turn tasks cannot pause without an explicit continuation owner", "kai'sa evolutionary plays a low-cost trash spell after conquering", "pending end turn resumes after lonely poro deathknell draw choice"]
+    },
+    {
+      "id": "RB-816.1.b",
+      "category": "temporary-beginning-trigger",
+      "summary": "Temporary permanents create a Beginning Phase trigger that kills them before scoring.",
+      "boundaryAxes": ["Temporary unit", "Temporary gear", "before Hold scoring", "response Chain"],
+      "oracleChecks": [],
+      "evidenceTests": ["ready Temporary Sprite tokens die at their controller's next Beginning Phase before scoring", "temporary gear is killed at the controller's beginning phase"]
+    },
+    {
+      "id": "RB-355.8/RB-402.1",
+      "category": "dynamic-trigger-target-declaration",
+      "summary": "A triggered ability computes and declares all legal targets before it finalizes, including limits derived from current game state.",
+      "boundaryAxes": ["fixed maximum", "maximum from points", "Power payable", "no legal target"],
+      "oracleChecks": [],
+      "evidenceTests": ["kai'sa evolutionary plays a low-cost trash spell after conquering", "Annie, Stubborn explicitly returns a chosen spell, not a unit, from trash"]
+    },
+    {
+      "id": "RB-413.4/RB-431.2",
+      "category": "burn-out-sequence",
+      "summary": "Attempting to draw beyond the Main Deck draws as much as possible, recycles trash, awards an opponent one point, and resumes the draw.",
+      "boundaryAxes": ["one-card short", "multi-card draw", "nonempty trash", "empty trash", "immediate victory"],
+      "oracleChecks": ["burn-out-sequence"],
+      "evidenceTests": ["Burn Out recycles trash, awards a point, and resumes the interrupted draw", "an empty deck and empty trash repeatedly burns out until the opponent wins"]
+    },
+    {
+      "id": "RB-450/RB-451/RB-719.3.a",
+      "category": "recall-preserves-board-state",
+      "summary": "Recall relocates a permanent and its attachment tree to its controller's Base without becoming a Move or clearing state that persists on the Board.",
+      "boundaryAxes": ["Buff", "temporary Might", "Stunned", "ready state", "attachment tree", "changed controller"],
+      "oracleChecks": ["recall-preserves-board-state"],
+      "evidenceTests": ["Symbol of the Solari recalls every unit after an attacking combat tie", "each zhonya's hourglass can replace one friendly unit death"]
+    },
+    {
+      "id": "RB-460.2.c.5/RB-460.2.c.7/RB-460.2.c.9",
+      "category": "combat-damage-assignment-priority",
+      "summary": "Combat damage assignment obeys first/last requirements, lets a conflicting unit satisfy one requirement, and ignores damage-immune units for mandatory lethal assignment.",
+      "boundaryAxes": ["Tank first", "assigned last", "both first and last", "damage prevented", "equal priority"],
+      "oracleChecks": ["combat-damage-assignment-priority"],
+      "evidenceTests": ["manual combat damage assigns Caitlyn, Patrolling after ordinary units", "manual combat damage must assign lethal damage to Tank units first"]
+    },
+    {
+      "id": "RB-383.3.d/RB-383.3.d.1",
+      "category": "simultaneous-trigger-order",
+      "summary": "A controller chooses the order of simultaneous triggers, and controllers make those choices from the turn player forward before the Chain resolves in last-in-first-out order.",
+      "boundaryAxes": ["one controller", "multiple controllers", "turn-player choice first", "Chain resolution order", "Conquer trigger batch"],
+      "oracleChecks": ["simultaneous-trigger-order"],
+      "evidenceTests": ["one player explicitly orders all abilities triggered by the same spell-play event", "the turn player orders their simultaneous triggers before the next player", "a player orders simultaneous conquer triggers before they enter the action chain"]
+    },
+    {
+      "id": "RB-372/RB-373/RB-373.1",
+      "category": "replacement-effect-order",
+      "summary": "The affected object's owner orders multiple applicable replacement effects, while a replacement controller chooses its application sequence across simultaneous qualified events.",
+      "boundaryAxes": ["multiple replacements on one death", "one replacement across simultaneous deaths", "mandatory replacement", "optional replacement", "state-cleanup reentry"],
+      "oracleChecks": ["replacement-effect-order"],
+      "evidenceTests": ["a player chooses which simultaneous death one zhonya replaces", "sett's optional death replacement can be explicitly declined", "each zhonya's hourglass can replace one friendly unit death"]
+    },
+    {
+      "id": "RB-389/RB-390/RB-392/RB-397",
+      "category": "delayed-ability-state",
+      "summary": "A delayed ability keeps its own classification, controller, event condition, lifetime, target-object identity, and linked set even after its source leaves play.",
+      "boundaryAxes": ["triggered versus passive", "source present or absent", "target zone change", "turn expiration", "independent linked sets", "response window"],
+      "oracleChecks": ["delayed-ability-state"],
+      "evidenceTests": ["delayed triggers keep independent linked sets and resolve after their source leaves", "independent Ravenborn Tome delayed passives stack after their sources leave"]
+    },
+    {
+      "id": "RB-370.2/RB-370.3/RB-375",
+      "category": "replacement-event-state",
+      "summary": "A replacement sequence gives each source one application across the original and replacement events, snapshots simultaneous candidates before zone changes, and carries applicable event modifications into replacement results.",
+      "boundaryAxes": ["same source recursion", "nested replacement choice", "simultaneous zone entry", "ready modification", "Temporary modification", "inapplicable modification"],
+      "oracleChecks": ["replacement-event-state"],
+      "evidenceTests": ["a replacement applies only once across the events that replace its original event", "a simultaneous replacement event can be declined without consuming its source"]
+    },
+    {
+      "id": "RB-319.1/RB-319.2/RB-319.3/RB-319.4/RB-319.5/RB-319.6/RB-319.7/RB-319.8/RB-321.1/RB-322.1",
+      "category": "cleanup-request-state",
+      "summary": "Every qualifying state, phase, Chain-item, Board, status, and Move boundary requests Cleanup through one reviewed cause registry; requests incurred during Resolution or Cleanup remain Outstanding until their owner resumes.",
+      "boundaryAxes": ["Open or Closed transition", "phase transition", "Pending added", "Pending finalized", "Chain Item removed", "Board entry or exit", "status change", "Move completion", "Resolution deferral", "Cleanup repetition"],
+      "oracleChecks": ["cleanup-request-state"],
+      "evidenceTests": ["every Cleanup request cause is recorded at its shared engine boundary", "lethal damage waits for every later instruction in the same Chain item", "noncombat cleanup uses current Might and repeats after an aura leaves"]
+    },
+    {
+      "id": "RB-423.1.a.2",
+      "category": "stunned-ending-boundary",
+      "summary": "Every Stunned Unit loses Stunned at the beginning of the next Ending Step before end-of-turn triggered abilities are placed on the Chain.",
+      "boundaryAxes": ["base Unit", "battlefield Unit", "end-turn trigger", "choice or Chain pause"],
+      "oracleChecks": ["stunned-ending-boundary"],
+      "evidenceTests": ["stunned status expires before end-of-turn triggered abilities enter the chain"]
+    },
+    {
+      "id": "RB-466.1.b/RB-466.1.b.1/RB-466.1.b.2",
+      "category": "winning-score-threshold",
+      "summary": "Conquest compares the prospective point to the current Victory Score, including modifiers, before deciding whether to award the winning point or draw a card.",
+      "boundaryAxes": ["base Victory Score", "increased Victory Score", "Conquer", "Hold", "all Battlefields scored"],
+      "oracleChecks": ["winning-score-threshold"],
+      "evidenceTests": ["the winning point cannot come from a single conquest", "holding a battlefield can score the winning point", "aspirant's climb also raises the conquest winning-point threshold"]
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "rulesVersion": "2026-03-30",
+  "workstreamId": "core-zone-and-movement-actions",
+  "range": [407, 453],
+  "scope": "all-duel-leaf-clauses-in-range",
+  "cases": [
+    {
+      "id": "action-permission-and-responsibility",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleRanges": [[407, 412]],
+      "evidenceTests": ["card categories follow the independent Neutral/Showdown Open/Closed permission matrix", "Core Rules transition oracle rejects a Standard Move without its exhaust cost", "effect Moves use the shared movement event and send controlled units to their controller's base"],
+      "remaining": "None; discretionary versus limited permission, costs, legality, player responsibility, and source attribution are recorded at shared action boundaries."
+    },
+    {
+      "id": "draw-exhaust-ready-recycle-damage-heal-and-play",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleRanges": [[413, 419]],
+      "evidenceTests": ["Draw completes its full amount before every simultaneous second-draw trigger resolves", "multiple ready units can make one standard move to an empty battlefield", "Ready actions share one event and trigger friendly-unit Ready abilities", "simultaneous Power recycling follows chosen order, owner destination, and token cessation", "combat assignment deals damage simultaneously and creates normal damage events", "combat special cleanup heals an aura survivor before the next normal cleanup", "resolved and countered card plays agree with the independent 419.4 oracle"],
+      "remaining": "None; each listed action uses a shared event, respects no-op and cost requirements, preserves simultaneous batches, and owns any continuation it opens."
+    },
+    {
+      "id": "move-hide-discard-stun-reveal-counter-buff-banish-kill-add-channel-and-burnout",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleRanges": [[420, 431]],
+      "evidenceTests": ["effect Moves use the shared movement event and send controlled units to their controller's base", "hidden cards are trashed during cleanup when their controller loses the battlefield", "one multi-card Discard action waits for every private choice and records one responsible event", "stunned status expires before end-of-turn triggered abilities enter the chain", "ravenbloom conservatory puts the defending player's revealed spell into hand", "Defy counters an eligible opposing spell on the chain", "Buff objects remain distinct from ordinary Might modifiers", "Banish uses the owner's zone and linked event before a later instructed play", "Incinerate sends a unit with lethal damage to its owner's trash", "an Add Reaction finalizes during payment without passing Priority or Focus", "Channel is one recorded action and printed exhausted Channel effects enter runes exhausted", "Burn Out recycles trash, awards a point, and resumes the interrupted draw"],
+      "remaining": "None for duel execution, partial-quantity effects, private selections, attribution, owner destinations, and action-specific timing."
+    },
+    {
+      "id": "double-swap-attach-detach-predict-prevent-replace-and-create",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleRanges": [[432, 439]],
+      "evidenceTests": ["numeric layers apply assignment, all increases, then all decreases", "attaching Equipment to a new Top-Most card records the required Detach first", "Predict X lets its player recycle any subset and explicitly reorder every card left on top", "Prevent applies only to its declared source and retains an unspent remainder", "Brush and Baron Pit battlefield tokens share the Replace framework and their printed movement and Might rules", "every declared unit-token effect creates the right unique tokens in the right state and zone"],
+      "remaining": "None for the registered duel card pool; arithmetic snapshots, attachment transitions, Predict ordering, Prevent replacement, token Replace/swap-back, and object creation share reviewed primitives."
+    },
+    {
+      "id": "movement-showdown-combat-cleanup-and-recall",
+      "status": "verified",
+      "disposition": "executable",
+      "ruleRanges": [[440, 453]],
+      "evidenceTests": ["multiple ready units can make one standard move into a combat showdown", "Traveling Merchant starts combat after discard-trigger chains finish", "standard and effect movement give Showdown Focus to the player who applied Contested", "recall preserves damage, buffs, attachments, and exhaustion while returning to base", "vilemaw's lair prevents Flash from moving units there to base"],
+      "remaining": "None for duel Origins/Destinations, atomic movement, Standard Move cost batches, Contested Showdown/Combat staging, post-Move Cleanup, corrective Recall, and Recall state preservation."
+    }
+  ]
+}

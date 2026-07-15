@@ -6,9 +6,10 @@ import {
   toggleOptionalPaymentEffect, togglePaymentPoolEnergy, togglePaymentRune
 } from "../src/engine.mjs";
 import {
-  captureResolutionContract, interactionCoverageKeys, semanticCoverageKey,
+  captureInteractionState, captureResolutionContract, causalInteractionCoverageKeys, semanticCoverageKey,
   validateResolutionContract, validateSemanticChoice, validateStableGameState
 } from "./semantic-oracle.mjs";
+import { captureRuleState, createRuleOracleSession } from "./rules-oracle.mjs";
 
 const args = Object.fromEntries(process.argv.slice(2).map((value, index, all) => value.startsWith("--") ? [value.slice(2), all[index + 1]] : null).filter(Boolean));
 const games = Math.max(1, Number(args.games) || 100);
@@ -22,7 +23,8 @@ if (args["deck-a"] && !forcedDeckA) throw new Error(`Unknown deck-a: ${args["dec
 if (args["deck-b"] && !forcedDeckB) throw new Error(`Unknown deck-b: ${args["deck-b"]}`);
 let state = seed || 1;
 const semanticCoverage = new Map();
-const interactionCoverage = new Map();
+const causalCoverage = new Map();
+const rulesOracle = createRuleOracleSession();
 Math.random = () => ((state = (state * 1664525 + 1013904223) >>> 0) / 0x100000000);
 
 for (let gameIndex = 0; gameIndex < games; gameIndex += 1) {
@@ -33,15 +35,26 @@ for (let gameIndex = 0; gameIndex < games; gameIndex += 1) {
   try {
     for (let action = 0; action < maxActions && game.phase !== "complete"; action += 1) {
       assertInvariants(game);
+      const interactionBefore = captureInteractionState(game);
+      const rulesBefore = captureRuleState(game);
       const description = step(game);
       trace.push(description);
-      for (const key of interactionCoverageKeys(game, description.split(":")[0])) {
-        interactionCoverage.set(key, (interactionCoverage.get(key) || 0) + 1);
+      rulesOracle.checkTransition(rulesBefore, game, { action: description });
+      for (const key of causalInteractionCoverageKeys(interactionBefore, game, description.split(":")[0])) {
+        causalCoverage.set(key, (causalCoverage.get(key) || 0) + 1);
       }
     }
     assertInvariants(game);
   } catch (error) {
-    console.error(JSON.stringify({ seed, gameSeed, gameIndex, decks: decks.map((deck) => deck.id), trace, error: error.stack }, null, 2));
+    console.error(JSON.stringify({
+      seed,
+      gameSeed,
+      gameIndex,
+      decks: decks.map((deck) => deck.id),
+      trace,
+      state: diagnosticGameState(game),
+      error: error.stack
+    }, null, 2));
     process.exitCode = 1;
     break;
   }
@@ -49,9 +62,11 @@ for (let gameIndex = 0; gameIndex < games; gameIndex += 1) {
 
 if (!process.exitCode) {
   const covered = [...semanticCoverage.entries()].sort((a, b) => b[1] - a[1]);
-  const pairCount = [...interactionCoverage.keys()].filter((key) => key.startsWith("2|")).length;
-  const tripleCount = [...interactionCoverage.keys()].filter((key) => key.startsWith("3|")).length;
-  console.log(`Fuzzed ${games} games across ${allDecks.length} decks (seed ${seed}); semantically checked ${covered.length} card/effect paths across ${covered.reduce((sum, [, count]) => sum + count, 0)} choices; covered ${pairCount} effect pairs and ${tripleCount} effect triples.`);
+  const transitionCount = [...causalCoverage.keys()].filter((key) => key.startsWith("cause|")).length;
+  const interactionCount = [...causalCoverage.keys()].filter((key) => key.startsWith("interaction|")).length;
+  const ruleReport = rulesOracle.report();
+  const ruleEvaluations = ruleReport.rules.reduce((sum, rule) => sum + rule.evaluations, 0);
+  console.log(`Fuzzed ${games} games across ${allDecks.length} decks (seed ${seed}); semantically checked ${covered.length} card/effect paths across ${covered.reduce((sum, [, count]) => sum + count, 0)} choices; evaluated ${ruleReport.rules.length} Core Rules checks ${ruleEvaluations} times; observed ${transitionCount} action-to-state transitions in ${interactionCount} active-effect contexts.`);
 }
 
 function step(game) {
@@ -127,6 +142,7 @@ function assertInvariants(game) {
   if (ids.length !== new Set(ids).size) throw new Error("A card instance exists in multiple top-level zones");
   if (game.pendingChoice) validateSemanticChoice(game, game.pendingChoice);
   validateStableGameState(game);
+  rulesOracle.checkState(game);
 }
 
 function allTopLevelCards(game, player) {
@@ -139,3 +155,51 @@ function result(label, output, markRejected = false) { return `${label}${markRej
 function byId(game, id) { return game.players.find((player) => player.id === id); }
 function pick(items) { return items[Math.floor(Math.random() * items.length)]; }
 function shuffle(items) { return items.map((item) => [Math.random(), item]).sort((a, b) => a[0] - b[0]).map(([, item]) => item); }
+
+function diagnosticGameState(game) {
+  const card = (value) => value ? { id: value.instanceId, name: value.name, status: value.status } : null;
+  return {
+    phase: game.phase,
+    currentPlayerId: game.currentPlayerId,
+    pendingChoice: game.pendingChoice ? {
+      id: game.pendingChoice.id,
+      effect: game.pendingChoice.effect,
+      playerId: game.pendingChoice.playerId,
+      card: card(game.pendingChoice.card)
+    } : null,
+    pendingPayment: game.pendingPayment ? {
+      source: game.pendingPayment.source,
+      playerId: game.pendingPayment.playerId,
+      card: card(game.pendingPayment.card)
+    } : null,
+    actionChain: game.actionChain ? {
+      phase: game.actionChain.phase,
+      priorityPlayerId: game.actionChain.priorityPlayerId,
+      chain: game.actionChain.chain.map((item) => ({
+        id: item.id,
+        itemType: item.itemType,
+        status: item.status,
+        playerId: item.playerId,
+        card: card(item.card),
+        sourceCard: card(item.sourceCard)
+      }))
+    } : null,
+    showdown: game.showdown ? {
+      battlefieldId: game.showdown.battlefieldId,
+      priorityPlayerId: game.showdown.priorityPlayerId,
+      chain: (game.showdown.chain || []).map((item) => ({ id: item.id, status: item.status, card: card(item.card) }))
+    } : null,
+    operations: (game.operations || []).map((operation) => ({ id: operation.id, kind: operation.kind, status: operation.status })),
+    players: game.players.map((player) => ({
+      id: player.id,
+      hand: player.hand.map(card),
+      base: player.base.map(card),
+      trash: player.trash.map(card)
+    })),
+    battlefields: game.battlefields.map((field) => ({
+      id: field.instanceId,
+      name: field.name,
+      units: field.units.map(card)
+    }))
+  };
+}

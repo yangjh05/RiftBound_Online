@@ -9,7 +9,7 @@ export default card({
   rarity: "Uncommon",
   domains: [DOMAINS.FURY],
   tags: ["Noxus","Trifarian"],
-  keywords: ["Assault"],
+  keywords: [],
   energy: 4,
   power: [{ domain: DOMAINS.ANY, amount: 1 }],
   might: 5,

@@ -9,7 +9,7 @@ export default card({
   set: "Origins",
   rarity: "Showcase",
   domains: [DOMAINS.FURY, DOMAINS.ORDER],
-  tags: ["Darius","Reaction"],
+  tags: ["Darius"],
   keywords: ["Legion"],
   power: [],
   image: "https://cdn.piltoverarchive.com/cards/OGN-302s.webp",
@@ -25,7 +25,8 @@ export default card({
     ],
     "restriction": null,
     "nonReactive": true,
-    "requiresLegion": true
+    "requiresLegion": true,
+    "abilityKeywords": ["Reaction"]
   }
 ]
 });

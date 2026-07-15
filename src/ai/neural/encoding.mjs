@@ -116,11 +116,18 @@ export function encodeAction(game, actorId, action) {
   return output;
 }
 
-export function encodeActionSet(game, actorId, actions) {
+export function encodeActionSet(game, actorId, actions, options = {}) {
   const selected = selectHierarchicalActions(actions, MAX_ACTIONS);
+  preserveRequiredActions(selected, options.requiredActions || [], MAX_ACTIONS);
   const output = new Float32Array(MAX_ACTIONS * ACTION_DIM);
   selected.forEach((action, index) => output.set(encodeAction(game, actorId, action), index * ACTION_DIM));
-  return { actions: selected, encoded: output, legalCount: selected.length };
+  return {
+    actions: selected,
+    encoded: output,
+    legalCount: selected.length,
+    originalLegalCount: actions.length,
+    truncated: actions.length > selected.length
+  };
 }
 
 export function selectHierarchicalActions(actions, limit = MAX_ACTIONS) {
@@ -155,6 +162,27 @@ export function actionStage(action) {
   if (["toggleMulliganCard", "confirmMulligan", "skipMulligan"].includes(action.kind)) return "mulligan";
   if (["moveUnit", "moveUnits"].includes(action.kind)) return "movement";
   return "main";
+}
+
+function preserveRequiredActions(selected, requiredActions, limit) {
+  for (const required of requiredActions) {
+    if (!required || selected.includes(required)) continue;
+    if (selected.length < limit) {
+      selected.push(required);
+      continue;
+    }
+    const requiredStage = actionStage(required);
+    let replaceIndex = -1;
+    for (let index = selected.length - 1; index >= 0; index -= 1) {
+      if (actionStage(selected[index]) === requiredStage && !requiredActions.includes(selected[index])) {
+        replaceIndex = index;
+        break;
+      }
+    }
+    if (replaceIndex < 0) replaceIndex = selected.findLastIndex((action) => !requiredActions.includes(action));
+    if (replaceIndex < 0) throw new Error("Required actions exceed the neural action capacity.");
+    selected[replaceIndex] = required;
+  }
 }
 
 export function encodeOpponentDeckTarget(game, viewerId) {

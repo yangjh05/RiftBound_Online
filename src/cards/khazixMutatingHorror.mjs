@@ -12,6 +12,7 @@ export default card({
         DOMAINS.CHAOS
       ],
       "tags": [
+        "Champion",
         "Kha'Zix",
         "The Void",
         "Reaction"
@@ -32,13 +33,10 @@ export default card({
       "text": "[Ambush] (You may play me as a [Reaction] to a battlefield where you have units.)\nWhen I attack or defend, if an enemy unit is alone here, give me +2 Might this turn and gain 2 XP.",
       "effects": [
         {
-          "timing": "keyword",
-          "kind": "ambush"
-        },
-        {
           "timing": "attackOrDefend",
           "kind": "ifEnemyAloneBuffAndXp",
           "amount": 2,
+          "temporary": true,
           "xp": 2
         }
       ]
