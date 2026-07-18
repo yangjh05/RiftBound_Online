@@ -37,6 +37,16 @@ const STRATEGIC_KINDS = new Set([
   "activateCard", "chooseEffectOption", "declineEffectChoice", "passShowdown", "endTurn"
 ]);
 
+// These fields describe the current decision for scoring/encoding, but they are
+// not part of the command that is executed by the engine. Keeping them in an
+// action identity makes an explicit { kind, optionId } choice look different
+// from the corresponding enumerated AI action.
+const ACTION_ANNOTATION_FIELDS = new Set([
+  "confirmTriggerOrder",
+  "triggerOrderSelected",
+  "triggerOrderOptional"
+]);
+
 export function activeActorId(game) {
   if (game.pendingChoice?.playerId) return game.pendingChoice.playerId;
   if (game.pendingPayment?.playerId) return game.pendingPayment.playerId;
@@ -426,7 +436,7 @@ export function isStrategicAction(action) {
 export function actionKey(action) {
   if (!action) return "none";
   const entries = Object.entries(action)
-    .filter(([, value]) => value !== undefined)
+    .filter(([key, value]) => value !== undefined && !ACTION_ANNOTATION_FIELDS.has(key))
     .sort(([left], [right]) => left.localeCompare(right));
   return JSON.stringify(Object.fromEntries(entries));
 }

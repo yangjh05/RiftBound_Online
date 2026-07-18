@@ -81,6 +81,62 @@ test("pending choice options and AI/UI command actions stay in parity", () => {
   assert.deepEqual(auditDecisionBoundary(game), []);
 });
 
+test("trigger-order annotations do not change explicit command identity", () => {
+  const game = createGame({ interactive: true, decisionSafety: "strict" });
+  const player = game.players[0];
+  game.phase = "action";
+  game.currentPlayerId = player.id;
+  const triggers = ["first", "second"].map((suffix) => ({
+    id: `trigger-order-${suffix}`,
+    kind: `test-${suffix}`,
+    playerId: player.id,
+    sourceCardId: player.legend.instanceId,
+    status: "finalized"
+  }));
+  const state = {
+    groups: [{ playerId: player.id, triggers, orderedTriggers: [] }],
+    groupIndex: 0,
+    mode: "queue",
+    continuation: null
+  };
+  game.pendingChoice = {
+    id: "trigger-order-command-parity",
+    playerId: player.id,
+    card: player.legend,
+    effect: "triggerOrder",
+    options: [
+      ...triggers.map((trigger) => ({
+        id: trigger.id,
+        cardId: trigger.sourceCardId,
+        optionalTrigger: false,
+        selected: false
+      })),
+      { id: "confirm-trigger-order", confirmTriggerOrder: true, disabled: true }
+    ],
+    data: { triggerOrderState: state, continuation: null },
+    finishSpell: false,
+    optional: false,
+    fromShowdownChain: false,
+    fromActionChain: false
+  };
+
+  const command = { kind: "chooseEffectOption", optionId: triggers[0].id };
+  const enumerated = enumerateLegalActions(game).find((action) => action.optionId === triggers[0].id);
+  assert.ok(enumerated);
+  assert.equal(enumerated.triggerOrderOptional, false);
+  assert.equal(actionKey(enumerated), actionKey(command));
+  assert.deepEqual(auditDecisionBoundary(game), []);
+  assert.equal(resolveLegalAction(game, command)?.optionId, command.optionId);
+
+  assert.equal(chooseEffectOption(game, triggers[0].id).ok, true);
+  assert.deepEqual(auditDecisionBoundary(game), []);
+  assert.equal(chooseEffectOption(game, triggers[1].id).ok, true);
+  const confirm = { kind: "chooseEffectOption", optionId: "confirm-trigger-order" };
+  assert.equal(game.pendingChoice.options.find((option) => option.confirmTriggerOrder)?.disabled, false);
+  assert.equal(resolveLegalAction(game, confirm)?.optionId, confirm.optionId);
+  assert.deepEqual(auditDecisionBoundary(game), []);
+});
+
 test("the shared command resolver never infers a player's target or effect choice", () => {
   const game = createGame({ interactive: true, decisionSafety: "strict" });
   const player = game.players[0];
