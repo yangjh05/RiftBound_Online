@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import { ACTION_DIM, CARD_BINS, MAX_ACTIONS, STATE_DIM } from "./encoding.mjs";
 import { NEURAL_HIDDEN_SIZE } from "./model.mjs";
 
-export function auditImitationDataset({ collected, split, deckIds, thresholds = {} }) {
-  const integrityErrors = validateTrajectories(collected.trajectories);
+export function auditImitationDataset({ collected, split, deckIds, thresholds = {}, engineFingerprint = null }) {
+  const integrityErrors = validateTrajectories(collected.trajectories, { engineFingerprint });
   const completedSummaries = collected.summaries.filter((summary) => summary.completed);
   const steps = collected.trajectories.flatMap((trajectory) => trajectory.steps);
   const attemptedGames = collected.attemptedGames || 0;
@@ -16,8 +16,11 @@ export function auditImitationDataset({ collected, split, deckIds, thresholds = 
     : 1;
   const trainingIds = new Set(split.training.map((trajectory) => trajectory.gameId));
   const validationIds = new Set(split.validation.map((trajectory) => trajectory.gameId));
+  const testIds = new Set((split.test || []).map((trajectory) => trajectory.gameId));
   const overlap = [...trainingIds].filter((gameId) => validationIds.has(gameId));
   if (overlap.length) integrityErrors.push(`Training and validation share ${overlap.length} game IDs.`);
+  const testOverlap = [...testIds].filter((gameId) => trainingIds.has(gameId) || validationIds.has(gameId));
+  if (testOverlap.length) integrityErrors.push(`Final test shares ${testOverlap.length} game IDs with training or validation.`);
 
   const metrics = {
     completedGames: collected.completedGames,
@@ -36,6 +39,8 @@ export function auditImitationDataset({ collected, split, deckIds, thresholds = 
     firstPlayerCounts,
     firstPlayerImbalance,
     actionKinds: countValues(steps.map((step) => step.selectedKind || "unknown")),
+    engineFingerprint,
+    decisionSafetyViolations: collected.summaries.reduce((sum, summary) => sum + (summary.decisionSafetyViolations?.length || 0), 0),
     fingerprint: fingerprintTrajectories(collected.trajectories)
   };
   const limits = {
@@ -47,8 +52,10 @@ export function auditImitationDataset({ collected, split, deckIds, thresholds = 
   };
   const checks = [
     check("trajectory-integrity", integrityErrors.length === 0, { errors: integrityErrors }),
+    check("decision-safety", metrics.decisionSafetyViolations === 0, { violations: metrics.decisionSafetyViolations }),
     check("target-games-completed", collected.completedGames === collected.targetGames, { actual: collected.completedGames, expected: collected.targetGames }),
     check("non-empty-split", split.training.length > 0 && split.validation.length > 0, { training: split.training.length, validation: split.validation.length }),
+    ...(split.test ? [check("non-empty-final-test", split.test.length > 0, { test: split.test.length })] : []),
     check("cap-rate", metrics.capRate <= limits.maxCapRate, { actual: metrics.capRate, maximum: limits.maxCapRate }),
     check("action-truncation-rate", metrics.truncationRate <= limits.maxTruncationRate, { actual: metrics.truncationRate, maximum: limits.maxTruncationRate }),
     check("deck-coverage", metrics.deckCoverage >= limits.minDeckCoverage, { actual: metrics.deckCoverage, minimum: limits.minDeckCoverage }),
@@ -92,7 +99,7 @@ export function assessBehaviorCloningQuality({ baseline, validation, training, v
   };
 }
 
-function validateTrajectories(trajectories) {
+export function validateTrajectories(trajectories, { engineFingerprint = null } = {}) {
   const errors = [];
   const keys = new Set();
   for (const trajectory of trajectories) {
@@ -101,6 +108,9 @@ function validateTrajectories(trajectories) {
     keys.add(key);
     if (!trajectory.completed) errors.push(`Trajectory ${key} is not complete.`);
     if (!trajectory.steps?.length) errors.push(`Trajectory ${key} has no steps.`);
+    if (engineFingerprint && trajectory.engineFingerprint !== engineFingerprint) errors.push(`Trajectory ${key} has a stale or missing engine fingerprint.`);
+    if (trajectory.decisionSafetyViolations?.length) errors.push(`Trajectory ${key} contains decision-safety violations.`);
+    if (engineFingerprint && trajectory.decisionSafetyVersion !== 1) errors.push(`Trajectory ${key} has no supported decision-safety version.`);
     for (let index = 0; index < (trajectory.steps || []).length; index += 1) {
       const step = trajectory.steps[index];
       const prefix = `${key} step ${index}`;
@@ -110,6 +120,8 @@ function validateTrajectories(trajectories) {
       if (!Number.isInteger(step.legalCount) || step.legalCount < 1 || step.legalCount > MAX_ACTIONS) errors.push(`${prefix} has invalid legal count.`);
       if (step.actions?.length !== step.legalCount * ACTION_DIM) errors.push(`${prefix} has invalid action encoding length.`);
       if (!Number.isInteger(step.selectedIndex) || step.selectedIndex < 0 || step.selectedIndex >= step.legalCount) errors.push(`${prefix} has invalid selected index.`);
+      if (engineFingerprint && (!step.selectedActionKey || !step.legalActionKeys?.includes(step.selectedActionKey))) errors.push(`${prefix} does not preserve its selected legal action.`);
+      if (engineFingerprint && step.legalActionKeys?.length !== step.originalLegalCount) errors.push(`${prefix} has an incomplete legal-action manifest.`);
       if (![step.state, step.actions, step.beliefTarget, step.initialMemory].every(finiteArray)) errors.push(`${prefix} contains a non-finite tensor value.`);
       if (![step.advantage, step.return, step.teacherConfidence].every(Number.isFinite)) errors.push(`${prefix} contains a non-finite scalar.`);
       if (errors.length >= 100) return errors;

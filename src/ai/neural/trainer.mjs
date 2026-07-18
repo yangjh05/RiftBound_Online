@@ -45,15 +45,27 @@ export function trainBehaviorCloning(model, trajectories, options = {}) {
     }
     options.onEpoch?.({ epoch: epoch + 1, epochs, metrics: aggregateMetrics(history.filter((item) => item.epoch === epoch + 1)) });
   }
-  model.gamesTrained = new Set(trajectories.map((trajectory) => trajectory.gameId)).size;
-  model.metadata = {
-    ...model.metadata,
-    algorithm: "recurrent-behavior-cloning-belief",
-    trainedAt: new Date().toISOString(),
-    epochs,
-    trajectories: trajectories.length,
-    ...aggregateMetrics(history)
-  };
+  if (!options.auxiliary) {
+    model.gamesTrained = new Set(trajectories.map((trajectory) => trajectory.gameId)).size;
+    model.metadata = {
+      ...model.metadata,
+      algorithm: "recurrent-behavior-cloning-belief",
+      trainedAt: new Date().toISOString(),
+      epochs,
+      trajectories: trajectories.length,
+      ...aggregateMetrics(history)
+    };
+  } else {
+    model.metadata = {
+      ...model.metadata,
+      humanAuxiliary: {
+        trainedAt: new Date().toISOString(),
+        epochs,
+        trajectories: trajectories.length,
+        ...aggregateMetrics(history)
+      }
+    };
+  }
   return { model, optimizer, history };
 }
 

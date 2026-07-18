@@ -5,7 +5,9 @@ import {
   chooseEffectOption,
   createGame,
   currentMight,
+  declineEffectChoice,
   confirmPayment,
+  hideCard,
   moveUnits,
   passShowdown,
   playCard,
@@ -49,6 +51,13 @@ const PROBE_EFFECT_COVERAGE = Object.freeze({
     "cardPlayed:highCostSpellDraw",
     "spellPlayed:selfBuff",
     "spell:counterSpell"
+  ],
+  PRINTED_MULTI_PART_EFFECTS: [
+    "activated:recycleCardsFromTrashes",
+    "onPlay:buffSelfThenOtherFriendlyHere",
+    "static:entersExhausted",
+    "static:hideWithEnergyInsteadOfPower",
+    "static:opponentsCannotReadyByEffects"
   ]
 });
 
@@ -115,6 +124,16 @@ export async function runCardRuleBehaviorProbes() {
       "Buff an exhausted friendly unit with Arena Bar, then pay Body and exhaust Mistfall to ready it."),
     probe("LONELY_PORO_DEATHKNELL_ALONE", { killed: true, drawn: 1 }, lonelyPoroDeathknellAlone,
       "Kill a Lonely Poro while it is the only friendly unit at its location, then resolve its Deathknell draw."),
+    probe("PRINTED_MULTI_PART_EFFECTS", {
+      ballistaExhausted: true,
+      guardianBuffs: [1, 1],
+      readyPrevented: true,
+      hideEnergyCost: 1,
+      forgeKilled: true,
+      enemyCardRecycled: true,
+      forgeStoppedEarly: true
+    }, printedMultiPartEffects,
+    "Exercise every formerly omitted clause on Iron Ballista, Peak Guardian, Mageseeker Warden, Teemo, and Forge of the Future."),
     probe("PLAYED_EVENT_REQUIRES_RESOLUTION", {
       pending: { count: 0, luxMight: 0, ravenMight: 0, drawn: 0 },
       countered: { count: 0, luxMight: 0, ravenMight: 0, drawn: 0, chainCount: 0, inOwnerTrash: true },
@@ -588,6 +607,62 @@ function lonelyPoroDeathknellAlone() {
   };
 }
 
+function printedMultiPartEffects() {
+  const entry = ruleGame();
+  entry.game.interactive = false;
+  const field = battlefield("probe-multi-entry-field", entry.player.id, [plainUnit(entry.player.id, "probe-multi-ally", 2)]);
+  entry.game.battlefields = [field];
+  const ally = field.units[0];
+  const guardian = instance({ ...cards.peakGuardian, energy: 0, power: [] }, entry.player.id, "probe-multi-guardian");
+  const ballista = instance({ ...cards.ironBallista, energy: 0, power: [] }, entry.player.id, "probe-multi-ballista");
+  entry.player.hand = [guardian, ballista];
+  playCard(entry.game, guardian.instanceId, field.instanceId);
+  playCard(entry.game, ballista.instanceId, "base");
+
+  const readyLock = ruleGame();
+  const warden = instance(cards.mageseekerWarden, readyLock.opponent.id, "probe-multi-warden");
+  const readyTarget = plainUnit(readyLock.player.id, "probe-multi-ready-target", 2);
+  readyTarget.exhausted = true;
+  readyLock.game.battlefields = [battlefield("probe-multi-warden-field", readyLock.opponent.id, [warden])];
+  readyLock.player.base = [readyTarget];
+  const readySpell = instance({
+    ...cards.wallop,
+    effects: [{ timing: "spell", kind: "readyUnitAny" }]
+  }, readyLock.player.id, "probe-multi-ready-spell");
+  resolveEffect(readyLock.game, readyLock.player, readySpell);
+  chooseEffectOption(readyLock.game, readyTarget.instanceId);
+
+  const hiding = ruleGame();
+  const hideField = battlefield("probe-multi-hide-field", hiding.player.id, []);
+  hiding.game.battlefields = [hideField];
+  hiding.player.legend = instance(cards.teemoSwiftScout, hiding.player.id, "probe-multi-teemo");
+  const hiddenCard = instance({ ...cards.backOff, energy: 0, power: [] }, hiding.player.id, "probe-multi-hidden-card");
+  hiding.player.hand = [hiddenCard];
+  hideCard(hiding.game, hiddenCard.instanceId, hideField.instanceId);
+  chooseEffectOption(hiding.game, "energy");
+
+  const recycling = ruleGame();
+  const forge = instance(cards.forgeOfTheFuture, recycling.player.id, "probe-multi-forge");
+  const ownTrash = plainUnit(recycling.player.id, "probe-multi-own-trash", 1);
+  const enemyTrash = plainUnit(recycling.opponent.id, "probe-multi-enemy-trash", 1);
+  recycling.player.base = [forge];
+  recycling.player.trash = [ownTrash];
+  recycling.opponent.trash = [enemyTrash];
+  activateCard(recycling.game, forge.instanceId);
+  chooseEffectOption(recycling.game, enemyTrash.instanceId);
+  const stopped = declineEffectChoice(recycling.game);
+
+  return {
+    ballistaExhausted: ballista.exhausted,
+    guardianBuffs: [guardian.buffs || 0, ally.buffs || 0],
+    readyPrevented: readyTarget.exhausted,
+    hideEnergyCost: hiding.game.pendingPayment?.energyCost || 0,
+    forgeKilled: recycling.player.trash.some((card) => card.instanceId === forge.instanceId),
+    enemyCardRecycled: recycling.opponent.mainDeck.some((card) => card.instanceId === enemyTrash.instanceId),
+    forgeStoppedEarly: stopped.ok && recycling.player.trash.some((card) => card.instanceId === ownTrash.instanceId)
+  };
+}
+
 function playedEventRequiresResolution() {
   const setup = (suffix) => {
     const { game, player, opponent } = ruleGame();
@@ -637,7 +712,10 @@ function playedEventRequiresResolution() {
   let steps = 0;
   while (steps < 30) {
     if (resolvedGame.game.pendingChoice?.effect === "triggerOrder") {
-      chooseEffectOption(resolvedGame.game, resolvedGame.game.pendingChoice.options[0].id);
+      const nextMandatory = resolvedGame.game.pendingChoice.options
+        .find((option) => !option.confirmTriggerOrder && !option.optionalTrigger && !option.selected);
+      const confirmOrder = resolvedGame.game.pendingChoice.options.find((option) => option.confirmTriggerOrder);
+      chooseEffectOption(resolvedGame.game, (nextMandatory || confirmOrder)?.id);
       steps += 1;
       continue;
     }
@@ -670,7 +748,7 @@ function ruleGame() {
     candidate.runes = [];
     candidate.trash = [];
     candidate.banished = [];
-    candidate.turnScoredBattlefields = new Set();
+    candidate.turnScoredBattlefields = [];
   }
   return { game, player, opponent };
 }

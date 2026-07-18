@@ -17,6 +17,7 @@ export default card({
   effects: [
       {
           "timing": "activated",
+          "exhaust": true,
           "kind": "modifyMight",
           "target": "unit",
           "amount": -1,

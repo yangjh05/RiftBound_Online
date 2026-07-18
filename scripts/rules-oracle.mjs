@@ -599,7 +599,7 @@ function checkChainState(game, violations) {
       pendingItemIds: pending.map((item) => item.id || item.card?.instanceId || null)
     });
   }
-  if (items.length && !pending.length && (activeChain.consecutivePasses || 0) === 0) {
+  if (items.length && !pending.length && !unresolvedTask && (activeChain.consecutivePasses || 0) === 0) {
     const newestControllerId = items.at(-1).playerId;
     if (newestControllerId && activeChain.priorityPlayerId !== newestControllerId) {
       addViolation(violations, "chain-state", "The newest finalized Chain Item's controller did not receive Priority.", {
@@ -909,27 +909,39 @@ function checkCombatDamageAssignmentPriority(game, violations) {
   if (!battlefield) return;
   const remaining = choice.data?.remaining || 0;
   const targetRole = choice.data?.role === "attacker" ? "defender" : "attacker";
+  const assignedByTarget = new Map();
+  for (const assignment of choice.data?.assignments || []) {
+    assignedByTarget.set(
+      assignment.targetId,
+      (assignedByTarget.get(assignment.targetId) || 0) + (assignment.amount || 0)
+    );
+  }
   const candidates = (battlefield.units || [])
     .filter((unit) => unit.controllerId === choice.data?.targetPlayerId)
     .map((unit) => {
+      const assigned = assignedByTarget.get(unit.instanceId) || 0;
       const damagePrevented = hasEffect(unit, "static", "preventDamageAfterSecondMove") && (unit.movesThisTurn || 0) >= 2;
       const lethalRemaining = damagePrevented
         ? Number.POSITIVE_INFINITY
-        : Math.max(0, referenceCombatMight(game, battlefield, unit, targetRole) - (unit.damage || 0));
+        : Math.max(0, Math.max(1, referenceCombatMight(game, battlefield, unit, targetRole))
+          - (unit.damage || 0)
+          - assigned);
       return {
         unit,
         damagePrevented,
+        lethalAssigned: !damagePrevented
+          && (unit.damage || 0) + assigned > 0
+          && lethalRemaining === 0,
         lethalRemaining,
         lethalNow: !damagePrevented && lethalRemaining > 0 && lethalRemaining <= remaining,
-        first: !damagePrevented && hasKeywordReference(unit, "Tank"),
+        first: !damagePrevented && hasKeywordReference(game, unit, "Tank", { kind: "battlefieldUnit", battlefield }),
         last: !damagePrevented && (
-          hasKeywordReference(unit, "Backline")
+          hasKeywordReference(game, unit, "Backline", { kind: "battlefieldUnit", battlefield })
           || hasEffect(unit, "static", "combatDamageAssignmentLast")
         )
       };
     });
-  let active = candidates.filter((candidate) => candidate.lethalRemaining > 0);
-  if (!active.length) active = candidates;
+  const active = candidates.filter((candidate) => !candidate.lethalAssigned);
   const mandatoryFirst = active.filter((candidate) => candidate.first && !candidate.last);
   const conflicting = active.filter((candidate) => candidate.first && candidate.last);
   const ordinary = active.filter((candidate) => !candidate.first && !candidate.last);
@@ -944,7 +956,18 @@ function checkCombatDamageAssignmentPriority(game, violations) {
   addViolation(violations, "combat-damage-assignment-priority", "The combat damage choice exposes targets outside the legal first/last assignment tier.", {
     expected: [...expected],
     offered: [...offered],
-    remaining
+    remaining,
+    targetInfos: choice.data?.targetInfos,
+    candidates: candidates.map((candidate) => ({
+      cardId: candidate.unit.instanceId,
+      name: candidate.unit.name,
+      damage: candidate.unit.damage || 0,
+      assigned: assignedByTarget.get(candidate.unit.instanceId) || 0,
+      might: referenceCombatMight(game, battlefield, candidate.unit, targetRole),
+      lethalRemaining: candidate.lethalRemaining,
+      first: candidate.first,
+      last: candidate.last
+    }))
   });
 }
 
@@ -1010,13 +1033,21 @@ function checkFacedownZones(game, violations) {
 
 function checkLethalUnits(game, violations) {
   for (const { unit, zone } of boardUnits(game)) {
-    const might = referenceCurrentMight(game, unit, zone);
+    const might = unit.combatRole && zone.battlefield
+      ? referenceCombatMight(game, zone.battlefield, unit, unit.combatRole)
+      : referenceCurrentMight(game, unit, zone);
     if (!(unit.damage > 0 && unit.damage >= might)) continue;
     addViolation(violations, "lethal-unit", `${unit.name} (${unit.instanceId}) is still in ${zone.kind} with ${unit.damage} damage and ${might} current Might.`, {
       instanceId: unit.instanceId,
       damage: unit.damage,
       might,
-      zone: zone.kind
+      zone: zone.kind,
+      printedMight: unit.might || 0,
+      mightModifier: unit.mightModifier || 0,
+      temporaryMight: unit.temporaryMight || 0,
+      assignedMight: unit.assignedMight,
+      buffs: unit.buffs || 0,
+      combatRole: unit.combatRole || null
     });
   }
 }
@@ -1051,7 +1082,7 @@ function checkOppositionFlow(game, violations) {
   }
 }
 
-function referenceCurrentMight(game, unit, zone) {
+function referenceCurrentMight(game, unit, zone, options = {}) {
   const controller = (game.players || []).find((player) => player.id === unit.controllerId);
   const nearby = zone.kind === "battlefieldUnit"
     ? zone.battlefield.units
@@ -1070,6 +1101,7 @@ function referenceCurrentMight(game, unit, zone) {
     amount += nearby.filter((candidate) => candidate.controllerId === unit.controllerId && (candidate.buffs || 0) > 0).length
       * effectAmount(unit, "static", "selfMightByBuffedFriendlyHere", 1);
   }
+  let minimum = Number.NEGATIVE_INFINITY;
   for (const source of nearby) {
     if (source.instanceId === unit.instanceId) continue;
     if (source.controllerId === unit.controllerId) {
@@ -1077,20 +1109,26 @@ function referenceCurrentMight(game, unit, zone) {
       if ((unit.buffs || 0) > 0) amount += effectAmount(source, "static", "otherBuffedFriendlyHereMight", 0);
     } else if (unit.stunned) {
       amount += effectAmount(source, "static", "stunnedEnemyHereMight", 0);
+      for (const effect of effects(source, "static", "stunnedEnemyHereMight")) {
+        if (Number.isFinite(effect.minMight)) minimum = Math.max(minimum, effect.minMight);
+      }
     }
   }
   if (zone.battlefield) amount += effectAmount(zone.battlefield, "static", "unitsHereMight", 0);
-  return Math.max(0, amount);
+  if (options.components) return { amount, minimum };
+  return Math.max(minimum, amount);
 }
 
 function referenceCombatMight(game, battlefield, unit, role) {
   const zone = { kind: "battlefieldUnit", battlefield };
-  let amount = referenceCurrentMight(game, unit, zone);
-  if (role === "attacker" && hasKeywordReference(unit, "Assault")) {
-    amount += referenceKeywordAmount(unit, "Assault", 1);
+  const base = referenceCurrentMight(game, unit, zone, { components: true });
+  let amount = base.amount;
+  if (role === "attacker" && hasKeywordReference(game, unit, "Assault", zone)) {
+    amount += Math.max(1, referenceKeywordAmount(unit, "Assault", 1));
   }
-  if (role === "defender" && (hasKeywordReference(unit, "Shield") || hasEffect(unit, "static", "shield"))) {
-    amount += referenceKeywordAmount(unit, "Shield", 1)
+  const hasShieldKeyword = hasKeywordReference(game, unit, "Shield", zone);
+  if (role === "defender" && (hasShieldKeyword || hasEffect(unit, "static", "shield"))) {
+    amount += (hasShieldKeyword ? Math.max(1, referenceKeywordAmount(unit, "Shield", 1)) : 0)
       + effectAmount(unit, "static", "shield", 0)
       + (unit.temporaryKeywordAmounts?.shield == null ? (unit.temporaryShieldAmount || 0) : 0);
   }
@@ -1100,13 +1138,25 @@ function referenceCombatMight(game, battlefield, unit, role) {
     const controller = (game.players || []).find((player) => player.id === unit.controllerId);
     if (role === "defender") amount += effectAmount(controller?.legend, "static", "defendAloneMight", 0);
   }
-  return Math.max(0, amount);
+  return Math.max(base.minimum, amount);
 }
 
-function hasKeywordReference(card, keyword) {
+function hasKeywordReference(game, card, keyword, zone) {
   const expected = keyword.toLowerCase();
-  return [...(card?.keywords || []), ...(card?.temporaryKeywords || [])]
-    .some((candidate) => String(candidate).toLowerCase() === expected);
+  if ([...(card?.keywords || []), ...(card?.temporaryKeywords || [])]
+    .some((candidate) => String(candidate).toLowerCase() === expected)) return true;
+  const controller = (game.players || []).find((player) => player.id === card?.controllerId);
+  for (const effect of card?.effects || []) {
+    const grantsKeyword = (effect.keywords || []).some((candidate) => String(candidate).toLowerCase() === expected);
+    if (!grantsKeyword) continue;
+    if (effect.timing === "levelStatic" && effect.kind === "gainKeywords" && (controller?.xp || 0) >= (effect.level || 0)) return true;
+    if (effect.timing !== "static") continue;
+    if (effect.kind === "gainKeywordsWhileBuffed" && (card.buffs || 0) > 0) return true;
+    if (effect.kind === "gainKeywordsIfDiscardedThisTurn" && (controller?.discardedCardsThisTurn || 0) > 0) return true;
+    if (effect.kind === "gainKeywordsWhileMighty"
+      && referenceCurrentMight(game, card, zone) >= (effect.threshold || 5)) return true;
+  }
+  return false;
 }
 
 function referenceKeywordAmount(card, keyword, fallback = 1) {

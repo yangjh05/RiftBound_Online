@@ -14,6 +14,7 @@ const result = collectBaselineImitation({
   metaFraction: workerData.metaFraction,
   gameOffset: workerData.gameOffset,
   seed: workerData.seed,
+  engineFingerprint: workerData.engineFingerprint,
   random: seededRandom(workerData.seed),
   onProgress(progress) {
     if (progress.completed === progress.targetGames || progress.attempted % 4 === 0) {

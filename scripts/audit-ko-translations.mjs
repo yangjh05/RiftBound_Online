@@ -6,6 +6,15 @@ const rows = Object.values(cards).map((card) => ({
   translation: CARD_KO_TRANSLATIONS[card.cardNumber] || CARD_KO_TRANSLATIONS[card.collectorNumber]
 }));
 
+const domainNames = {
+  Body: "신체",
+  Calm: "인내",
+  Chaos: "혼돈",
+  Fury: "격노",
+  Mind: "정신",
+  Order: "질서"
+};
+
 const checks = {
   englishText: /\b(?:the|this|when|while|choose|target|unit|spell|gear|draw|discard|damage|might|power|play|ready|exhaust|friendly|enemy|battlefield|trash|rune|energy)\b/i,
   forbidden: /내가|소환|내려놓|파괴(?:합니다|하세요|한다|하고|한|된|되)|(?:^|[\s.])(?:하라|하여라)(?:[.!?\s]|$)|휴지통|쓰레기통|\[은신(?:\s|\])|\[방벽(?:\s|\])|\[사냥(?:\s|\])/u,
@@ -68,8 +77,15 @@ findings.awkward = rows
   }));
 
 findings.missingMarker = rows
-  .filter(({ card, translation }) => card.text && !translation?.koText?.startsWith("공식 번역 미확인\n"))
+  .filter(({ card, translation }) => card.text && !translation?.officialTextSource && !translation?.koText?.startsWith("공식 번역 미확인\n"))
   .map(({ card }) => card.cardNumber);
+
+findings.officiallyConfirmed = rows
+  .filter(({ translation }) => translation?.officialTextSource)
+  .map(({ card, translation }) => ({
+    number: card.cardNumber,
+    source: translation.officialTextSource
+  }));
 
 findings.englishName = rows
   .filter(({ translation }) => translation && /[A-Za-z]{3,}/.test(translation.koName))
@@ -92,6 +108,30 @@ findings.englishFragments = rows
   .map(({ card, translation }) => ({
     number: card.cardNumber,
     koreanText: translation.koText
+  }));
+
+findings.resourceTermConfusion = rows
+  .filter(({ translation }) => /룬으로 반응|룬(?:\s*\d+개)?를\s*지불|룬 대신|룬 힘|자원\s*\d+/u.test(translation?.koText || ""))
+  .map(({ card, translation }) => ({
+    number: card.cardNumber,
+    koreanText: translation.koText
+  }));
+
+findings.resourceHeaderMismatch = rows
+  .filter(({ card, translation }) => {
+    if (card.energy > 0 && !translation?.koHeader?.includes(`${card.energy} 에너지`)) return true;
+    return (card.power || []).some((cost) => {
+      const domains = cost.domain === "Any" ? card.domains : [cost.domain];
+      const label = domains.map((domain) => domainNames[domain]).join("/");
+      return !translation.koHeader.includes(`${cost.amount} ${label} 힘`);
+    });
+  })
+  .map(({ card, translation }) => ({
+    number: card.cardNumber,
+    energy: card.energy,
+    power: card.power,
+    domains: card.domains,
+    koreanHeader: translation?.koHeader
   }));
 
 console.log(JSON.stringify(findings, null, 2));

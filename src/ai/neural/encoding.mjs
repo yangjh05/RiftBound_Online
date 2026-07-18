@@ -11,9 +11,22 @@ const CARD_BY_NUMBER = new Map(Object.values(cards).map((card) => [card.cardNumb
 // Kept as a compatibility alias for archived trajectory readers. These are exact
 // vocabulary slots, not hash bins.
 export const CARD_BINS = CARD_VOCAB_SIZE;
-export const STATE_SCALARS = 32;
-export const STATE_DIM = STATE_SCALARS + CARD_BINS * 4;
-export const ACTION_DIM = 128;
+export const STATE_SCALARS = 40;
+export const MAX_BATTLEFIELDS = 3;
+export const MAX_FIELD_UNITS = 12;
+export const MAX_BASE_UNITS = 8;
+export const UNIT_FEATURES = 36;
+export const BATTLEFIELD_FEATURES = 24;
+export const CONTEXT_FEATURES = 64;
+const CARD_ZONE_FEATURES = CARD_BINS * 4;
+const BATTLEFIELD_STATE_FEATURES = MAX_BATTLEFIELDS * (BATTLEFIELD_FEATURES + MAX_FIELD_UNITS * UNIT_FEATURES);
+const BASE_STATE_FEATURES = 2 * MAX_BASE_UNITS * UNIT_FEATURES;
+export const STATE_DIM = STATE_SCALARS + CARD_ZONE_FEATURES + BATTLEFIELD_STATE_FEATURES + BASE_STATE_FEATURES + CONTEXT_FEATURES;
+export const ACTION_SEMANTIC_DIM = 256;
+// The suffix is reserved for collision disambiguation inside the current legal
+// action set. It guarantees that two legal actions never reach the model as the
+// same vector, even when engine-generated identifiers happen to hash alike.
+export const ACTION_DIM = ACTION_SEMANTIC_DIM + 192;
 export const MAX_ACTIONS = 192;
 export const MAX_SEQUENCE = 128;
 
@@ -27,6 +40,10 @@ const ACTION_KINDS = Object.freeze([
 ]);
 
 const ACTION_KIND_INDEX = new Map(ACTION_KINDS.map((kind, index) => [kind, index]));
+// Preserve every existing feature index for checkpoint compatibility. New action
+// kinds use previously unused feature slots instead of shifting the legacy map.
+ACTION_KIND_INDEX.set("togglePaymentPoolPower", 67);
+ACTION_KIND_INDEX.set("rollFirstPlayer", 68);
 
 export function encodeState(game, viewerId) {
   const observation = observeGame(game, viewerId);
@@ -68,7 +85,15 @@ export function encodeState(game, viewerId) {
     theirs.banished.length / 20,
     observation.battlefields.length / 3,
     mine.score >= observation.victoryScore - 2 ? 1 : 0,
-    theirs.score >= observation.victoryScore - 2 ? 1 : 0
+    theirs.score >= observation.victoryScore - 2 ? 1 : 0,
+    Math.min(1, (game.pendingChoice?.options?.length || 0) / 12),
+    game.pendingChoice?.playerId === viewerId ? 1 : 0,
+    game.pendingChoice?.optional ? 1 : 0,
+    game.pendingPayment?.playerId === viewerId ? 1 : 0,
+    Math.min(1, (game.pendingPayment?.energyCost || 0) / 12),
+    Math.min(1, totalPowerCost(game.pendingPayment) / 12),
+    Math.min(1, (game.actionChain?.chain?.length || 0) / 8),
+    Math.min(1, (game.showdown?.chain?.length || 0) / 8)
   ];
   output.set(scalars.slice(0, STATE_SCALARS));
   const sideboardContext = game.aiSideboardContext?.[viewerId];
@@ -76,6 +101,24 @@ export function encodeState(game, viewerId) {
   encodeCards(output, STATE_SCALARS + CARD_BINS, sideboardContext?.sideboard || [...mine.base, ...myBoard], 1 / 3);
   encodeCards(output, STATE_SCALARS + CARD_BINS * 2, sideboardContext?.metaCards || [...theirs.base, ...opponentBoard, ...theirs.trash, ...theirs.banished], 1 / 3);
   encodeCards(output, STATE_SCALARS + CARD_BINS * 3, [...mine.trash, ...mine.banished], 1 / 3);
+  let relationalOffset = STATE_SCALARS + CARD_ZONE_FEATURES;
+  for (let fieldIndex = 0; fieldIndex < MAX_BATTLEFIELDS; fieldIndex += 1) {
+    const field = observation.battlefields[fieldIndex];
+    encodeBattlefield(output, relationalOffset, field, observation, viewerId);
+    relationalOffset += BATTLEFIELD_FEATURES;
+    const units = stableCards(field?.units || []);
+    for (let unitIndex = 0; unitIndex < MAX_FIELD_UNITS; unitIndex += 1) {
+      encodeUnit(output, relationalOffset, units[unitIndex], viewerId);
+      relationalOffset += UNIT_FEATURES;
+    }
+  }
+  for (const units of [stableCards(mine.base), stableCards(theirs.base)]) {
+    for (let unitIndex = 0; unitIndex < MAX_BASE_UNITS; unitIndex += 1) {
+      encodeUnit(output, relationalOffset, units[unitIndex], viewerId);
+      relationalOffset += UNIT_FEATURES;
+    }
+  }
+  encodeDecisionContext(output, relationalOffset, game, observation, viewerId);
   return output;
 }
 
@@ -87,6 +130,14 @@ export function encodeAction(game, actorId, action) {
   const secondaryCard = cardByNumber(action.inCardNumber);
   encodeIndexBits(output, 24, cardIndex(card?.cardNumber));
   encodeIndexBits(output, 34, cardIndex(secondaryCard?.cardNumber));
+  const ability = splitAbilityId(action.abilityId);
+  if (ability.localId) {
+    encodeIndexBits(output, 44, stableHash(ability.localId));
+    output[54] = 1;
+    output[55] = /energy/iu.test(ability.localId) ? 1 : 0;
+    output[56] = /power/iu.test(ability.localId) ? 1 : 0;
+    encodeIndexBits(output, 57, cardIndex(findCard(game, ability.sourceId)?.cardNumber));
+  }
   output[86] = action.playerId === actorId ? 1 : 0;
   output[87] = action.playerId && action.playerId !== actorId ? 1 : 0;
   const destinationId = action.destination || action.destinationId;
@@ -113,6 +164,7 @@ export function encodeAction(game, actorId, action) {
   output[125] = game.currentPlayerId === actorId ? 1 : 0;
   output[126] = action.kind === "endTurn" || action.kind === "passShowdown" ? 1 : 0;
   output[127] = 1;
+  encodeActionSemantics(output, game, actorId, action, card);
   return output;
 }
 
@@ -120,7 +172,20 @@ export function encodeActionSet(game, actorId, actions, options = {}) {
   const selected = selectHierarchicalActions(actions, MAX_ACTIONS);
   preserveRequiredActions(selected, options.requiredActions || [], MAX_ACTIONS);
   const output = new Float32Array(MAX_ACTIONS * ACTION_DIM);
-  selected.forEach((action, index) => output.set(encodeAction(game, actorId, action), index * ACTION_DIM));
+  const encoded = selected.map((action) => encodeAction(game, actorId, action));
+  const collisions = new Map();
+  encoded.forEach((vector, index) => {
+    const signature = Array.from(vector.subarray(0, ACTION_SEMANTIC_DIM)).join(",");
+    const group = collisions.get(signature) || [];
+    group.push(index);
+    collisions.set(signature, group);
+  });
+  for (const group of collisions.values()) {
+    if (group.length < 2) continue;
+    const ordered = [...group].sort((left, right) => semanticActionDescriptor(selected[left]).localeCompare(semanticActionDescriptor(selected[right])) || left - right);
+    ordered.forEach((actionIndex, collisionIndex) => { encoded[actionIndex][ACTION_SEMANTIC_DIM + collisionIndex] = 1; });
+  }
+  encoded.forEach((vector, index) => output.set(vector, index * ACTION_DIM));
   return {
     actions: selected,
     encoded: output,
@@ -155,7 +220,7 @@ export function selectHierarchicalActions(actions, limit = MAX_ACTIONS) {
 }
 
 export function actionStage(action) {
-  if (["togglePaymentRune", "togglePaymentPoolEnergy", "toggleOptionalPaymentEffect", "confirmPayment", "cancelPayment"].includes(action.kind)) return "payment";
+  if (["togglePaymentRune", "togglePaymentPoolEnergy", "togglePaymentPoolPower", "toggleOptionalPaymentEffect", "confirmPayment", "cancelPayment"].includes(action.kind)) return "payment";
   if (["chooseEffectOption", "declineEffectChoice"].includes(action.kind)) return "choice";
   if (["passShowdown", "activateCard"].includes(action.kind)) return "reaction";
   if (["sideboardSwap", "sideboardDone", "chooseFirstPlayer"].includes(action.kind)) return "match";
@@ -216,14 +281,145 @@ function encodeCards(output, offset, cards, scale) {
   for (const card of cards || []) if (card?.cardNumber) output[offset + cardBin(card.cardNumber)] += scale;
 }
 
+function encodeBattlefield(output, offset, field, observation, viewerId) {
+  if (!field) return;
+  const opponentId = observation.opponent.id;
+  const mine = field.units.filter((unit) => unit.controllerId === viewerId);
+  const theirs = field.units.filter((unit) => unit.controllerId === opponentId);
+  output[offset] = 1;
+  output[offset + 1] = field.controlledBy === viewerId ? 1 : 0;
+  output[offset + 2] = field.controlledBy === opponentId ? 1 : 0;
+  output[offset + 3] = field.controlledBy ? 0 : 1;
+  output[offset + 4] = observation.showdown?.battlefieldId === field.id ? 1 : 0;
+  output[offset + 5] = Math.min(1, field.hidden.filter((item) => item.ownerId === viewerId).length / 4);
+  output[offset + 6] = Math.min(1, field.hidden.filter((item) => item.ownerId !== viewerId).length / 4);
+  encodeIndexBits(output, offset + 7, cardIndex(field.cardNumber));
+  output[offset + 17] = Math.min(1, mine.length / MAX_FIELD_UNITS);
+  output[offset + 18] = Math.min(1, theirs.length / MAX_FIELD_UNITS);
+  output[offset + 19] = sumMight(mine) / 40;
+  output[offset + 20] = sumMight(theirs) / 40;
+  output[offset + 21] = Math.min(1, field.units.reduce((sum, unit) => sum + (unit.damage || 0), 0) / 30);
+  output[offset + 22] = Math.min(1, field.units.filter((unit) => unit.exhausted).length / MAX_FIELD_UNITS);
+  output[offset + 23] = Math.min(1, field.units.length / MAX_FIELD_UNITS);
+}
+
+function encodeUnit(output, offset, unit, viewerId) {
+  if (!unit) return;
+  output[offset] = 1;
+  output[offset + 1] = unit.controllerId === viewerId ? 1 : 0;
+  output[offset + 2] = unit.controllerId && unit.controllerId !== viewerId ? 1 : 0;
+  output[offset + 3] = unit.ownerId === viewerId ? 1 : 0;
+  output[offset + 4] = unit.exhausted ? 1 : 0;
+  output[offset + 5] = Math.min(1, (unit.might || 0) / 12);
+  output[offset + 6] = Math.min(1, (unit.damage || 0) / 12);
+  output[offset + 7] = clampSigned((unit.buffs || 0) / 8);
+  output[offset + 8] = clampSigned((unit.mightModifier || 0) / 8);
+  output[offset + 9] = Math.min(1, (unit.energy || 0) / 12);
+  encodeIndexBits(output, offset + 10, cardIndex(unit.cardNumber));
+  output[offset + 20] = Math.min(1, (unit.tags?.length || 0) / 6);
+  output[offset + 21] = Math.min(1, (unit.keywords?.length || 0) / 6);
+  output[offset + 22] = unit.stunned ? 1 : 0;
+  output[offset + 23] = Math.min(1, (unit.attachments?.length || 0) / 3);
+  encodeIndexBits(output, offset + 24, cardIndex(unit.attachments?.[0]?.cardNumber));
+  output[offset + 34] = Math.min(1, (unit.attachments?.length || 0) / 3);
+  output[offset + 35] = hasStatus(unit, /barrier|shield|armor/iu) ? 1 : 0;
+}
+
+function encodeDecisionContext(output, offset, game, observation, viewerId) {
+  const tokens = [
+    `phase:${observation.phase}`,
+    `choice:${game.pendingChoice?.effect || "none"}`,
+    `choice-source:${publicSourceNumber(game, game.pendingChoice?.sourceId)}`,
+    `payment-kind:${game.pendingPayment?.kind || game.pendingPayment?.purpose || "none"}`,
+    `payment-source:${publicSourceNumber(game, game.pendingPayment?.cardId || game.pendingPayment?.sourceId)}`,
+    `chain:${game.actionChain?.chain?.at(-1)?.kind || game.actionChain?.chain?.at(-1)?.effect || "none"}`,
+    `showdown:${observation.showdown ? "active" : "none"}`,
+    `showdown-attacker:${observation.showdown?.attackerId === viewerId ? "self" : "opponent"}`,
+    `priority:${observation.focusPlayerId === viewerId ? "self" : "opponent"}`
+  ];
+  for (const token of tokens) output[offset + stableHash(token) % CONTEXT_FEATURES] = Math.min(1, output[offset + stableHash(token) % CONTEXT_FEATURES] + 0.5);
+}
+
+function encodeActionSemantics(output, game, actorId, action, primaryCard) {
+  const option = game.pendingChoice?.options?.find((candidate) => String(candidate?.id ?? candidate?.value ?? candidate) === String(action.optionId));
+  const optionCard = findCard(game, option?.cardId || option?.unitId || action.optionId);
+  const battlefieldId = action.battlefieldId || action.destinationId || action.destination;
+  const battlefieldIndex = battlefieldId === "base" ? -1 : game.battlefields.findIndex((field) => field.instanceId === battlefieldId);
+  const battlefield = battlefieldIndex >= 0 ? game.battlefields[battlefieldIndex] : null;
+  const battlefieldCard = battlefield || findCard(game, battlefieldId);
+  const rune = findCard(game, action.runeId);
+  const player = game.players.find((candidate) => candidate.id === actorId);
+  const resource = player?.runePool?.energy?.find((candidate) => candidate.id === action.energyId)
+    || player?.runePool?.power?.find((candidate) => candidate.id === action.powerId);
+  const effect = (game.pendingPayment?.optionalPowerEffects || game.pendingPayment?.optionalEffects || []).find((candidate) => candidate.id === action.effectId);
+  encodeIndexBits(output, 128, cardIndex(optionCard?.cardNumber));
+  encodeIndexBits(output, 138, cardIndex(battlefieldCard?.cardNumber));
+  if (battlefieldId === "base") output[148] = 1;
+  else if (battlefieldIndex >= 0 && battlefieldIndex < MAX_BATTLEFIELDS) output[149 + battlefieldIndex] = 1;
+  encodeIndexBits(output, 152, cardIndex(rune?.cardNumber || primaryCard?.cardNumber));
+  const domain = resource?.domain || rune?.domain || effect?.domain;
+  const domains = ["Body", "Calm", "Chaos", "Fury", "Mind", "Order"];
+  const domainIndex = domains.findIndex((candidate) => String(domain).toLowerCase().includes(candidate.toLowerCase()));
+  if (domainIndex >= 0) output[162 + domainIndex] = 1;
+  output[168] = Math.min(1, Number(option?.amount || option?.count || 0) / 12);
+  output[169] = option?.selected || action.triggerOrderSelected ? 1 : 0;
+  output[170] = option?.optionalTrigger || action.triggerOrderOptional ? 1 : 0;
+  output[171] = action.confirmTriggerOrder ? 1 : 0;
+  output[172] = resource?.selected ? 1 : 0;
+  output[173] = effect?.selected ? 1 : 0;
+  output[174] = action.optionId != null ? 1 : 0;
+  output[175] = action.runeId || action.energyId || action.powerId || action.effectId ? 1 : 0;
+  encodeHashBits(output, 176, action.cardId || action.unitId || action.unitIds?.join("|") || "");
+  encodeHashBits(output, 192, action.optionId || "");
+  encodeHashBits(output, 208, action.runeId || action.energyId || action.powerId || action.effectId || action.abilityId || "");
+  encodeHashBits(output, 224, battlefieldId || action.playerId || "");
+  encodeHashBits(output, 240, `${game.pendingChoice?.effect || ""}|${semanticActionDescriptor(action)}`);
+}
+
+function semanticActionDescriptor(action) {
+  return JSON.stringify(Object.keys(action || {}).sort().reduce((result, key) => {
+    if (!["score", "probability"].includes(key)) result[key] = action[key];
+    return result;
+  }, {}));
+}
+
+function encodeHashBits(output, offset, value) {
+  const first = stableHash(value);
+  const second = stableHash(`secondary:${value}`);
+  for (let bit = 0; bit < 16; bit += 1) output[offset + bit] = bit < 8 ? (first >> bit) & 1 : (second >> (bit - 8)) & 1;
+}
+
+function stableCards(cards) {
+  return [...(cards || [])].filter(Boolean).sort((left, right) =>
+    (left.controllerId || "").localeCompare(right.controllerId || "")
+    || cardIndex(left.cardNumber) - cardIndex(right.cardNumber)
+    || (left.instanceId || "").localeCompare(right.instanceId || ""));
+}
+
+function publicSourceNumber(game, id) { return findCard(game, id)?.cardNumber || "none"; }
+function hasStatus(card, pattern) { return [...(card.tags || []), ...(card.keywords || [])].some((value) => pattern.test(String(value))); }
+function totalPowerCost(payment) {
+  if (Number.isFinite(payment?.powerCost)) return Number(payment.powerCost);
+  if (Array.isArray(payment?.powerCost)) return payment.powerCost.reduce((sum, item) => sum + (Number(item?.amount) || 0), 0);
+  return Object.values(payment?.powerCost || {}).reduce((sum, amount) => sum + (Number(amount) || 0), 0);
+}
+function clampSigned(value) { return Math.max(-1, Math.min(1, value)); }
+
 function findCard(game, id) {
   if (!id) return null;
   for (const player of game.players) {
-    const found = [player.legend, player.champion, ...player.availableChampions, ...player.availableBattlefields, ...player.hand, ...player.base, ...player.trash, ...(player.banished || [])]
+    const found = [player.legend, player.champion, ...player.availableChampions, ...player.availableBattlefields, ...player.hand, ...player.base, ...player.runes, ...player.trash, ...(player.banished || [])]
       .filter(Boolean).find((card) => card.instanceId === id);
     if (found) return found;
   }
   return game.battlefields.flatMap((field) => [...field.units, ...(field.hidden || []).map((item) => item.card)]).find((card) => card?.instanceId === id) || null;
+}
+
+function splitAbilityId(abilityId) {
+  const value = String(abilityId || "");
+  const separator = value.lastIndexOf(":");
+  if (separator < 0) return { sourceId: "", localId: value };
+  return { sourceId: value.slice(0, separator), localId: value.slice(separator + 1) };
 }
 
 function cardByNumber(cardNumber) { return CARD_BY_NUMBER.get(cardNumber) || null; }

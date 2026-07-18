@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>카드 상태 UI 검수</title>
+  <link rel="stylesheet" href="/src/styles.css" />
+  <style>
+    body { min-height: 100vh; padding: 24px; background: #050a14; }
+    .status-fixture { display: grid; grid-template-columns: minmax(260px, 420px) minmax(320px, 420px); gap: 28px; align-items: start; max-width: 900px; margin: 0 auto; }
+    .fixture-board { display: grid; gap: 16px; border: 1px solid rgba(129,153,188,.2); border-radius: 16px; padding: 20px; background: rgba(4,9,18,.72); }
+    .fixture-board > h1 { color: #fff; font-size: 1rem; }
+    .fixture-board .unit-token { width: 100%; }
+    .fixture-inspector { max-height: calc(100vh - 48px); overflow-y: auto; border: 1px solid rgba(182,108,255,.44); border-radius: 16px; padding: 16px; background: #02060e; }
+    .fixture-inspector > h2 { margin-bottom: 12px; color: #fff; font-size: 1rem; }
+    @media (max-width: 700px) {
+      body { padding: 10px; }
+      .status-fixture { grid-template-columns: 1fr; gap: 12px; }
+      .fixture-board { padding: 12px; }
+      .fixture-board .unit-token { grid-template-columns: 58px minmax(0,1fr); min-width: 0; height: 76px; }
+      .fixture-inspector { max-height: none; padding: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="status-fixture">
+    <section class="fixture-board">
+      <h1>전장 카드에서 보이는 상태</h1>
+      <article class="unit-token field-token status-stunned status-buff status-temporary-might status-keywords status-cannot-move">
+        <div class="unit-token-art"><img src="https://cdn.piltoverarchive.com/cards/OGN-164.webp" alt="세트, 싸움꾼" /></div>
+        <div class="unit-token-body">
+          <strong>세트, 싸움꾼</strong>
+          <span>신체</span>
+          <div class="unit-token-badges">
+            <b>위력 9</b><em>기절</em>
+            <span class="unit-state-badges" aria-label="적용 상태: 버프 ×2, 일시 위력 +3, 방패 2, 이동 불가">
+              <span class="unit-state-badge tone-positive">버프 ×2</span>
+              <span class="unit-state-badge tone-positive">일시 위력 +3</span>
+              <span class="unit-state-badge more">외 2</span>
+            </span>
+          </div>
+        </div>
+      </article>
+      <p style="color:#9da9ba;font-size:.72rem;line-height:1.5">붉은 테두리는 기절 같은 위험 상태, 초록 배지는 강화, 금색 +숫자는 접힌 추가 상태를 뜻합니다.</p>
+    </section>
+
+    <aside class="fixture-inspector inspector-text">
+      <h2>세트, 싸움꾼</h2>
+      <section class="card-status-panel compact" aria-label="현재 카드 상태">
+        <div class="card-status-heading"><strong>현재 카드 상태</strong><span>6개 효과 적용 중</span></div>
+        <div class="might-breakdown"><span>기본 <b>4</b></span><span class="positive">버프 <b>+2</b></span><span class="positive">변경 <b>+3</b></span><span class="current">현재 <b>9</b></span></div>
+        <div class="card-status-list">
+          <article class="card-status-item tone-negative"><span class="card-status-icon">!</span><div><strong>기절</strong><p>이번 턴 동안 전투 피해를 입히지 않습니다.</p><small>종료 단계까지</small></div></article>
+          <article class="card-status-item tone-positive"><span class="card-status-icon">+</span><div><strong>버프 ×2</strong><p>버프 하나마다 위력이 +1 증가하며, 효과의 비용으로 소모될 수 있습니다.</p><small>소모하거나 전장을 떠날 때까지</small></div></article>
+          <article class="card-status-item tone-positive"><span class="card-status-icon">+</span><div><strong>일시 위력 +3</strong><p>이번 턴에 적용되는 위력 변경입니다.</p><small>턴 종료까지</small></div></article>
+          <article class="card-status-item tone-positive"><span class="card-status-icon">+</span><div><strong>방패 2</strong><p>이번 턴에 추가로 부여받은 키워드입니다. 방패 2</p><small>턴 종료까지</small></div></article>
+          <article class="card-status-item tone-negative"><span class="card-status-icon">!</span><div><strong>이동 불가</strong><p>이번 턴에는 이 유닛을 이동할 수 없습니다.</p><small>턴 종료까지</small></div></article>
+          <article class="card-status-item tone-negative"><span class="card-status-icon">!</span><div><strong>누적 피해 2</strong><p>현재 이 유닛에 남아 있는 피해입니다.</p><small>회복하거나 전장을 떠날 때까지</small></div></article>
+        </div>
+      </section>
+    </aside>
+  </main>
+</body>
+</html>

@@ -3,15 +3,19 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { decklists } from "../src/cards.mjs";
-import { CARD_POOL_FORMATS, deckAllowedInPool } from "../src/card-pools.mjs";
+import { CARD_POOL_FORMATS } from "../src/card-pools.mjs";
 import { createNeuralModel, deserializeNeuralModel, serializeNeuralModel } from "../src/ai/neural/model.mjs";
 import { evaluateBehaviorCloning, trainBehaviorCloning } from "../src/ai/neural/trainer.mjs";
 import { seededRandom } from "../src/ai/neural/selfplay.mjs";
 import { applyMetaSnapshot } from "../src/ai/meta.mjs";
 import { buildMetaPreset } from "../src/ai/meta-presets.mjs";
 import { assessBehaviorCloningQuality, auditImitationDataset } from "../src/ai/neural/quality.mjs";
+import { assertTrainingPreflight } from "./training-safety.mjs";
+import { FOCUSED_TRAINING_DECK_IDS, resolveTrainingDecks } from "../src/ai/training-decks.mjs";
 
 const startedAt = Date.now();
+const trainingPreflight = assertTrainingPreflight();
+const engineFingerprint = trainingPreflight.engineFingerprint;
 const args = parseArgs(process.argv.slice(2));
 assertKnownArgs(args);
 const poolId = args["card-pool"] || "origins-era";
@@ -21,7 +25,7 @@ const recoveryDir = path.dirname(reportPath);
 const latestCheckpointPath = path.join(recoveryDir, "latest-checkpoint.json");
 const bestCheckpointPath = path.join(recoveryDir, "best-checkpoint.json");
 const seed = integerArg("seed", 20251207, 0, 0xffffffff) >>> 0;
-const games = integerArg("games", 128, 2, 1000000);
+const games = integerArg("games", 128, 3, 1000000);
 const workers = integerArg("workers", 4, 1, games);
 const maxActions = integerArg("max-actions", 800, 160, 100000);
 const epochs = integerArg("epochs", 5, 1, 1000);
@@ -29,6 +33,8 @@ const batchSize = integerArg("batch-size", 8, 1, 128);
 const attemptMultiplier = integerArg("attempt-multiplier", 3, 1, 20);
 const collectionRounds = integerArg("collection-rounds", 3, 1, 10);
 const validationFraction = numberArg("validation-fraction", 0.1, 0.05, 0.3);
+const testFraction = numberArg("test-fraction", 0.1, 0.05, 0.3);
+if (validationFraction + testFraction > 0.5) throw new Error("Validation and test fractions may not exceed 0.5 in total.");
 const metaFraction = numberArg("meta-fraction", 0.7, 0, 1);
 const learningRate = numberArg("learning-rate", 0.0005, 1e-7, 1);
 const datasetThresholds = {
@@ -44,22 +50,23 @@ const modelThresholds = {
   maxGeneralizationGap: numberArg("max-generalization-gap", 0.3, 0, 1),
   minDecisionStepsPerGame: numberArg("min-decision-steps-per-game", 5, 1, 100000)
 };
-const decks = Object.values(decklists).filter((deck) => deckAllowedInPool(deck, poolId));
+const decks = resolveTrainingDecks(decklists, poolId, args["deck-ids"] || FOCUSED_TRAINING_DECK_IDS);
+const trainingDeckIds = decks.map((deck) => deck.id);
 const meta = buildMetaPreset("origins-houston-2025");
 if (!CARD_POOL_FORMATS.some((pool) => pool.id === poolId)) throw new Error(`Unknown card pool: ${poolId}`);
 if (meta.cardPoolId !== poolId) throw new Error(`Meta preset ${meta.id} targets ${meta.cardPoolId}, not ${poolId}.`);
 if (decks.length < 2) throw new Error(`Card pool ${poolId} has only ${decks.length} playable deck(s).`);
 
-console.log(JSON.stringify({ event: "bootstrap-start", games, workers, maxActions, epochs, poolId, output, report: reportPath }));
-const collected = await collectParallel({ games, workers, decks, maxActions, meta, metaFraction, seed, attemptMultiplier, collectionRounds });
+console.log(JSON.stringify({ event: "bootstrap-start", games, workers, maxActions, epochs, poolId, deckIds: trainingDeckIds, engineFingerprint, output, report: reportPath }));
+const collected = await collectParallel({ games, workers, decks, maxActions, meta, metaFraction, seed, attemptMultiplier, collectionRounds, engineFingerprint });
 if (collected.completedGames < games) {
   const failedReport = buildReport({ state: "failed", reason: "insufficient-completed-games", collected });
   await writeAtomic(reportPath, failedReport);
   throw new Error(`Only ${collected.completedGames}/${games} games completed within the attempt limit. See ${reportPath}`);
 }
 
-const split = splitByGame(collected.trajectories, validationFraction, seed);
-const datasetGate = auditImitationDataset({ collected, split, deckIds: decks.map((deck) => deck.id), thresholds: datasetThresholds });
+const split = splitByGame(collected.trajectories, validationFraction, testFraction, seed);
+const datasetGate = auditImitationDataset({ collected, split, deckIds: decks.map((deck) => deck.id), thresholds: datasetThresholds, engineFingerprint });
 if (!datasetGate.passed) {
   const failedReport = buildReport({ state: "quality-rejected", reason: "dataset-quality-gate", collected, split, datasetGate });
   await writeAtomic(reportPath, failedReport);
@@ -68,9 +75,11 @@ if (!datasetGate.passed) {
 
 let model = createNeuralModel({ metadata: { stage: "baseline-imitation" } });
 model.knowledge.cardPoolId = poolId;
+model.knowledge.trainingDeckIds = trainingDeckIds;
 applyMetaSnapshot(model.knowledge, meta);
 const random = seededRandom(seed ^ 0x9e3779b9);
 const baselineValidation = evaluateBehaviorCloning(model, split.validation, { batchSize });
+const baselineTest = evaluateBehaviorCloning(model, split.test, { batchSize });
 let optimizer = null;
 let best = null;
 const epochHistory = [];
@@ -100,27 +109,33 @@ model = deserializeNeuralModel(best.checkpoint);
 const training = { model, optimizer, history: epochHistory };
 const trainingEvaluation = evaluateBehaviorCloning(model, split.training, { batchSize });
 const validation = best.validation;
-const qualityGate = assessBehaviorCloningQuality({ baseline: baselineValidation, validation, training: trainingEvaluation, validationGames: split.validationGames, thresholds: modelThresholds });
+const testEvaluation = evaluateBehaviorCloning(model, split.test, { batchSize });
+const qualityGate = assessBehaviorCloningQuality({ baseline: baselineTest, validation: testEvaluation, training: trainingEvaluation, validationGames: split.testGames, thresholds: modelThresholds });
 model.generation = 0;
 model.gamesTrained = collected.completedGames;
 model.calibration = validation.calibration;
 model.metadata.stage = "bootstrap-complete";
 model.metadata.imitationGames = collected.completedGames;
+model.metadata.trainingDeckIds = trainingDeckIds;
 model.metadata.validation = withoutBins(validation);
+model.metadata.test = withoutBins(testEvaluation);
 model.metadata.baselineValidation = withoutBins(baselineValidation);
+model.metadata.baselineTest = withoutBins(baselineTest);
 model.metadata.trainingEvaluation = withoutBins(trainingEvaluation);
 model.metadata.bestEpoch = best.epoch;
 model.metadata.datasetFingerprint = datasetGate.metrics.fingerprint;
+model.metadata.engineFingerprint = engineFingerprint;
+model.metadata.decisionSafetyVersion = trainingPreflight.version;
 model.metadata.qualityGate = qualityGate;
 model.metadata.bootstrapReport = reportPath;
 if (!qualityGate.passed) {
-  const failedReport = buildReport({ state: "quality-rejected", reason: "model-quality-gate", collected, split, datasetGate, training, validation, baselineValidation, trainingEvaluation, qualityGate, bestEpoch: best.epoch });
+  const failedReport = buildReport({ state: "quality-rejected", reason: "model-quality-gate", collected, split, datasetGate, training, validation, baselineValidation, baselineTest, testEvaluation, trainingEvaluation, qualityGate, bestEpoch: best.epoch });
   await writeAtomic(reportPath, failedReport);
   throw new Error(`Trained model failed its quality gate. Best recovery checkpoint: ${bestCheckpointPath}`);
 }
 const serializedModel = serializeNeuralModel(model);
 const modelSha256 = payloadSha256(serializedModel);
-const report = buildReport({ state: "complete", collected, split, datasetGate, training, validation, baselineValidation, trainingEvaluation, qualityGate, bestEpoch: best.epoch, modelSha256 });
+const report = buildReport({ state: "complete", collected, split, datasetGate, training, validation, baselineValidation, baselineTest, testEvaluation, trainingEvaluation, qualityGate, bestEpoch: best.epoch, modelSha256 });
 await writeAtomic(output, serializedModel);
 await writeAtomic(reportPath, report);
 console.log(JSON.stringify({ event: "bootstrap-complete", output, report: reportPath, completedGames: collected.completedGames, attemptedGames: collected.attemptedGames, trajectories: collected.trajectories.length, steps: report.data.steps, validation: withoutBins(validation), elapsedSeconds: report.elapsedSeconds }));
@@ -152,7 +167,8 @@ async function collectParallel(options) {
             workerIndex, games: workerGames, maxAttempts,
             maxActions: options.maxActions, meta: options.meta, metaFraction: options.metaFraction,
             gameOffset, seed: options.seed + round * 1000003 + workerIndex * 100003,
-            deckIds: options.decks.map((deck) => deck.id)
+            deckIds: options.decks.map((deck) => deck.id),
+            engineFingerprint: options.engineFingerprint
           }
         });
         worker.on("message", (message) => {
@@ -170,26 +186,30 @@ async function collectParallel(options) {
   }
 }
 
-function splitByGame(trajectories, fraction, splitSeed) {
+export function splitByGame(trajectories, validationRatio, testRatio, splitSeed) {
   const gameIds = [...new Set(trajectories.map((trajectory) => trajectory.gameId))];
   const splitRandom = seededRandom(splitSeed ^ 0x85ebca6b);
   for (let index = gameIds.length - 1; index > 0; index -= 1) {
     const target = Math.floor(splitRandom() * (index + 1));
     [gameIds[index], gameIds[target]] = [gameIds[target], gameIds[index]];
   }
-  const validationCount = Math.max(1, Math.min(gameIds.length - 1, Math.round(gameIds.length * fraction)));
+  const validationCount = Math.max(1, Math.min(gameIds.length - 2, Math.round(gameIds.length * validationRatio)));
+  const testCount = Math.max(1, Math.min(gameIds.length - validationCount - 1, Math.round(gameIds.length * testRatio)));
   const validationIds = new Set(gameIds.slice(0, validationCount));
+  const testIds = new Set(gameIds.slice(validationCount, validationCount + testCount));
   return {
-    training: trajectories.filter((trajectory) => !validationIds.has(trajectory.gameId)),
+    training: trajectories.filter((trajectory) => !validationIds.has(trajectory.gameId) && !testIds.has(trajectory.gameId)),
     validation: trajectories.filter((trajectory) => validationIds.has(trajectory.gameId)),
-    trainingGames: gameIds.length - validationCount,
-    validationGames: validationCount
+    test: trajectories.filter((trajectory) => testIds.has(trajectory.gameId)),
+    trainingGames: gameIds.length - validationCount - testCount,
+    validationGames: validationCount,
+    testGames: testCount
   };
 }
 
 function buildReport({
   state, reason = null, collected, split = null, datasetGate = null, training = null,
-  validation = null, baselineValidation = null, trainingEvaluation = null,
+  validation = null, baselineValidation = null, baselineTest = null, testEvaluation = null, trainingEvaluation = null,
   qualityGate = null, bestEpoch = null, modelSha256 = null
 }) {
   const completed = collected.summaries.filter((summary) => summary.completed);
@@ -201,7 +221,7 @@ function buildReport({
     elapsedSeconds: (Date.now() - startedAt) / 1000,
     command: process.argv,
     sourceCommit: process.env.GITHUB_SHA || process.env.GIT_COMMIT || null,
-    configuration: { poolId, metaId: meta.id, games, workers, maxActions, epochs, batchSize, validationFraction, metaFraction, attemptMultiplier, collectionRounds, learningRate, seed },
+    configuration: { poolId, deckIds: trainingDeckIds, metaId: meta.id, games, workers, maxActions, epochs, batchSize, validationFraction, testFraction, metaFraction, attemptMultiplier, collectionRounds, learningRate, seed, engineFingerprint, decisionSafetyVersion: trainingPreflight.version },
     data: {
       targetGames: games, attemptedGames: collected.attemptedGames, completedGames: collected.completedGames,
       completionRate: collected.attemptedGames ? collected.completedGames / collected.attemptedGames : 0,
@@ -214,11 +234,13 @@ function buildReport({
       attemptedDeckAppearances: countDeckAppearances(collected.summaries)
     },
     datasetGate,
-    split: split ? { trainingGames: split.trainingGames, validationGames: split.validationGames, trainingTrajectories: split.training.length, validationTrajectories: split.validation.length } : null,
+    split: split ? { trainingGames: split.trainingGames, validationGames: split.validationGames, testGames: split.testGames, trainingTrajectories: split.training.length, validationTrajectories: split.validation.length, testTrajectories: split.test.length } : null,
     training: training ? { ...aggregateHistory(training.history), epochs } : null,
     baselineValidation: baselineValidation ? withoutBins(baselineValidation) : null,
+    baselineTest: baselineTest ? withoutBins(baselineTest) : null,
     trainingEvaluation: trainingEvaluation ? withoutBins(trainingEvaluation) : null,
     validation: validation ? withoutBins(validation) : null,
+    test: testEvaluation ? withoutBins(testEvaluation) : null,
     qualityGate,
     bestEpoch,
     modelSha256,
@@ -237,8 +259,8 @@ async function writeAtomic(filename, payload) {
 function parseArgs(values) { const parsed = {}; for (let index = 0; index < values.length; index += 1) if (values[index].startsWith("--")) parsed[values[index].slice(2)] = values[index + 1] && !values[index + 1].startsWith("--") ? values[++index] : "true"; return parsed; }
 function assertKnownArgs(values) {
   const known = new Set([
-    "card-pool", "output", "report", "seed", "games", "workers", "max-actions", "epochs", "batch-size",
-    "attempt-multiplier", "collection-rounds", "validation-fraction", "meta-fraction", "learning-rate",
+    "card-pool", "deck-ids", "output", "report", "seed", "games", "workers", "max-actions", "epochs", "batch-size",
+    "attempt-multiplier", "collection-rounds", "validation-fraction", "test-fraction", "meta-fraction", "learning-rate",
     "max-cap-rate", "max-truncation-rate", "min-deck-coverage", "max-seat-imbalance",
     "min-decision-advantage", "min-accuracy-improvement", "min-policy-loss-improvement",
     "max-generalization-gap", "min-decision-steps-per-game"

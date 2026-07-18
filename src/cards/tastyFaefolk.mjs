@@ -19,11 +19,13 @@ export default card({
   {
     "timing": "death",
     "kind": "channelRunes",
+    "abilityId": "deathknell",
     "amount": 2
   },
   {
     "timing": "death",
     "kind": "draw",
+    "abilityId": "deathknell",
     "amount": 1
   }
 ]

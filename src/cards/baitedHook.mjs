@@ -17,6 +17,7 @@ export default card({
   effects: [
     {
       timing: "activated",
+      exhaust: true,
       kind: "baitedHook",
       costPower: [{ domain: DOMAINS.ORDER, amount: 1 }]
     }

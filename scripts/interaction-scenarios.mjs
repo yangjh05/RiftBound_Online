@@ -97,7 +97,11 @@ function settle(game) {
     if (game.phase === "showdown") return;
     if (game.pendingChoice) {
       validateSemanticChoice(game, game.pendingChoice);
-      const option = game.pendingChoice.options.find((candidate) => !["decline", "done", "skip"].includes(candidate.id)) || game.pendingChoice.options[0];
+      const option = game.pendingChoice.effect === "triggerOrder"
+        ? game.pendingChoice.options.find((candidate) => !candidate.confirmTriggerOrder && !candidate.optionalTrigger && !candidate.selected)
+          || game.pendingChoice.options.find((candidate) => candidate.confirmTriggerOrder)
+        : game.pendingChoice.options.find((candidate) => !["decline", "done", "skip"].includes(candidate.id)) || game.pendingChoice.options[0];
+      if (!option) throw new Error(`choice ${game.pendingChoice.effect} has no automatic option`);
       const result = chooseEffectOption(game, option.id ?? option.value);
       if (!result.ok) throw new Error(`choice ${option.id} failed`);
       continue;

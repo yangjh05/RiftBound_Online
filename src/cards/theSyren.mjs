@@ -17,6 +17,7 @@ export default card({
   effects: [
     {
       timing: "activated",
+      exhaust: true,
       kind: "returnUnitToBase",
       target: "friendlyBattlefield",
       costEnergy: 1

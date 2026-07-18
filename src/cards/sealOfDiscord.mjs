@@ -13,15 +13,14 @@ export default card({
   energy: 0,
   power: [{ domain: DOMAINS.ANY, amount: 1 }],
   image: "https://cdn.piltoverarchive.com/cards/OGN-204.webp",
-  text: "Tap: REACTION - ADD Chaos. (Abilities that add resources can't be reacted to.)",
+  text: "Tap: REACTION - ADD 1 Chaos Power. (Abilities that add resources can't be reacted to.)",
   effects: [
   {
     "timing": "activated",
-    "kind": "addEnergy",
+    "exhaust": true,
+    "kind": "addPower",
     "amount": 1,
-    "domains": [
-      "Chaos"
-    ],
+    "domain": "Chaos",
     "restriction": null,
     "nonReactive": true,
     "abilityKeywords": ["Reaction"]

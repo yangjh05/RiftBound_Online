@@ -89,7 +89,7 @@ export function leaveRoom(roomId, playerToken) {
   }
   seated.room.updatedAt = Date.now();
   if (!Object.values(seated.room.seats).some(Boolean)) {
-    rooms.delete(seated.room.roomId);
+    removeRoom(seated.room.roomId);
   } else {
     publish(seated.room);
   }
@@ -99,17 +99,46 @@ export function leaveRoom(roomId, playerToken) {
 export function runCommand(roomId, playerToken, command) {
   const seated = requireSeat(roomId, playerToken);
   if (!seated.ok) return seated;
-  const result = command?.kind === "submitSideboard"
-    ? submitMatchSideboard(seated.room, seated.playerId, command)
-    : command?.kind === "restartGame"
-    ? restartCompletedGame(seated.room)
-    : applyGameCommand(seated.room, seated.playerId, command);
-  if (!result.ok) return fail(result.message || "Command rejected.");
-  seated.room.commandSeq += 1;
-  seated.room.updatedAt = Date.now();
-  if (seated.room.game?.phase === "complete" && seated.room.match?.phase === "playing") finishMatchGame(seated.room);
-  publish(seated.room);
-  return { ok: true, room: publicRoom(seated.room) };
+  const checkpoint = roomCommandCheckpoint(seated.room);
+  try {
+    const result = command?.kind === "submitSideboard"
+      ? submitMatchSideboard(seated.room, seated.playerId, command)
+      : command?.kind === "restartGame"
+      ? restartCompletedGame(seated.room)
+      : applyGameCommand(seated.room, seated.playerId, command);
+    if (!result.ok) {
+      restoreRoomCommandCheckpoint(seated.room, checkpoint);
+      return fail(result.message || "Command rejected.");
+    }
+    seated.room.commandSeq += 1;
+    seated.room.updatedAt = Date.now();
+    if (seated.room.game?.phase === "complete" && seated.room.match?.phase === "playing") finishMatchGame(seated.room);
+    publish(seated.room);
+    return { ok: true, room: publicRoom(seated.room) };
+  } catch (error) {
+    // Never retain a half-applied authoritative state after an engine or
+    // snapshot exception. The HTTP layer still reports the programming error.
+    restoreRoomCommandCheckpoint(seated.room, checkpoint);
+    throw error;
+  }
+}
+
+function roomCommandCheckpoint(room) {
+  return {
+    game: structuredClone(room.game),
+    match: structuredClone(room.match),
+    status: room.status,
+    commandSeq: room.commandSeq,
+    updatedAt: room.updatedAt
+  };
+}
+
+function restoreRoomCommandCheckpoint(room, checkpoint) {
+  room.game = checkpoint.game;
+  room.match = checkpoint.match;
+  room.status = checkpoint.status;
+  room.commandSeq = checkpoint.commandSeq;
+  room.updatedAt = checkpoint.updatedAt;
 }
 
 function restartCompletedGame(room) {
@@ -127,14 +156,29 @@ export function subscribe(roomId, playerToken, response) {
   const seated = requireSeat(roomId, playerToken);
   if (!seated.ok) return seated;
   const key = roomId.toUpperCase();
+  const initialEvent = serializeEvent("snapshot", snapshotForPlayer(seated.room, seated.playerId));
   const list = subscribers.get(key) || new Set();
   const keepAlive = setInterval(() => {
-    response.write(`: keepalive ${Date.now()}\n\n`);
+    try {
+      response.write(`: keepalive ${Date.now()}\n\n`);
+    } catch {
+      clearInterval(keepAlive);
+      list.delete(subscription);
+      if (!list.size) subscribers.delete(key);
+      try { response.end(); } catch {}
+    }
   }, 15000);
   const subscription = { response, playerId: seated.playerId, keepAlive };
   list.add(subscription);
   subscribers.set(key, list);
-  writeEvent(response, "snapshot", snapshotForPlayer(seated.room, seated.playerId));
+  try {
+    writeSerializedEvent(response, initialEvent);
+  } catch (error) {
+    clearInterval(keepAlive);
+    list.delete(subscription);
+    if (!list.size) subscribers.delete(key);
+    throw error;
+  }
   response.on("close", () => {
     clearInterval(keepAlive);
     list.delete(subscription);
@@ -206,14 +250,31 @@ function createRoomGame(room, deckRecords, firstPlayerId = null, lockedBattlefie
 function publish(room) {
   const list = subscribers.get(room.roomId);
   if (!list) return;
-  for (const subscription of [...list]) {
-    writeEvent(subscription.response, "snapshot", snapshotForPlayer(room, subscription.playerId));
+  // Prepare every private payload before any socket is written. If snapshot
+  // construction fails, runCommand can roll the room back without giving only
+  // one player the new state.
+  const deliveries = [...list].map((subscription) => ({
+    subscription,
+    event: serializeEvent("snapshot", snapshotForPlayer(room, subscription.playerId))
+  }));
+  for (const { subscription, event } of deliveries) {
+    try {
+      writeSerializedEvent(subscription.response, event);
+    } catch {
+      clearInterval(subscription.keepAlive);
+      list.delete(subscription);
+      try { subscription.response.end(); } catch {}
+    }
   }
+  if (!list.size) subscribers.delete(room.roomId);
 }
 
-function writeEvent(response, eventName, payload) {
-  response.write(`event: ${eventName}\n`);
-  response.write(`data: ${JSON.stringify(payload)}\n\n`);
+function serializeEvent(eventName, payload) {
+  return `event: ${eventName}\ndata: ${JSON.stringify(payload)}\n\n`;
+}
+
+function writeSerializedEvent(response, event) {
+  response.write(event);
 }
 
 function requireSeat(roomId, playerToken) {
@@ -259,7 +320,18 @@ function randomToken(length) {
 function cleanupRooms() {
   const now = Date.now();
   for (const [roomId, room] of rooms) {
-    if (now - room.updatedAt > ROOM_TTL_MS) rooms.delete(roomId);
+    if (now - room.updatedAt > ROOM_TTL_MS) removeRoom(roomId);
+  }
+}
+
+function removeRoom(roomId) {
+  rooms.delete(roomId);
+  const list = subscribers.get(roomId);
+  if (!list) return;
+  subscribers.delete(roomId);
+  for (const subscription of list) {
+    clearInterval(subscription.keepAlive);
+    try { subscription.response.end(); } catch {}
   }
 }
 

@@ -45,6 +45,34 @@ Open:
 http://127.0.0.1:4173
 ```
 
+## Public Server with Tailscale Funnel
+
+Tailscale Funnel provides a public `*.ts.net` HTTPS address without requiring
+a personal domain.
+
+One-time setup:
+
+1. Install Tailscale on Windows and sign in from the system tray:
+
+   ```powershell
+   winget install --id Tailscale.Tailscale
+   ```
+
+2. Start or restart the public game server from an Administrator PowerShell:
+
+   ```powershell
+   npm run server:restart
+   ```
+
+   On the first run, follow the Tailscale approval link printed by the command.
+   The command then prints the public `https://...ts.net` address to share.
+3. Browser play needs no additional configuration. To publish desktop updates,
+   copy `.env.example` to `.env` and set `RIFTBOUND_UPDATE_URL` to the printed
+   Funnel address. `.env` is ignored by Git.
+
+Use `npm run server:stop` to stop both the local server and Funnel.
+Use `npm run restart:local` when only local access is needed.
+
 ## Publish a Desktop Update
 
 Build and publish a new Windows portable app, then restart the game server and
@@ -62,6 +90,13 @@ newer build in the background, verify its SHA-256 checksum, and offer to restart
 into the update.
 
 To publish an update without restarting the server, use `npm run publish:update`.
+
+Update manifests are signed with Ed25519. On a new release machine, run
+`npm run update:keygen` once, commit `electron/update-public-key.pub`, and keep
+`.secrets/update-private-key.pem` secret and backed up. Publishing fails closed
+when the private key is missing or does not match the public key bundled in the
+app. CI can provide either a private-key file path or PEM text through
+`RIFTBOUND_UPDATE_PRIVATE_KEY`.
 
 The first updater-enabled EXE must be distributed manually once. Every later
 build can update that app automatically while the server and its public tunnel
@@ -84,6 +119,9 @@ This runs:
 - `npm run validate:cards`: card data, card numbers, decklists, and registered effect specs
 - `npm run validate:engine`: resolver coverage and engine structure checks
 - `npm test`: gameplay and rules regression tests
+- `npm run test:e2e`: real Chromium coverage for local setup, mobile layout, two-client multiplayer, reconnection, and game completion
+
+Install the E2E browser once on a new development machine with `npm run test:e2e:install`.
 
 ## Train the AI
 

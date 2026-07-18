@@ -3,25 +3,28 @@ import {
   beginPlayChampion,
   activateCard,
   cancelPayment,
+  chooseFirstPlayer,
   chooseEffectOption,
   confirmFirstPlayer,
   confirmPayment,
   createGame,
   currentCombatMight,
+  currentMight,
   currentPlayer,
   declineEffectChoice,
   endTurn,
   effectiveMight,
+  firstPlayerDecisionActorId,
   getSelectedCard,
   hasRequiredPlayTargets,
   hideCard,
-  hiddenCardsAtBattlefieldForPlayer,
-  hiddenSlotLimit,
-  legalCardPlayDestinations,
-  legalChampionPlayDestinations,
+  legalActivatedAbilityOptions,
+  legalPaymentPoolEnergyOptions,
   moveUnit,
   moveUnits,
   passShowdown,
+  paymentConfirmationLegality,
+  rollFirstPlayer,
   selectBattlefield,
   selectCard,
   selectChampion,
@@ -32,7 +35,8 @@ import {
   toggleOptionalPaymentEffect,
   togglePaymentPoolEnergy,
   togglePaymentPoolPower,
-  togglePaymentRune
+  togglePaymentRune,
+  unitDamageState
 } from "./engine.mjs";
 import { hiddenCardControllerId, hiddenCardIsControlledBy } from "./rules/zones.mjs";
 import { cards, DOMAINS, makeRune, rawDecklists, RUNE_COLORS, runeCardsForDomain } from "./cards.mjs";
@@ -50,6 +54,7 @@ import {
 import { beginNextMatchGame, createMatchState, recordMatchGame, submitSideboardConfiguration } from "./match.mjs";
 import {
   configureOnlineServer,
+  configuredMultiplayerServer,
   createOnlineRoom,
   fetchRooms,
   joinOnlineRoom,
@@ -74,27 +79,42 @@ import {
   translateKeywordList,
   translateType
 } from "./i18n.mjs";
-import { configureAudio, playPresentationCue, unlockAudio } from "./audio.mjs";
 import {
   advancePresentation,
+  chainCardInstanceIds,
   createPresentationState,
   rankPresentationHighlights,
   resetPresentationState,
   snapshotPresentationGame
 } from "./presentation.mjs";
-import { activeActorId as aiActiveActorId, applyAiAction, cloneGame, enumerateLegalActions } from "./ai/actions.mjs";
+import { activeActorId as aiActiveActorId, applyAiAction, cloneGame, enumerateLegalActions, resolveLegalAction } from "./ai/actions.mjs";
 import { buildMatchReport } from "./ai/coach.mjs";
 import { recommendDeckForPool } from "./ai/deckbuilding.mjs";
 import { choosePolicyAction, createModel, DEFAULT_AI_MODEL } from "./ai/policy.mjs";
 import { createAiReplay, finalizeAiReplay, persistableAiReplay, recordReplayDecision, refineAiReplay } from "./ai/replay.mjs";
 import { CARD_PACKS, CARD_POOL_FORMATS, cardAllowedInPool, packForCard } from "./card-pools.mjs";
+import { commandFailureFeedback } from "./ui/command-feedback.mjs";
+import { cardStatusItems } from "./ui/card-status.mjs";
+import { resolveBoardClickTarget } from "./ui/board-click.mjs";
+import {
+  hasUnexpectedEnglish,
+  localizeKoreanChoiceLabel,
+  localizeKoreanNetworkError,
+  localizeKoreanPackName,
+  localizeKoreanRarity,
+  localizeKoreanRoomStatus,
+  localizeKoreanUiText
+} from "./ui/korean-text.mjs";
 
-const DEFAULT_MULTIPLAYER_SERVER = "https://backboard-fender-basis.ngrok-free.dev";
+const LOCAL_SERVER_HOSTNAMES = new Set(["127.0.0.1", "localhost"]);
 const DECK_STORAGE_KEY = "riftbound.deckStore.v1";
 const ONLINE_STORAGE_KEY = "riftbound.onlineSeat.v1";
 const SETTINGS_STORAGE_KEY = "riftbound.settings.v1";
 const ALL_CARDS = Object.values(cards).sort((a, b) => a.name.localeCompare(b.name));
 const CARD_BY_NUMBER = new Map(ALL_CARDS.map((card) => [card.cardNumber, card]));
+const LOCALIZED_CARD_NAMES = [...ALL_CARDS]
+  .sort((left, right) => right.name.length - left.name.length)
+  .map((card) => [card.name, translateCardName(card, LOCALES.KO)]);
 let settings = loadSettings();
 let deckStore = loadDeckStore();
 let appView = "menu";
@@ -119,11 +139,14 @@ let deckEditor = {
   type: "all",
   domain: "all",
   maxEnergy: "all",
-  aiRecommendation: null
+  aiRecommendation: null,
+  mobileView: "list",
+  mobileTab: "deck"
 };
 let game = createGame({ interactive: true, randomFirstPlayer: true, manualActionChainPriority: true });
 let logOpen = false;
 let handOpen = false;
+let chainZoneCollapsed = false;
 let graveyardOpenPlayerId = null;
 let banishedOpenPlayerId = null;
 let intelOpenPlayerId = null;
@@ -137,8 +160,10 @@ let handScrollLeft = 0;
 let shellScrollState = {};
 let previousUiSnapshot = null;
 let uiMotion = emptyMotion();
+let uiLegalActions = [];
 let recentFeedback = null;
 let feedbackDismissTimer = null;
+let actionRejection = null;
 let presentationState = createPresentationState();
 let activeImpact = null;
 let impactDismissTimer = null;
@@ -169,7 +194,25 @@ let aiDeepReviewRunning = false;
 const app = document.querySelector("#app");
 let reportingUiException = false;
 
-configureAudio({ enabled: settings.sound, voice: settings.voice, volume: settings.volume });
+function syncVisualViewport() {
+  const viewport = window.visualViewport;
+  const height = viewport?.height || window.innerHeight;
+  const offsetTop = viewport?.offsetTop || 0;
+  document.documentElement.style.setProperty("--app-height", `${height.toFixed(2)}px`);
+  document.documentElement.style.setProperty("--viewport-offset-top", `${offsetTop.toFixed(2)}px`);
+}
+
+let viewportSyncFrame = 0;
+function scheduleVisualViewportSync() {
+  cancelAnimationFrame(viewportSyncFrame);
+  viewportSyncFrame = requestAnimationFrame(syncVisualViewport);
+}
+
+syncVisualViewport();
+window.addEventListener("resize", scheduleVisualViewportSync, { passive: true });
+window.addEventListener("orientationchange", scheduleVisualViewportSync, { passive: true });
+window.visualViewport?.addEventListener("resize", scheduleVisualViewportSync, { passive: true });
+window.visualViewport?.addEventListener("scroll", scheduleVisualViewportSync, { passive: true });
 
 function locale() {
   return settings.locale;
@@ -200,6 +243,99 @@ function domainText(domain) {
   return translateDomain(domain, locale());
 }
 
+function localizedDynamicText(value, { fallback = "" } = {}) {
+  const text = String(value ?? "");
+  if (locale() !== LOCALES.KO || !text) return text;
+  let withLocalizedNames = text;
+  for (const [englishName, koreanName] of LOCALIZED_CARD_NAMES) {
+    if (englishName !== koreanName && withLocalizedNames.includes(englishName)) {
+      withLocalizedNames = withLocalizedNames.replaceAll(englishName, koreanName);
+    }
+  }
+  withLocalizedNames = localizedDeckName(withLocalizedNames);
+  return localizeKoreanUiText(withLocalizedNames, { fallback });
+}
+
+function localizedPackName(name) {
+  return locale() === LOCALES.KO ? localizeKoreanPackName(name) : name;
+}
+
+function localizedRoomStatus(status) {
+  return locale() === LOCALES.KO ? localizeKoreanRoomStatus(status) : status;
+}
+
+function localizedRarity(rarity) {
+  return locale() === LOCALES.KO ? localizeKoreanRarity(rarity) : rarity;
+}
+
+function localizedDeckName(name) {
+  const value = String(name || "");
+  if (locale() !== LOCALES.KO) return value;
+  const exact = new Map([
+    ["Fury/Chaos Annie", "격노/혼돈 애니"],
+    ["Calm/Body Master Yi OGS", "평온/신체 마스터 이 OGS"],
+    ["Mind/Order Lux", "정신/질서 럭스"],
+    ["Body/Order Garen", "신체/질서 가렌"],
+    ["Best Origins Miss Fortune", "추천 오리진 미스 포츈"],
+    ["Best Origins Kai'Sa", "추천 오리진 카이사"],
+    ["Best Origins Sett", "추천 오리진 세트"],
+    ["Origins Leona Stun", "오리진 레오나 기절"],
+    ["Refined Origins Volibear", "개선형 오리진 볼리베어"],
+    ["Riftbound.gg Origins Yasuo", "Riftbound.gg 오리진 야스오"],
+    ["Riftbound.gg Origins Teemo", "Riftbound.gg 오리진 티모"],
+    ["Riftbound.gg Origins Darius", "Riftbound.gg 오리진 다리우스"],
+    ["SamaBR Origins Ahri", "SamaBR 오리진 아리"],
+    ["Void Origins Viktor", "Void 오리진 빅토르"]
+  ]);
+  if (exact.has(value)) return exact.get(value);
+  const replacements = [
+    ["Master Yi", "마스터 이"],
+    ["Miss Fortune", "미스 포츈"],
+    ["Kai'Sa", "카이사"],
+    ["Annie", "애니"],
+    ["Diana", "다이애나"],
+    ["Lux", "럭스"],
+    ["Garen", "가렌"],
+    ["Sett", "세트"],
+    ["Leona", "레오나"],
+    ["Volibear", "볼리베어"],
+    ["Yasuo", "야스오"],
+    ["Teemo", "티모"],
+    ["Darius", "다리우스"],
+    ["Ahri", "아리"],
+    ["Viktor", "빅토르"],
+    ["Origins", "오리진"],
+    ["Fury", "격노"],
+    ["Chaos", "혼돈"],
+    ["Calm", "평온"],
+    ["Body", "신체"],
+    ["Mind", "정신"],
+    ["Order", "질서"],
+    ["Stun", "기절"],
+    ["Best", "추천"],
+    ["Refined", "개선형"]
+  ];
+  return replacements.reduce((result, [english, korean]) => result.replaceAll(english, korean), value);
+}
+
+function playerName(player) {
+  return localizedDeckName(player?.name || "");
+}
+
+function localizedOnlineError(message) {
+  return locale() === LOCALES.KO ? localizeKoreanNetworkError(message) : String(message || "");
+}
+
+function localizedCommandFailure(message) {
+  const feedback = commandFailureFeedback(message, locale());
+  if (locale() !== LOCALES.KO) return feedback;
+  return {
+    ...feedback,
+    title: localizedDynamicText(feedback.title),
+    detail: localizedDynamicText(feedback.detail, { fallback: "규칙 엔진이 요청을 거부했으며 게임 상태는 변경되지 않았습니다." })
+  };
+}
+
 function render() {
   try {
     renderApp();
@@ -210,6 +346,7 @@ function render() {
 }
 
 function renderApp() {
+  uiLegalActions = [];
   const scrollState = captureScrollState();
   if (appView === "menu") {
     app.innerHTML = menuView();
@@ -256,6 +393,7 @@ function renderApp() {
   }
   lastViewerPlayerId = nextViewerPlayerId;
   const player = viewerPlayer();
+  if (viewerCanAct()) uiLegalActions = enumerateLegalActions(game, nextViewerPlayerId);
   pruneMoveSelection();
   uiMotion = prepareUiMotion();
   if (uiMotion.feedback) rememberRealtimeFeedback(uiMotion.feedback);
@@ -275,7 +413,6 @@ function renderApp() {
         <span>${turnLabel()}</span>
         <button class="secondary" data-action="toggle-log" title="${t("toggleLog", locale())}">${t("log", locale())}</button>
         ${aiReplay ? `<button class="secondary" data-action="coach-report">${locale() === LOCALES.KO ? "AI 분석" : "AI Review"}</button>` : ""}
-        <button class="secondary sound-toggle ${settings.sound ? "enabled" : "muted"}" data-action="toggle-sound" title="${settings.sound ? "효과음 끄기" : "효과음 켜기"}">${settings.sound ? "SFX ON" : "SFX OFF"}</button>
         ${game.phase !== "complete" ? `<button class="secondary danger" data-action="surrender" title="${t("surrender", locale())}">${t("surrender", locale())}</button>` : ""}
         <button class="secondary" data-action="new-game" title="${t("newGame", locale())}">${t("newGame", locale())}</button>
       </div>
@@ -292,13 +429,6 @@ function renderApp() {
   `;
   restorePaymentScroll();
   restoreScrollState(scrollState);
-  if (presentationUpdate.cues.length) {
-    const korean = locale() === LOCALES.KO;
-    requestAnimationFrame(() => presentationUpdate.cues.forEach((cue) => playPresentationCue({
-      ...cue,
-      callout: korean ? cue.calloutKo : cue.calloutEn
-    })));
-  }
   scheduleAiTurn();
 }
 
@@ -318,7 +448,7 @@ function reportUiException(error, context = "UI") {
 
 function errorMessage(error) {
   if (error instanceof Error) return error.message || error.name;
-  return String(error ?? "Unknown error");
+  return String(error ?? (locale() === LOCALES.KO ? "알 수 없는 오류" : "Unknown error"));
 }
 
 function firstStackLine(error) {
@@ -336,10 +466,21 @@ function showUiExceptionOverlay(error, context = "UI") {
   banner.className = "ui-exception-banner";
   banner.setAttribute("role", "alert");
   banner.innerHTML = `
-    <strong>UI Exception</strong>
-    <span>${escapeHtml(context)}: ${escapeHtml(errorMessage(error))}</span>
+    <strong>${locale() === LOCALES.KO ? "화면 처리 오류" : "UI Exception"}</strong>
+    <span>${escapeHtml(locale() === LOCALES.KO ? localizedUiExceptionContext(context) : context)}: ${escapeHtml(localizedDynamicText(errorMessage(error)))}</span>
   `;
   app.appendChild(banner);
+}
+
+function localizedUiExceptionContext(context) {
+  return {
+    UI: "화면",
+    render: "화면 그리기",
+    "window error": "브라우저 오류",
+    "unhandled promise": "비동기 처리 오류",
+    "deep AI review": "정밀 AI 분석",
+    "trained AI model load": "학습 AI 모델 불러오기"
+  }[context] || "화면 처리";
 }
 
 function captureScrollState() {
@@ -471,16 +612,6 @@ function menuView() {
               `).join("")}
             </select>
           </label>
-          <button type="button" class="secondary audio-setting ${settings.sound ? "enabled" : "muted"}" data-action="toggle-sound">
-            ${settings.sound ? "효과음 켜짐" : "효과음 꺼짐"}
-          </button>
-          <button type="button" class="secondary audio-setting ${settings.voice ? "enabled" : "muted"}" data-action="toggle-voice" ${settings.sound ? "" : "disabled"}>
-            ${settings.voice ? "승부 대사 켜짐" : "승부 대사 꺼짐"}
-          </button>
-          <label class="volume-setting">
-            <span>음량 ${Math.round(settings.volume * 100)}%</span>
-            <input type="range" min="0" max="100" step="5" value="${Math.round(settings.volume * 100)}" data-action="settings-volume" />
-          </label>
         </div>
         <p>${locale() === LOCALES.KO ? "\uB85C\uCEEC \uB300\uC804\uACFC \uB371 \uD3B8\uC9D1\uC744 \uC2DC\uC791\uD569\uB2C8\uB2E4." : "Start a local match or edit decks."}</p>
         <div class="menu-deck-picker">
@@ -509,11 +640,11 @@ function menuView() {
         </div>
         <p class="ai-model-status">${escapeHtml(neuralAiStatusText())}</p>
         ${online.loading ? `<p class="online-status">${locale() === LOCALES.KO ? "멀티플레이 서버에 연결 중입니다." : "Connecting to the multiplayer server."}</p>` : ""}
-        ${online.error ? `<p class="online-error" role="alert">${escapeHtml(online.error)}</p>` : ""}
+        ${online.error ? `<p class="online-error" role="alert">${escapeHtml(localizedOnlineError(online.error))}</p>` : ""}
         <div class="active-decks-summary">
           ${activeDecks.map((deck, index) => deckSummaryBadge(deck, t("playerDeck", locale(), { n: index + 1 }))).join("")}
         </div>
-        ${validPair ? "" : `<p class="deck-warning">${locale() === LOCALES.KO ? `토너먼트에서 사용 가능한 덱 2개가 필요합니다. 메인 덱은 정확히 ${DECK_RULES.tournamentMainExact}장, 사이드보드는 최대 ${DECK_RULES.sideboardMax}장, 룬은 ${DECK_RULES.runeExact}장, 전장은 ${DECK_RULES.battlefieldsExact}장이어야 합니다.` : `Two tournament-legal decks are required: exactly ${DECK_RULES.tournamentMainExact} Main Deck cards, up to ${DECK_RULES.sideboardMax} Sideboard cards, ${DECK_RULES.runeExact} Runes, and ${DECK_RULES.battlefieldsExact} Battlefields.`}</p>`}
+        ${validPair ? "" : `<p class="deck-warning">${locale() === LOCALES.KO ? `토너먼트에서 사용 가능한 덱 2개가 필요합니다. 주 덱은 정확히 ${DECK_RULES.tournamentMainExact}장, 사이드보드는 최대 ${DECK_RULES.sideboardMax}장, 룬은 ${DECK_RULES.runeExact}장, 전장은 ${DECK_RULES.battlefieldsExact}장이어야 합니다.` : `Two tournament-legal decks are required: exactly ${DECK_RULES.tournamentMainExact} Main Deck cards, up to ${DECK_RULES.sideboardMax} Sideboard cards, ${DECK_RULES.runeExact} Runes, and ${DECK_RULES.battlefieldsExact} Battlefields.`}</p>`}
       </section>
     </main>
   `;
@@ -522,7 +653,7 @@ function menuView() {
 function deckPickerOptions(playableDecks, selectedId) {
   if (!playableDecks.length) return `<option value="">${t("noPlayableDecks", locale())}</option>`;
   return playableDecks.map((deck) => `
-    <option value="${deck.id}" ${deck.id === selectedId ? "selected" : ""}>${escapeHtml(deck.name)}</option>
+    <option value="${deck.id}" ${deck.id === selectedId ? "selected" : ""}>${escapeHtml(localizedDeckName(deck.name))}</option>
   `).join("");
 }
 
@@ -531,20 +662,11 @@ function loadSettings() {
     const parsed = JSON.parse(localStorage.getItem(SETTINGS_STORAGE_KEY) || "null");
     return {
       locale: normalizeLocale(parsed?.locale || LOCALES.EN),
-      sound: parsed?.sound !== false,
-      voice: parsed?.voice !== false,
-      volume: clampVolume(parsed?.volume),
       sideboardingEnabled: parsed?.sideboardingEnabled === true
     };
   } catch {
-    return { locale: LOCALES.EN, sound: true, voice: true, volume: 0.72, sideboardingEnabled: false };
+    return { locale: LOCALES.EN, sideboardingEnabled: false };
   }
-}
-
-function clampVolume(value) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return 0.72;
-  return Math.max(0, Math.min(1, numeric));
 }
 
 function saveSettings() {
@@ -590,18 +712,18 @@ function multiplayerView() {
             <div class="section-head">
               <div>
                 <h2>${room ? `${t("rooms", locale())} ${room.roomId}` : t("noRoom", locale())}</h2>
-                <span>${room ? `${room.playerCount}/2 ${t("players", locale())} / ${room.status}` : t("createOrJoinRoom", locale())}</span>
+                <span>${room ? `${room.playerCount}/2 ${t("players", locale())} / ${localizedRoomStatus(room.status)}` : t("createOrJoinRoom", locale())}</span>
                 ${room ? `<small>${room.sideboardingEnabled ? (locale() === LOCALES.KO ? "사이드전 · 3판 2선승" : "Sideboarding · best of three") : (locale() === LOCALES.KO ? "단판" : "Single game")}</small>` : ""}
               </div>
               ${room ? `<button data-action="online-leave">${t("leave", locale())}</button>` : ""}
             </div>
-            ${online.error ? `<p class="online-error">${escapeHtml(online.error)}</p>` : ""}
+            ${online.error ? `<p class="online-error">${escapeHtml(localizedOnlineError(online.error))}</p>` : ""}
             <div class="seat-list">
               ${room ? Object.values(room.seats).map(seatBadge).join("") : `<p class="empty">아직 참가한 방이 없습니다.</p>`}
             </div>
             <div class="online-deck-submit">
               <strong>${t("selectedDeck", locale())}</strong>
-              ${activeDeck ? deckSummaryBadge(activeDeck, online.playerId ? `Your seat: ${online.playerId.toUpperCase()}` : "Local deck") : `<p class="empty">선택된 덱이 없습니다.</p>`}
+              ${activeDeck ? deckSummaryBadge(activeDeck, online.playerId ? `${locale() === LOCALES.KO ? "내 좌석" : "Your seat"}: ${playerSlotLabel(online.playerId)}` : (locale() === LOCALES.KO ? "로컬 덱" : "Local deck")) : `<p class="empty">선택된 덱이 없습니다.</p>`}
               <button data-action="online-submit-deck" ${room && deckReady ? "" : "disabled"}>${t("submitDeck", locale())}</button>
               <button class="primary" data-action="online-ready" ${room && mySeat?.deckName ? "" : "disabled"}>
                 ${mySeat?.ready ? t("ready", locale()) : t("readyUp", locale())}
@@ -619,7 +741,7 @@ function roomListItem(room) {
     <button class="room-list-item" data-action="online-join-room" data-room="${room.roomId}" ${room.playerCount >= 2 || room.status !== "lobby" ? "disabled" : ""}>
       <strong>${room.roomId}</strong>
       <span>${room.playerCount}/2</span>
-      <em>${room.status}</em>
+      <em>${localizedRoomStatus(room.status)}</em>
     </button>
   `;
 }
@@ -627,18 +749,24 @@ function roomListItem(room) {
 function seatBadge(seat) {
   return `
     <div class="seat-badge ${seat.occupied ? "occupied" : ""} ${seat.playerId === online.playerId ? "mine" : ""}">
-      <strong>${seat.playerId.toUpperCase()}</strong>
-      <span>${seat.occupied ? seat.deckName || "덱 대기 중" : "빈 좌석"}</span>
+      <strong>${playerSlotLabel(seat.playerId)}</strong>
+      <span>${seat.occupied ? localizedDeckName(seat.deckName) || "덱 대기 중" : "빈 좌석"}</span>
       <em>${seat.ready ? t("ready", locale()) : t("waiting", locale())}</em>
     </div>
   `;
+}
+
+function playerSlotLabel(playerId) {
+  const number = String(playerId || "").match(/\d+/u)?.[0];
+  if (locale() === LOCALES.KO && number) return `플레이어 ${number}`;
+  return String(playerId || "").toUpperCase();
 }
 
 function deckEditorView() {
   const selectedDeck = getSelectedDeckRecord();
   const selectedCard = selectedDeckLibraryCard();
   return `
-    <main class="shell-screen deck-builder-screen">
+    <main class="shell-screen deck-builder-screen mobile-view-${deckEditor.mobileView} mobile-tab-${deckEditor.mobileTab}">
       <section class="deck-select-panel">
         <div class="deck-builder-head">
           <button class="round-back" data-action="menu-home">${t("back", locale())}</button>
@@ -666,17 +794,24 @@ function deckEditorContent(deck, selectedCard) {
   const validation = validateDeckRecord(deck);
   return `
     <div class="deck-editor-top">
+      <button class="deck-mobile-back" data-action="deck-mobile-list">← ${locale() === LOCALES.KO ? "덱 목록" : "Decks"}</button>
       <div class="deck-name-row">
-        <input class="deck-name-input" data-action="deck-name" value="${escapeHtml(deck.name)}" maxlength="48" />
+        <input class="deck-name-input" data-action="deck-name" value="${escapeHtml(localizedDeckName(deck.name))}" maxlength="48" />
         <span class="${validation.playable ? "valid-pill" : "invalid-pill"}">${validation.playable ? t("playable", locale()) : t("notPlayable", locale())}</span>
       </div>
       <div class="deck-editor-actions">
         <button data-action="deck-ai-recommend">선택 카드풀 AI 추천</button>
-        <button data-action="deck-set-active" data-slot="0" ${validation.playable ? "" : "disabled"}>P1 사용</button>
-        <button data-action="deck-set-active" data-slot="1" ${validation.playable ? "" : "disabled"}>P2 사용</button>
+        <button data-action="deck-set-active" data-slot="0" ${validation.playable ? "" : "disabled"}>플레이어 1 덱으로 사용</button>
+        <button data-action="deck-set-active" data-slot="1" ${validation.playable ? "" : "disabled"}>플레이어 2 덱으로 사용</button>
         <button class="primary" data-action="deck-save">저장</button>
       </div>
     </div>
+    <nav class="deck-mobile-tabs" aria-label="${locale() === LOCALES.KO ? "덱 편집 단계" : "Deck editor sections"}">
+      <button class="${deckEditor.mobileTab === "deck" ? "active" : ""}" data-action="deck-mobile-tab" data-tab="deck">${locale() === LOCALES.KO ? "덱 구성" : "Deck"}</button>
+      <button class="${deckEditor.mobileTab === "runes" ? "active" : ""}" data-action="deck-mobile-tab" data-tab="runes">${t("runes", locale())}</button>
+      <button class="${deckEditor.mobileTab === "cards" ? "active" : ""}" data-action="deck-mobile-tab" data-tab="cards">${locale() === LOCALES.KO ? "카드 추가" : "Cards"}</button>
+      <button class="${deckEditor.mobileTab === "detail" ? "active" : ""}" data-action="deck-mobile-tab" data-tab="detail">${locale() === LOCALES.KO ? "상세" : "Detail"}</button>
+    </nav>
     <div class="deck-editor-grid">
       <aside class="deck-card-detail">
         ${selectedCard ? deckDetailCard(selectedCard, deck) : deckDetailEmpty(deck)}
@@ -697,15 +832,15 @@ function deckSelectCard(deck) {
   const validation = validateDeckRecord(deck);
   const hero = deckHeroCard(deck);
   const activeLabels = deckStore.activeDeckIds
-    .map((id, index) => id === deck.id ? `P${index + 1}` : null)
+    .map((id, index) => id === deck.id ? (locale() === LOCALES.KO ? `플레이어 ${index + 1}` : `P${index + 1}`) : null)
     .filter(Boolean)
     .join(" / ");
   return `
     <button class="deck-slot ${deck.id === deckEditor.selectedDeckId ? "selected" : ""}" data-action="deck-select" data-deck="${deck.id}">
-      ${hero?.image ? `<img src="${hero.image}" alt="${hero.name}" loading="lazy" />` : `<span class="deck-card-back"></span>`}
+      ${hero?.image ? `<img src="${hero.image}" alt="${cardName(hero)}" loading="lazy" />` : `<span class="deck-card-back"></span>`}
       ${activeLabels ? `<em>${activeLabels}</em>` : ""}
-      <strong>${escapeHtml(deck.name)}</strong>
-      <span>${mainDeckCount(deck)}/${DECK_RULES.tournamentMainExact} ${t("main", locale())} · ${sideboardCount(deck)}/${DECK_RULES.sideboardMax} SB</span>
+      <strong>${escapeHtml(localizedDeckName(deck.name))}</strong>
+      <span>${mainDeckCount(deck)}/${DECK_RULES.tournamentMainExact} ${t("main", locale())} · ${sideboardCount(deck)}/${DECK_RULES.sideboardMax} ${locale() === LOCALES.KO ? "사이드보드" : "SB"}</span>
       <small class="${validation.playable ? "valid-text" : "invalid-text"}">${validation.playable ? t("playable", locale()) : t("cannotPlayDeck", locale())}</small>
     </button>
   `;
@@ -716,7 +851,7 @@ function deckSummaryBadge(deck, label) {
   return `
     <div class="active-deck-badge ${validation.playable ? "" : "invalid"}">
       <span>${label}</span>
-      <strong>${escapeHtml(deck?.name || t("noDeck", locale()))}</strong>
+      <strong>${escapeHtml(deck ? localizedDeckName(deck.name) : t("noDeck", locale()))}</strong>
       <em>${validation.playable ? t("ready", locale()) : t("invalid", locale())}</em>
     </div>
   `;
@@ -726,7 +861,7 @@ function deckDetailEmpty(deck) {
   return `
     <div class="deck-preview-card">
       <span class="deck-card-back large"></span>
-      <h2>${escapeHtml(deck.name)}</h2>
+      <h2>${escapeHtml(localizedDeckName(deck.name))}</h2>
       <p>오른쪽 카드 목록에서 카드를 선택하세요.</p>
     </div>
   `;
@@ -760,7 +895,7 @@ function deckActionButtonsForCard(card, deck) {
   } else if (["unit", "spell", "gear"].includes(card.type)) {
     const count = cardCount(deck.main, card.cardNumber);
     const sideCountValue = cardCount(deck.sideboard, card.cardNumber);
-    buttons.push(`<button data-action="deck-add-main" data-card-number="${card.cardNumber}" ${registeredNameCount(deck, card.name) >= DECK_RULES.maxCopies || mainDeckCount(deck) >= DECK_RULES.tournamentMainExact ? "disabled" : ""}>메인 덱 추가 ${count}/${DECK_RULES.maxCopies}</button>`);
+    buttons.push(`<button data-action="deck-add-main" data-card-number="${card.cardNumber}" ${registeredNameCount(deck, card.name) >= DECK_RULES.maxCopies || mainDeckCount(deck) >= DECK_RULES.tournamentMainExact ? "disabled" : ""}>주 덱 추가 ${count}/${DECK_RULES.maxCopies}</button>`);
     buttons.push(`<button data-action="deck-add-sideboard" data-card-number="${card.cardNumber}" ${registeredNameCount(deck, card.name) >= DECK_RULES.maxCopies || sideboardCount(deck) >= DECK_RULES.sideboardMax ? "disabled" : ""}>${locale() === LOCALES.KO ? "사이드보드 추가" : "Add to Sideboard"} ${sideCountValue}/${DECK_RULES.maxCopies}</button>`);
   }
   return buttons.join("") || `<button disabled>추가할 수 없음</button>`;
@@ -770,7 +905,7 @@ function deckValidityPanel(validation) {
   return `
     <div class="deck-validity ${validation.playable ? "playable" : ""}">
       <strong>${validation.playable ? "이 덱으로 플레이할 수 있습니다." : "이 덱으로는 아직 플레이할 수 없습니다."}</strong>
-      ${validation.messages.length ? `<ul>${validation.messages.map((message) => `<li>${message}</li>`).join("")}</ul>` : ""}
+      ${validation.messages.length ? `<ul>${validation.messages.map((message) => `<li>${escapeHtml(localizedDynamicText(message))}</li>`).join("")}</ul>` : ""}
       <p>저장은 항상 가능하지만, 장수 조건을 만족하지 못하면 게임 시작 덱으로 사용할 수 없습니다.</p>
     </div>
   `;
@@ -790,7 +925,7 @@ function deckCompositionPanel(deck) {
     </div>
     <div class="deck-zone-block main-deck-block">
       <div class="deck-zone-title"><strong>${t("mainDeck", locale())}</strong><span>${mainDeckCount(deck)}/${DECK_RULES.tournamentMainExact}</span></div>
-      ${deck.main.map(([number, count]) => compactDeckRow(cardByNumber(number), count, "main")).join("") || `<p class="empty">메인 덱 카드를 추가하세요.</p>`}
+      ${deck.main.map(([number, count]) => compactDeckRow(cardByNumber(number), count, "main")).join("") || `<p class="empty">주 덱 카드를 추가하세요.</p>`}
     </div>
     <div class="deck-zone-block sideboard-deck-block">
       <div class="deck-zone-title"><strong>${locale() === LOCALES.KO ? "사이드보드" : "Sideboard"}</strong><span>${sideboardCount(deck)}/${DECK_RULES.sideboardMax}</span></div>
@@ -798,7 +933,7 @@ function deckCompositionPanel(deck) {
     </div>
     <div class="deck-zone-block rune-deck-block">
       <div class="deck-zone-title"><strong>${t("runeDeck", locale())}</strong><span>${runeDeckCount(deck)}/${DECK_RULES.runeExact}</span></div>
-      <p class="deck-note">룬 덱은 메인 덱 뒤에 표시되지만, 메인 덱 장수와는 별도로 계산됩니다.</p>
+      <p class="deck-note">룬 덱은 주 덱 뒤에 표시되지만, 주 덱 장수와는 별도로 계산됩니다.</p>
       <div class="selected-rune-list">
         ${deck.runes.map(([runeKey, count]) => runeDeckRow(deck, runeKey, count)).join("") || `<p class="empty">${locale() === LOCALES.KO ? "아래에서 룬 카드를 선택하세요." : "Choose Rune cards below."}</p>`}
       </div>
@@ -831,7 +966,7 @@ function runeDeckRow(deck, runeKey, count) {
       ${card.image ? `<img class="rune-row-art" src="${card.image}" alt="${cardName(card)}" loading="lazy" />` : `<span class="rune-swatch" style="--rune:${RUNE_COLORS[domain]}"></span>`}
       <button class="deck-row-main" data-action="deck-card-focus" data-card-number="${card.cardNumber}">
         <strong>${cardName(card)}</strong>
-        <span>${domainText(domain)} · ${card.rarity || card.cardNumber}</span>
+        <span>${domainText(domain)} · ${card.rarity ? localizedRarity(card.rarity) : card.cardNumber}</span>
       </button>
       <em>x${count}</em>
       <button class="small-icon" data-action="deck-rune-remove" data-card-number="${card.cardNumber}" ${count <= 0 ? "disabled" : ""}>-</button>
@@ -868,12 +1003,12 @@ function cardSearchPanel(deck) {
   return `
     <div class="card-search-head">
       <input data-action="deck-search" placeholder="카드 검색..." value="${escapeHtml(deckEditor.search)}" />
-      <span class="card-search-count">${results.length} cards</span>
+      <span class="card-search-count">${locale() === LOCALES.KO ? `${results.length}장` : `${results.length} cards`}</span>
     </div>
     <div class="card-advanced-search">
-      <label>카드풀<select data-action="deck-pool-filter">${CARD_POOL_FORMATS.map((pool) => `<option value="${pool.id}" ${pool.id === deckEditor.poolId ? "selected" : ""}>${escapeHtml(pool.name)}</option>`).join("")}</select></label>
-      <label>출시 카드팩<select data-action="deck-pack-filter"><option value="all">전체 카드팩</option>${CARD_PACKS.map((pack) => `<option value="${pack.id}" ${pack.id === deckEditor.packId ? "selected" : ""}>${escapeHtml(pack.name)}</option>`).join("")}</select></label>
-      <label>종류<select data-action="deck-type-filter">${[["all", "전체"], ["legend", "레전드"], ["unit", "유닛"], ["spell", "주문"], ["gear", "장비"], ["battlefield", "전장"], ["rune", locale() === LOCALES.KO ? "룬" : "Rune"]].map(([value, label]) => `<option value="${value}" ${value === deckEditor.type ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+      <label>카드풀<select data-action="deck-pool-filter">${CARD_POOL_FORMATS.map((pool) => `<option value="${pool.id}" ${pool.id === deckEditor.poolId ? "selected" : ""}>${escapeHtml(localizedPackName(pool.name))}</option>`).join("")}</select></label>
+      <label>출시 카드팩<select data-action="deck-pack-filter"><option value="all">전체 카드팩</option>${CARD_PACKS.map((pack) => `<option value="${pack.id}" ${pack.id === deckEditor.packId ? "selected" : ""}>${escapeHtml(localizedPackName(pack.name))}</option>`).join("")}</select></label>
+      <label>종류<select data-action="deck-type-filter">${[["all", "전체"], ["legend", "레전드"], ["unit", "유닛"], ["spell", "주문"], ["gear", "도구"], ["battlefield", "전장"], ["rune", locale() === LOCALES.KO ? "룬" : "Rune"]].map(([value, label]) => `<option value="${value}" ${value === deckEditor.type ? "selected" : ""}>${label}</option>`).join("")}</select></label>
       <label>도메인<select data-action="deck-domain-filter"><option value="all">전체</option>${Object.values(DOMAINS).filter((domain) => domain !== DOMAINS.ANY).map((domain) => `<option value="${domain}" ${domain === deckEditor.domain ? "selected" : ""}>${domainText(domain)}</option>`).join("")}</select></label>
       <label>최대 에너지<select data-action="deck-energy-filter"><option value="all">제한 없음</option>${Array.from({ length: 9 }, (_, energy) => `<option value="${energy}" ${String(energy) === deckEditor.maxEnergy ? "selected" : ""}>${energy}</option>`).join("")}</select></label>
     </div>
@@ -888,17 +1023,17 @@ function deckAiRecommendationPanel() {
   if (!recommendation) return "";
   const pool = CARD_POOL_FORMATS.find((candidate) => candidate.id === recommendation.poolId);
   if (!recommendation.compatible) {
-    return `<div class="deck-ai-recommendation invalid"><strong>${escapeHtml(pool?.name || recommendation.poolId)} 추천 불가</strong><p>${escapeHtml(recommendation.reason)}</p></div>`;
+    return `<div class="deck-ai-recommendation invalid"><strong>${escapeHtml(localizedPackName(pool?.name || recommendation.poolId))} 추천 불가</strong><p>${escapeHtml(localizedDynamicText(recommendation.reason, { fallback: "현재 카드풀에서는 추천 덱을 만들 수 없습니다." }))}</p></div>`;
   }
   const confidence = recommendation.confidence === "high" ? "높음" : recommendation.confidence === "medium" ? "보통" : "낮음";
   const changes = recommendation.changes || [];
   const sideboard = recommendation.sideboard || [];
   return `
     <div class="deck-ai-recommendation">
-      <div class="deck-zone-title"><strong>${escapeHtml(pool?.name || recommendation.poolId)} AI 추천</strong><span>세대 ${recommendation.generation} · 표본 ${recommendation.sampleGames} · 신뢰도 ${confidence}</span></div>
+      <div class="deck-zone-title"><strong>${escapeHtml(localizedPackName(pool?.name || recommendation.poolId))} AI 추천</strong><span>세대 ${recommendation.generation} · 표본 ${recommendation.sampleGames} · 신뢰도 ${confidence}</span></div>
       ${recommendation.generation > 0 ? "" : `<p class="deck-note">아직 학습 체크포인트가 없어 기본 휴리스틱의 준비용 추천입니다.</p>`}
-      ${changes.length ? `<ul>${changes.map((change) => `<li>${escapeHtml(change.remove.name)} → ${escapeHtml(change.add.name)}</li>`).join("")}</ul><button data-action="deck-ai-apply">추천 교체 적용</button>` : `<p>현재 학습 지식으로 확실한 메인 덱 교체안을 찾지 못했습니다.</p>`}
-      ${sideboard.length ? `<details><summary>매치업 사이드보드 제안 ${sideboard.length}개</summary><ul>${sideboard.map((change) => `<li>${escapeHtml(change.outName || "-")} → ${escapeHtml(change.inName || "-")}</li>`).join("")}</ul></details>` : ""}
+      ${changes.length ? `<ul>${changes.map((change) => `<li>${escapeHtml(localizedDynamicText(change.remove.name))} → ${escapeHtml(localizedDynamicText(change.add.name))}</li>`).join("")}</ul><button data-action="deck-ai-apply">추천 교체 적용</button>` : `<p>현재 학습 지식으로 확실한 주 덱 교체안을 찾지 못했습니다.</p>`}
+      ${sideboard.length ? `<details><summary>매치업 사이드보드 제안 ${sideboard.length}개</summary><ul>${sideboard.map((change) => `<li>${escapeHtml(localizedDynamicText(change.outName || "-"))} → ${escapeHtml(localizedDynamicText(change.inName || "-"))}</li>`).join("")}</ul></details>` : ""}
     </div>
   `;
 }
@@ -924,7 +1059,16 @@ function loadDeckStore() {
   try {
     const parsed = JSON.parse(localStorage.getItem(DECK_STORAGE_KEY) || "null");
     if (!parsed || !Array.isArray(parsed.decks)) return fallback;
-    const storedDecks = parsed.decks.length ? parsed.decks.map(normalizeDeckRecord) : [];
+    const fallbackById = new Map(fallback.decks.map((deck) => [deck.id, deck]));
+    const storedDecks = parsed.decks.length
+      ? parsed.decks.map(normalizeDeckRecord).map((deck) => {
+        const currentDefault = fallbackById.get(deck.id);
+        if (deck.id.startsWith("default-") && currentDefault && deck.source !== currentDefault.source) {
+          return currentDefault;
+        }
+        return deck;
+      })
+      : [];
     const storedIds = new Set(storedDecks.map((deck) => deck.id));
     const decks = [...storedDecks, ...fallback.decks.filter((deck) => !storedIds.has(deck.id))];
     const activeDeckIds = Array.isArray(parsed.activeDeckIds) && parsed.activeDeckIds.length >= 2
@@ -1069,7 +1213,7 @@ async function connectDefaultMultiplayer() {
   if (online.loading) return;
   online.loading = true;
   online.error = "";
-  configureOnlineServer(DEFAULT_MULTIPLAYER_SERVER);
+  configureOnlineServer(await defaultMultiplayerServer());
   render();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8000);
@@ -1089,6 +1233,18 @@ async function connectDefaultMultiplayer() {
     clearTimeout(timeout);
     online.loading = false;
     render();
+  }
+}
+
+async function defaultMultiplayerServer() {
+  if (!LOCAL_SERVER_HOSTNAMES.has(window.location.hostname)) return "";
+  try {
+    const response = await fetch("/build-info.json", { cache: "no-store" });
+    if (!response.ok) return "";
+    const build = await response.json();
+    return configuredMultiplayerServer(build);
+  } catch {
+    return "";
   }
 }
 
@@ -1164,10 +1320,12 @@ function restoreOnlineSelection(preferredCardId) {
 }
 
 function setUiSelectedCard(cardId) {
+  actionRejection = null;
   const before = game.selectedCardId;
   selectCard(game, cardId);
   if (game.selectedCardId !== before || game.selectedCardId === cardId) {
     if (isOnlineGame()) onlineSelectedCardId = game.selectedCardId;
+    inspectorOpen = true;
   }
 }
 
@@ -1344,6 +1502,7 @@ function resolveDeckRecord(deck) {
 function resetGameUiState() {
   logOpen = false;
   handOpen = false;
+  chainZoneCollapsed = false;
   graveyardOpenPlayerId = null;
   banishedOpenPlayerId = null;
   intelOpenPlayerId = null;
@@ -1364,6 +1523,7 @@ function resetGameUiState() {
   if (impactDismissTimer) clearTimeout(impactDismissTimer);
   impactDismissTimer = null;
   clearRealtimeFeedback();
+  actionRejection = null;
   moveSelection.clear();
 }
 
@@ -1412,9 +1572,9 @@ function sideboardingView() {
           <div>
             <p class="eyebrow visible">${locale() === LOCALES.KO ? `게임 ${match.gameNumber} 종료` : `Game ${match.gameNumber} complete`}</p>
             <h1>${locked ? (locale() === LOCALES.KO ? "무승부 후 다음 게임 준비" : "Prepare after a draw") : (locale() === LOCALES.KO ? "사이드보딩" : "Sideboarding")}</h1>
-            <p>${locked ? (locale() === LOCALES.KO ? "무승부였으므로 카드를 교체할 수 없고 직전 Battlefield를 그대로 사용합니다." : "Cards cannot be exchanged after a draw, and both previous Battlefields are locked.") : (locale() === LOCALES.KO ? "메인 덱 카드와 사이드 카드를 같은 수만큼 교환해 주세요." : "Exchange the same number of Main Deck and Sideboard cards.")}</p>
+            <p>${locked ? (locale() === LOCALES.KO ? "무승부였으므로 카드를 교체할 수 없고 직전 전장을 그대로 사용합니다." : "Cards cannot be exchanged after a draw, and both previous Battlefields are locked.") : (locale() === LOCALES.KO ? "주 덱 카드와 사이드 카드를 같은 수만큼 교환해 주세요." : "Exchange the same number of Main Deck and Sideboard cards.")}</p>
           </div>
-          <div class="match-score"><strong>P1 ${wins.p1}</strong><span>:</span><strong>${wins.p2} P2</strong></div>
+          <div class="match-score"><strong>${locale() === LOCALES.KO ? "플레이어 1" : "P1"} ${wins.p1}</strong><span>:</span><strong>${wins.p2} ${locale() === LOCALES.KO ? "플레이어 2" : "P2"}</strong></div>
         </header>
         <div class="sideboarding-player-banner">${isOnlineGame() ? (locale() === LOCALES.KO ? "내 사이드보드" : "Your sideboard") : `${playerId.toUpperCase()} · ${locale() === LOCALES.KO ? "다른 플레이어는 화면을 보지 마세요" : "Other player, please look away"}`}</div>
         <div class="sideboarding-grid">
@@ -1425,11 +1585,11 @@ function sideboardingView() {
           </section>
           <section class="sideboarding-column">
             <div class="deck-zone-title"><strong>${locale() === LOCALES.KO ? "사이드보드" : "Sideboard"}</strong><span>${sideboardCount(draft)}/${DECK_RULES.sideboardMax}</span></div>
-            <p class="deck-note">${locale() === LOCALES.KO ? "교체된 메인 덱 카드는 새 사이드보드가 됩니다." : "Cards removed from the Main Deck become the new Sideboard."}</p>
+            <p class="deck-note">${locale() === LOCALES.KO ? "교체된 주 덱 카드는 새 사이드보드가 됩니다." : "Cards removed from the Main Deck become the new Sideboard."}</p>
             <div class="sideboarding-card-list">${draft.sideboard.map(([number, count]) => sideboardCardRow(number, count, "sideboard", locked || submitted)).join("") || `<p class="empty">${locale() === LOCALES.KO ? "등록된 사이드 카드가 없습니다." : "No registered Sideboard cards."}</p>`}</div>
           </section>
         </div>
-        ${chooser ? `<fieldset class="first-player-choice" ${submitted ? "disabled" : ""}><legend>${locale() === LOCALES.KO ? "이전 게임 패자: 다음 게임의 선공 플레이어를 선택하세요." : "Previous game loser: choose who plays first."}</legend><label><input type="radio" name="next-first" value="p1" data-action="sideboard-first-player" ${sideboardFirstPlayerId === "p1" ? "checked" : ""}/> P1</label><label><input type="radio" name="next-first" value="p2" data-action="sideboard-first-player" ${sideboardFirstPlayerId === "p2" ? "checked" : ""}/> P2</label></fieldset>` : ""}
+        ${chooser ? `<fieldset class="first-player-choice" ${submitted ? "disabled" : ""}><legend>${locale() === LOCALES.KO ? "이전 게임 패자: 다음 게임의 선공 플레이어를 선택하세요." : "Previous game loser: choose who plays first."}</legend><label><input type="radio" name="next-first" value="p1" data-action="sideboard-first-player" ${sideboardFirstPlayerId === "p1" ? "checked" : ""}/> ${locale() === LOCALES.KO ? "플레이어 1" : "P1"}</label><label><input type="radio" name="next-first" value="p2" data-action="sideboard-first-player" ${sideboardFirstPlayerId === "p2" ? "checked" : ""}/> ${locale() === LOCALES.KO ? "플레이어 2" : "P2"}</label></fieldset>` : ""}
         <div class="sideboarding-actions">
           ${sideboardSelectedMain ? `<button class="secondary" data-action="sideboard-cancel-selection">${locale() === LOCALES.KO ? "선택 취소" : "Cancel selection"}</button>` : ""}
           <button class="primary" data-action="sideboard-submit" ${submitted || (chooser && !sideboardFirstPlayerId) ? "disabled" : ""}>${submitted ? (locale() === LOCALES.KO ? "상대 준비 대기 중" : "Waiting for opponent") : (locale() === LOCALES.KO ? "구성 확정" : "Confirm configuration")}</button>
@@ -1637,12 +1797,20 @@ function applyOnlineSeatResult(result) {
 function dispatchGameCommand(command, applyLocal) {
   if (online.commandPending) return;
   clearRealtimeFeedback();
+  actionRejection = null;
   if (!isOnlineGame()) {
+    const resolvedCommand = resolveCurrentGameCommand(command);
+    if (!resolvedCommand) {
+      actionRejection = localizedCommandFailure("That action is not legal in the current game state.");
+      render();
+      return;
+    }
     const before = aiReplay ? cloneGame(game) : null;
     const actorId = aiActiveActorId(game);
-    const result = applyLocal?.();
+    const result = applyLocal?.(resolvedCommand);
+    if (result?.ok === false) actionRejection = localizedCommandFailure(result.message);
     recordLocalGameIfComplete();
-    if (aiReplay && result?.ok) queueReplayAnalysis(before, actorId, command, result);
+    if (aiReplay && result?.ok) queueReplayAnalysis(before, actorId, resolvedCommand, result);
     return;
   }
   if (!['surrender', 'restartGame', 'submitSideboard'].includes(command.kind) && !viewerCanAct()) {
@@ -1650,19 +1818,34 @@ function dispatchGameCommand(command, applyLocal) {
     render();
     return;
   }
+  // Online snapshots are intentionally redacted and JSON-only. They are not
+  // authoritative enough to replay a command through the full rules engine;
+  // doing so can both disagree with hidden server state and execute transitions
+  // on serialized data. Send the explicit UI command and let the server's
+  // shared legal-action gate validate and canonicalize it.
+  const resolvedCommand = command;
   online.commandPending = { kind: command.kind, startedAt: Date.now() };
   render();
-  sendOnlineCommand(online.roomId, online.playerToken, command)
+  sendOnlineCommand(online.roomId, online.playerToken, resolvedCommand)
     .then(() => {
       online.error = "";
+      actionRejection = null;
     })
     .catch((error) => {
       online.error = error.message;
+      actionRejection = localizedCommandFailure(error.message);
     })
     .finally(() => {
       online.commandPending = null;
       render();
     });
+}
+
+function resolveCurrentGameCommand(command) {
+  if (["surrender", "restartGame", "submitSideboard"].includes(command?.kind)) return command;
+  const actorId = aiActiveActorId(game);
+  if (!actorId) return null;
+  return resolveLegalAction(game, command, actorId);
 }
 
 function queueReplayAnalysis(before, actorId, command, result) {
@@ -1765,10 +1948,7 @@ function uiSnapshot() {
       ...game.battlefields.flatMap((field) => field.units.map((card) => card.instanceId))
     ]),
     trash: new Set(game.players.flatMap((player) => player.trash.map((card) => card.instanceId))),
-    chain: new Set([
-      ...(game.showdown?.chain.map((item) => item.card.instanceId) || []),
-      ...(game.actionChain?.chain.map((item) => item.card.instanceId) || [])
-    ]),
+    chain: new Set(chainCardInstanceIds(game)),
     chainItems,
     chainItemIds: new Set(chainItems.map((item) => item.id)),
     cardZones
@@ -1776,11 +1956,11 @@ function uiSnapshot() {
 }
 
 function visibleChainItems() {
-  return game.actionChain?.chain || game.showdown?.chain || [];
+  return (game.actionChain?.chain || game.showdown?.chain || []).filter(chainItemVisibleInTree);
 }
 
 function chainItemSnapshot(item, index) {
-  const card = item.card || {};
+  const card = item?.card || {};
   const targets = chainItemTargetIds(item);
   return {
     id: item.id || `${card.instanceId || "chain"}-${index}`,
@@ -1871,7 +2051,7 @@ function rememberRealtimeFeedback(feedback) {
     feedbackDismissTimer = null;
     recentFeedback = null;
     if (appView === "game") render();
-  }, 2600);
+  }, 1800);
 }
 
 function clearRealtimeFeedback() {
@@ -1897,24 +2077,24 @@ function headline() {
   if (game.phase === "first-player") return t("firstPlayerRoll", locale());
   if (game.phase === "champion-select") {
     const championPlayer = game.players.find((player) => player.id === game.championSelectPlayerId);
-    return `${championPlayer.name}: ${t("chooseChampion", locale())}`;
+    return `${playerName(championPlayer)}: ${t("chooseChampion", locale())}`;
   }
   if (game.phase === "battlefield-select") {
     const setupPlayer = game.players.find((player) => player.id === game.setupPlayerId);
-    return `${setupPlayer.name}: ${t("chooseBattlefield", locale())}`;
+    return `${playerName(setupPlayer)}: ${t("chooseBattlefield", locale())}`;
   }
   if (game.phase === "mulligan") {
     const mulliganPlayer = game.players.find((player) => player.id === game.mulligan?.playerId);
-    return `${mulliganPlayer.name}: ${t("mulligan", locale())}`;
+    return `${playerName(mulliganPlayer)}: ${t("mulligan", locale())}`;
   }
-  if (game.phase === "showdown") return `${currentPlayer(game).name}: ${t("showdownPriority", locale())}`;
-  return t("playerTurn", locale(), { name: currentPlayer(game).name });
+  if (game.phase === "showdown") return `${playerName(currentPlayer(game))}: ${t("showdownPriority", locale())}`;
+  return t("playerTurn", locale(), { name: playerName(currentPlayer(game)) });
 }
 
 function interactionStatus() {
   const actorId = activePlayerId();
   const actor = game.players.find((player) => player.id === actorId) || currentPlayer(game);
-  const actorName = actor?.name || t("nobody", locale());
+  const actorName = actor ? playerName(actor) : t("nobody", locale());
   const mine = !isOnlineGame() || actorId === viewerPlayerId();
 
   if (game.phase === "complete") {
@@ -1998,6 +2178,8 @@ function turnLabel() {
 }
 
 function firstPlayerPanel() {
+  const decision = game.firstPlayerDecision;
+  if (decision?.method === "roll") return firstPlayerRollPanel(decision);
   const first = game.players.find((player) => player.id === game.firstPlayerId);
   const second = game.players.find((player) => player.id !== game.firstPlayerId);
   return `
@@ -2013,18 +2195,72 @@ function firstPlayerPanel() {
           <div class="first-seat first">
             ${imageCard(first.legend, "select-only")}
             <strong>${t("first", locale())}</strong>
-            <span>${first.name}</span>
+            <span>${playerName(first)}</span>
           </div>
-          <div class="versus">VS</div>
+          <div class="versus">${locale() === LOCALES.KO ? "대" : "VS"}</div>
           <div class="first-seat second">
             ${imageCard(second.legend, "select-only")}
             <strong>${t("second", locale())}</strong>
-            <span>${second.name}</span>
+            <span>${playerName(second)}</span>
           </div>
         </div>
         <button class="primary confirm-first-player" data-action="confirm-first-player" ${viewerCanAct() ? "" : "disabled"}>${t("confirm", locale())}</button>
       </article>
     </section>
+  `;
+}
+
+function firstPlayerRollPanel(decision) {
+  const chooser = game.players.find((player) => player.id === decision.chooserId);
+  const isChoosing = decision.status === "choosing";
+  const canUseDecisionControl = viewerCanAct();
+  const notice = isChoosing
+    ? (canUseDecisionControl
+      ? t("rollWinnerChooses", locale(), { name: playerName(chooser) })
+      : t("waitingForOrderChoice", locale(), { name: playerName(chooser) }))
+    : (decision.previousRolls && Object.values(decision.rolls || {}).every((value) => value == null)
+      ? t("tiedRollAgain", locale())
+      : t("rollToChooseOrder", locale()));
+  return `
+    <section class="first-player-screen">
+      <article class="first-player-card dice-order-card">
+        <div class="section-head">
+          <div>
+            <h2>${t("firstPlayerRoll", locale())}</h2>
+            <span>${t("rollRound", locale(), { n: decision.round })}</span>
+          </div>
+        </div>
+        <p class="dice-order-notice">${notice}</p>
+        <div class="first-player-result dice-results">
+          ${game.players.map((player, index) => firstPlayerDieSeat(player, decision, index)).join(`<div class="versus">${locale() === LOCALES.KO ? "대" : "VS"}</div>`)}
+        </div>
+        ${isChoosing ? `
+          <div class="play-order-actions">
+            <button class="primary" data-action="choose-first-player" data-player="${chooser.id}" ${canUseDecisionControl ? "" : "disabled"}>${t("chooseFirst", locale())}</button>
+            <button class="secondary" data-action="choose-first-player" data-player="${game.players.find((player) => player.id !== chooser.id)?.id || chooser.id}" ${canUseDecisionControl ? "" : "disabled"}>${t("chooseSecond", locale())}</button>
+          </div>
+        ` : `
+          <button class="primary roll-first-player" data-action="roll-first-player" ${canUseDecisionControl ? "" : "disabled"}>${t("rollDie", locale())}</button>
+        `}
+      </article>
+    </section>
+  `;
+}
+
+function firstPlayerDieSeat(player, decision, index) {
+  const value = decision.rolls?.[player.id];
+  const showPreviousTie = Object.values(decision.rolls || {}).every((roll) => roll == null);
+  const tiedValue = value == null && showPreviousTie ? decision.previousRolls?.[player.id] : null;
+  const displayValue = value ?? tiedValue;
+  const active = decision.status === "rolling" && decision.rollerId === player.id;
+  const winner = decision.winnerId === player.id;
+  return `
+    <div class="first-seat dice-seat ${active ? "active" : ""} ${winner ? "roll-winner" : ""}" data-player-index="${index}">
+      ${imageCard(player.legend, "select-only")}
+      <span class="die-face ${displayValue == null ? "pending" : ""}" aria-label="${displayValue == null ? t("waitingForRoll", locale()) : t("rolledNumber", locale(), { n: displayValue })}">${displayValue ?? "?"}</span>
+      <strong>${displayValue == null ? t("waitingForRoll", locale()) : t("rolledNumber", locale(), { n: displayValue })}</strong>
+      <span>${playerName(player)}</span>
+    </div>
   `;
 }
 
@@ -2063,8 +2299,9 @@ function cinematicImpactOverlay() {
       <div class="impact-vignette"></div>
       <div class="impact-streaks"></div>
       <div class="impact-copy">
-        <span>${escapeHtml(korean ? activeImpact.kicker : activeImpact.kickerEn)}</span>
-        <strong>${escapeHtml(korean ? activeImpact.titleKo : activeImpact.titleEn)}</strong>
+        <span>${escapeHtml(korean ? localizedDynamicText(activeImpact.kicker) : activeImpact.kickerEn)}</span>
+        <strong>${escapeHtml(korean ? localizedDynamicText(activeImpact.titleKo) : activeImpact.titleEn)}</strong>
+        ${(korean ? activeImpact.detailKo : activeImpact.detailEn) ? `<small>${escapeHtml(korean ? localizedDynamicText(activeImpact.detailKo) : activeImpact.detailEn)}</small>` : ""}
       </div>
     </section>
   `;
@@ -2083,11 +2320,11 @@ function gameResultModal() {
       <div class="result-modal-copy">
         <span>${game.surrenderedPlayerId ? (korean ? "항복으로 종료" : "Ended by surrender") : t("gameEnded", locale())}</span>
         <h2 id="match-result-title">${t(won ? "victory" : "defeat", locale())}</h2>
-        <p>${korean ? `${winner?.name || winnerName()}님이 전장을 지배했습니다.` : `${winner?.name || winnerName()} controlled the battlefield.`}</p>
+        <p>${korean ? `${winner ? playerName(winner) : winnerName()}님이 전장을 지배했습니다.` : `${winner?.name || winnerName()} controlled the battlefield.`}</p>
       </div>
       <div class="result-scoreline">
         <strong>${winner?.score || 0}</strong>
-        <span>${winner?.name || ""}<b>FINAL</b>${loser?.name || ""}</span>
+        <span>${winner ? playerName(winner) : ""}<b>${locale() === LOCALES.KO ? "최종" : "FINAL"}</b>${loser ? playerName(loser) : ""}</span>
         <strong>${loser?.score || 0}</strong>
       </div>
       <section class="match-highlights" aria-label="${korean ? "결정적 플레이" : "Decisive plays"}">
@@ -2119,9 +2356,9 @@ function resultHighlightCard(highlight, index) {
     <article class="result-highlight highlight-${highlight.kind}">
       <b>${String(index + 1).padStart(2, "0")}</b>
       <div>
-        <span>${korean ? `${highlight.turn}라운드` : `Round ${highlight.turn}`} ${actor ? `· ${escapeHtml(actor.name)}` : ""}</span>
-        <strong>${escapeHtml(korean ? highlight.titleKo : highlight.titleEn)}</strong>
-        <p>${escapeHtml(korean ? highlight.detailKo : highlight.detailEn)}</p>
+        <span>${korean ? `${highlight.turn}라운드` : `Round ${highlight.turn}`} ${actor ? `· ${escapeHtml(korean ? playerName(actor) : actor.name)}` : ""}</span>
+        <strong>${escapeHtml(korean ? localizedDynamicText(highlight.titleKo) : highlight.titleEn)}</strong>
+        <p>${escapeHtml(korean ? localizedDynamicText(highlight.detailKo) : highlight.detailEn)}</p>
       </div>
     </article>
   `;
@@ -2149,8 +2386,8 @@ function scoreTrack() {
   const right = isOnlineGame() ? opponentPlayer() : game.players[1];
   const labels = [1, 2, 3, 4, 5, 6, 7, 8, 7, 6, 5, 4, 3, 2, 1];
   return `
-    <section class="score-track" aria-label="Score">
-      <span class="score-name">${left.name}</span>
+    <section class="score-track" aria-label="${locale() === LOCALES.KO ? "점수" : "Score"}">
+      <span class="score-name">${playerName(left)}</span>
       <div class="score-rail">
         ${labels.map((label, index) => {
           const leftActive = left.score > 0 && left.score === index + 1;
@@ -2163,7 +2400,7 @@ function scoreTrack() {
           `;
         }).join("")}
       </div>
-      <span class="score-name right">${right.name}</span>
+      <span class="score-name right">${playerName(right)}</span>
     </section>
   `;
 }
@@ -2217,7 +2454,7 @@ function handDrawer(player) {
     <section class="hand-drawer ${handOpen ? "open" : "closed"}">
       <div class="hand-panel" aria-hidden="${handOpen ? "false" : "true"}">
         <div class="section-head">
-          <h2>${player.name} ${t("hand", locale())}</h2>
+          <h2>${playerName(player)} ${t("hand", locale())}</h2>
           <span>${t("cardCount", locale(), { n: cardCount })}</span>
         </div>
         <div class="cards">${championCard(player)}${player.hand.map(handCard).join("") || `<p class="empty">${t("noCardsInHand", locale())}</p>`}</div>
@@ -2308,6 +2545,14 @@ function logEntryView(entry, index) {
 function localizedLogEntry(entry) {
   const value = String(entry || "");
   if (locale() !== LOCALES.KO) return value;
+  if (value.startsWith("[UI Exception]")) {
+    const detail = value.replace(/^\[UI Exception\]\s*/u, "");
+    return `화면 처리 오류: ${localizedDynamicText(detail)}`;
+  }
+  const energyGain = value.match(/^(.+) adds (\d+) Energy\.$/u);
+  if (energyGain) return `${localizedEffectSource(energyGain[1])} 효과로 에너지 ${energyGain[2]}을 획득했습니다.`;
+  const powerGain = value.match(/^(.+) adds (\d+) (Body|Calm|Chaos|Fury|Mind|Order|Any) Power\.$/u);
+  if (powerGain) return `${localizedEffectSource(powerGain[1])} 효과로 ${domainText(powerGain[3])} 힘 ${powerGain[2]}을 획득했습니다.`;
   const patterns = [
     [/^(.+) plays (.+) from the Champion Zone to base\.$/u, "$1님이 챔피언 존의 $2 카드를 기지에 사용했습니다."],
     [/^(.+) is paying for (.+)\.$/u, "$1님이 $2 비용을 지불하고 있습니다."],
@@ -2316,6 +2561,9 @@ function localizedLogEntry(entry) {
     [/^(.+) keeps their opening hand\.$/u, "$1님이 시작 손패를 유지했습니다."],
     [/^(.+) chooses cards to mulligan\.$/u, "$1님이 멀리건 카드를 선택합니다."],
     [/^(.+) chooses (.+) as their starting champion\.$/u, "$1님이 시작 챔피언으로 $2 카드를 선택했습니다."],
+    [/^(.+) rolls (\d+) for play order\.$/u, "$1님이 선후공 결정 주사위에서 $2가 나왔습니다."],
+    [/^(.+) wins the play-order roll and chooses who goes first\.$/u, "$1님이 주사위 굴림에서 이겨 선후공을 선택합니다."],
+    [/^(.+) chooses (.+) to go first\.$/u, "$1님이 $2님을 선공으로 선택했습니다."],
     [/^(.+) chooses (.+)\.$/u, "$1님이 $2 카드를 선택했습니다."],
     [/^(.+) wins the random first-player roll\.$/u, "$1님이 선공으로 결정됐습니다."],
     [/^(.+) plays (.+)\.$/u, "$1님이 $2 카드를 사용했습니다."],
@@ -2326,13 +2574,28 @@ function localizedLogEntry(entry) {
     ["Mulligans are complete. The first turn begins.", "멀리건이 끝나 첫 턴을 시작합니다."],
     ["Battlefields are set. Each player may mulligan up to 2 cards.", "전장 선택이 끝났습니다. 각 플레이어는 최대 2장까지 멀리건할 수 있습니다."],
     ["Each player chooses one starting battlefield.", "각 플레이어가 시작 전장 1개를 선택합니다."],
-    ["Each player chooses one starting champion.", "각 플레이어가 시작 챔피언 1명을 선택합니다."]
+    ["Each player chooses one starting champion.", "각 플레이어가 시작 챔피언 1명을 선택합니다."],
+    ["Each player rolls a die to decide who chooses the play order.", "각 플레이어가 주사위를 굴려 선후공 선택권을 정합니다."],
+    ["The play-order roll is tied. Both players roll again.", "선후공 결정 주사위가 동점입니다. 두 플레이어가 다시 굴립니다."]
   ]);
   if (fixed.has(value)) return fixed.get(value);
   for (const [pattern, replacement] of patterns) {
-    if (pattern.test(value)) return value.replace(pattern, replacement);
+    if (pattern.test(value)) return localizedDynamicText(value.replace(pattern, replacement));
   }
-  return value;
+  const localized = localizedDynamicText(value);
+  const allowed = ["AI", "XP", "HTTP", "Riftbound", ...game.players.map((player) => player.name)];
+  if (!hasUnexpectedEnglish(localized, allowed)) return localized;
+  const sourceCard = ALL_CARDS.find((card) => value.startsWith(card.name));
+  const sourcePlayer = game.players.find((player) => value.startsWith(player.name));
+  const source = sourceCard ? cardName(sourceCard) : sourcePlayer?.name;
+  return source ? `${source} 관련 게임 효과가 처리되었습니다.` : "게임 규칙에 따라 상태가 갱신되었습니다.";
+}
+
+function localizedEffectSource(sourceName) {
+  const rune = String(sourceName || "").match(/^(Body|Calm|Chaos|Fury|Mind|Order|Any) Rune$/u);
+  if (rune) return `${domainText(rune[1])} 룬`;
+  const card = ALL_CARDS.find((candidate) => candidate.name === sourceName);
+  return card ? cardName(card) : sourceName;
 }
 
 function paymentPanel() {
@@ -2344,7 +2607,7 @@ function paymentPanel() {
   const energyNeeded = payment.energyCost ?? displayCard.energy ?? 0;
   const poolEnergySelected = payment.poolEnergyIds?.length || 0;
   const runeEnergyNeeded = Math.max(0, energyNeeded - poolEnergySelected);
-  const paymentReady = paymentCanConfirm(player, card, payment);
+  const paymentReady = paymentConfirmationLegality(game).ok;
   return `
     <section class="payment-panel modal-panel">
       <div class="section-head">
@@ -2360,7 +2623,7 @@ function paymentPanel() {
       <div class="payment-body">
         <aside class="payment-card-preview">
           ${cardImage(displayCard)}
-          <strong>${displayCard.name}</strong>
+          <strong>${displayCard.cardNumber ? cardName(displayCard) : localizedDynamicText(displayCard.name)}</strong>
           <span>${payment.source === "effectEnergy"
             ? t("effectPayment", locale())
             : payment.source === "hideCard" ? t("payCost", locale()) : t("playCost", locale())}</span>
@@ -2368,11 +2631,9 @@ function paymentPanel() {
         <div class="payment-cost-area">
           ${optionalPaymentControls(payment)}
           ${paymentAddControls(player)}
-          ${poolEnergyControls(player, payment, energyNeeded)}
+          ${poolEnergyControls(player, payment)}
           ${poolPowerControls(player, payment, powerCost)}
-          <div class="pay-runes">
-            ${player.runes.map((rune) => paymentRune(rune, payment, displayCard, powerCost)).join("")}
-          </div>
+          ${paymentRuneSection(player, payment, displayCard, powerCost)}
         </div>
       </div>
     </section>
@@ -2395,31 +2656,35 @@ function paymentCostSummary(player, card, payment, energyNeeded, poolEnergySelec
   return parts.join(" - ");
 }
 
-function poolEnergyControls(player, payment, energyNeeded) {
-  const pool = runePoolEnergy(player);
-  const energyRuneIds = payment.energyRuneIds || [];
+function poolEnergyControls(player, payment) {
+  const pool = legalPaymentPoolEnergyOptions(game);
   if (!pool.length) return "";
   return `
-    <div class="pool-energy-list">
+    <section class="payment-resource-group generated-resource-group">
+      <div class="payment-resource-heading">
+        <strong>${locale() === LOCALES.KO ? "생성된 에너지" : "Generated Energy"}</strong>
+        <span>${locale() === LOCALES.KO ? "먼저 사용할 에너지를 선택하세요" : "Choose generated Energy to spend first"}</span>
+      </div>
+      <div class="pool-energy-list">
       ${pool.map((resource) => {
-        const selected = (payment.poolEnergyIds || []).includes(resource.id);
-        const usable = poolEnergyCanPay(resource);
-        const limitReached = !selected && ((payment.poolEnergyIds?.length || 0) + energyRuneIds.length >= energyNeeded);
+        const selected = resource.selected;
         return `
           <button
             class="pool-energy ${selected ? "selected" : ""}"
             data-action="pay-pool-energy"
             data-energy="${resource.id}"
-            ${limitReached || !usable ? "disabled" : ""}
+            aria-pressed="${selected}"
+            ${resource.canToggle ? "" : "disabled"}
             title="${resource.sourceName}${resource.restriction ? ` - ${resource.restriction} only` : ""}"
           >
             <span class="pool-energy-orb">${domainSwatches(resource.domains)}</span>
-            <strong>${selected ? t("selected", locale()) : t("generatedEnergy", locale())}</strong>
-            <span>${resource.sourceName}</span>
+            <strong>${selected ? t("selected", locale()) : `${t("energy", locale())} +1`}</strong>
+            <span>${localizedEffectSource(resource.sourceName)}</span>
           </button>
         `;
       }).join("")}
-    </div>
+      </div>
+    </section>
   `;
 }
 
@@ -2427,10 +2692,19 @@ function poolPowerControls(player, payment, powerCost) {
   const pool = runePoolPower(player);
   if (!pool.length || totalPowerAmount(powerCost) <= 0) return "";
   return `
-    <div class="pool-energy-list">
+    <section class="payment-resource-group generated-resource-group">
+      <div class="payment-resource-heading">
+        <strong>${locale() === LOCALES.KO ? "생성된 힘" : "Generated Power"}</strong>
+        <span>${locale() === LOCALES.KO ? "비용과 일치하는 힘만 사용할 수 있습니다" : "Only matching Power can be spent"}</span>
+      </div>
+      <div class="pool-energy-list">
       ${pool.map((resource) => {
         const selected = (payment.poolPowerIds || []).includes(resource.id);
-        const usable = powerCost.some((requirement) => powerMatches(resource, requirement));
+        const card = game.players.find((candidate) => candidate.id === payment.playerId)?.hand
+          .find((candidate) => candidate.instanceId === payment.cardId)
+          || findVisibleCard(payment.cardId);
+        const usable = poolPowerCanPay(resource, card)
+          && powerCost.some((requirement) => powerMatches(resource, requirement));
         const limitReached = !selected
           && ((payment.poolPowerIds?.length || 0) + (payment.powerRuneIds?.length || 0) >= totalPowerAmount(powerCost));
         return `
@@ -2438,11 +2712,14 @@ function poolPowerControls(player, payment, powerCost) {
             class="${selected ? "selected" : ""}"
             data-action="pay-pool-power"
             data-power="${resource.id}"
-            ${!usable || limitReached ? "disabled" : ""}
-          >${t("power", locale())}: ${domainText(resource.domain)}</button>
+            aria-pressed="${selected}"
+            ${!selected && (!usable || limitReached) ? "disabled" : ""}
+            title="${resource.sourceName || t("generatedPower", locale())}${resource.restriction ? ` - ${resource.restriction} only` : ""}"
+          >${domainText(resource.domain)} ${t("power", locale())}</button>
         `;
       }).join("")}
-    </div>
+      </div>
+    </section>
   `;
 }
 
@@ -2458,34 +2735,45 @@ function poolEnergyCanPay(resource, card = null) {
   return true;
 }
 
+function poolPowerCanPay(resource, card = null) {
+  if (resource.restriction === "showdown") return game.phase === "showdown";
+  if (resource.restriction === "spell") return card?.type === "spell";
+  return true;
+}
+
 function paymentAddControls(player) {
   const options = activatedAddResources(player);
   if (!options.length) return "";
   return `
-    <div class="payment-add-actions">
-      ${options.map((card) => `
-        <button data-action="activate-card" data-card="${card.instanceId}" title="${card.text || card.name}">
-          ${t("addEnergy", locale())} - ${cardName(card)}
+    <section class="payment-resource-group add-resource-group">
+      <div class="payment-resource-heading">
+        <strong>${locale() === LOCALES.KO ? "결제 중 생성 가능" : "Available During Payment"}</strong>
+        <span>${locale() === LOCALES.KO ? "필요할 때만 사용하세요" : "Use only when needed"}</span>
+      </div>
+      <div class="payment-add-actions">
+      ${options.map(({ card, ability }) => `
+        <button data-action="activate-card" data-card="${card.instanceId}" data-ability="${ability.id}" title="${cardText(card) || cardName(card)}">
+          <strong>${cardName(card)}</strong>
+          <span>${ability.kind === "addPower"
+            ? `${domainText(ability.domain)} ${t("power", locale())} +${ability.amount || 1}`
+            : `${t("energy", locale())} +${ability.amount || 1}`}</span>
         </button>
       `).join("")}
-    </div>
+      </div>
+    </section>
   `;
 }
 
 function activatedAddResources(player) {
   if (!game.pendingPayment || game.pendingChoice) return [];
   if (game.pendingPayment.playerId !== player.id) return [];
-  const paidCard = paymentDisplayCard(player, game.pendingPayment);
   return controlledCards(player)
-    .filter((card) => card.controllerId === player.id)
-    .filter((card) => (card.effects || [])
-      .filter((effect) => effect.timing === "activated")
-      .some((effect) =>
-        ["addEnergy", "addPower"].includes(effect.kind)
-        && (effect.abilityKeywords?.includes("Reaction") || card.tags?.includes("Reaction") || card.keywords?.includes("Reaction"))
-        && (!card.exhausted || effect.exhaust === false)
-        && (effect.restriction !== "spell" || paidCard?.type === "spell")
-      ));
+    // Basic Runes already have direct Energy/Power controls in the Rune payment
+    // section. Listing their ADD abilities here duplicates the same decision.
+    .filter((card) => card.controllerId === player.id && card.type !== "rune")
+    .flatMap((card) => legalActivatedAbilityOptions(game, card.instanceId)
+      .filter((ability) => ["addEnergy", "addPower"].includes(ability.kind))
+      .map((ability) => ({ card, ability })));
 }
 
 function controlledCards(player) {
@@ -2507,40 +2795,13 @@ function optionalPaymentControls(payment) {
           class="${effect.selected ? "selected" : ""}"
           data-action="toggle-optional-payment"
           data-effect="${effect.id}"
-          title="${effect.label}"
+          title="${localizedDynamicText(effect.label)}"
         >
-          ${effect.selected ? t("on", locale()) : t("off", locale())} - ${effect.label}
+          ${effect.selected ? t("on", locale()) : t("off", locale())} - ${localizedDynamicText(effect.label)}
         </button>
       `).join("")}
     </div>
   `;
-}
-
-function paymentCanConfirm(player, card, payment) {
-  const energyRuneIds = payment.energyRuneIds || [];
-  const powerRuneIds = payment.powerRuneIds || [];
-  const energyRunes = energyRuneIds
-    .map((id) => player.runes.find((rune) => rune.instanceId === id))
-    .filter(Boolean);
-  const energyCost = payment.energyCost ?? (card.energy || 0);
-  const powerCost = payment.powerCost || card.power || [];
-  const selectedPoolEnergy = (payment.poolEnergyIds || [])
-    .map((id) => runePoolEnergy(player).find((resource) => resource.id === id))
-    .filter(Boolean);
-  if (selectedPoolEnergy.length !== (payment.poolEnergyIds || []).length) return false;
-  if (selectedPoolEnergy.some((resource) => !poolEnergyCanPay(resource))) return false;
-  if (energyRunes.length + selectedPoolEnergy.length !== energyCost) return false;
-  if (energyRunes.some((rune) => rune.exhausted)) return false;
-
-  const selectedPowerRunes = powerRuneIds
-    .map((id) => player.runes.find((rune) => rune.instanceId === id))
-    .filter(Boolean);
-  const selectedPoolPower = (payment.poolPowerIds || [])
-    .map((id) => runePoolPower(player).find((resource) => resource.id === id))
-    .filter(Boolean);
-  if (selectedPoolPower.length !== (payment.poolPowerIds || []).length) return false;
-
-  return powerSelectionSatisfies([...selectedPoolPower, ...selectedPowerRunes], powerCost, true);
 }
 
 function runePoolEnergy(player) {
@@ -2585,45 +2846,8 @@ function powerMatches(rune, requirement) {
   return requirement.domain === "Any" || rune.domain === requirement.domain;
 }
 
-function powerSelectionSatisfies(runes, requirements, exact = false) {
-  if (exact && runes.length !== totalPowerAmount(requirements)) return false;
-  return Boolean(choosePowerRunes(runes, requirements));
-}
-
 function totalPowerAmount(requirements) {
   return requirements.reduce((sum, requirement) => sum + requirement.amount, 0);
-}
-
-function choosePowerRunes(runes, requirements) {
-  const slots = expandPowerRequirements(requirements);
-  if (slots.length === 0) return [];
-  if (runes.length < slots.length) return null;
-  const used = new Set();
-  const chosen = [];
-  const assign = (slotIndex) => {
-    if (slotIndex >= slots.length) return true;
-    const requirement = slots[slotIndex];
-    for (const rune of runes) {
-      if (used.has(rune.instanceId) || !powerMatches(rune, requirement)) continue;
-      used.add(rune.instanceId);
-      chosen.push(rune);
-      if (assign(slotIndex + 1)) return true;
-      chosen.pop();
-      used.delete(rune.instanceId);
-    }
-    return false;
-  };
-  return assign(0) ? [...chosen] : null;
-}
-
-function expandPowerRequirements(requirements) {
-  return requirements
-    .flatMap((requirement) => Array.from({ length: requirement.amount }, () => requirement))
-    .sort((left, right) => {
-      if (left.domain === "Any" && right.domain !== "Any") return 1;
-      if (left.domain !== "Any" && right.domain === "Any") return -1;
-      return 0;
-    });
 }
 
 function runeCanPayPower(rune, card, payment, powerCost) {
@@ -2632,6 +2856,22 @@ function runeCanPayPower(rune, card, payment, powerCost) {
   if (!powerCost.some((requirement) => powerMatches(rune, requirement))) return false;
   if (powerRuneIds.length + (payment.poolPowerIds?.length || 0) >= totalPowerAmount(powerCost)) return false;
   return true;
+}
+
+function paymentRuneSection(player, payment, card, powerCost) {
+  const runes = player.runes.map((rune) => paymentRune(rune, payment, card, powerCost)).filter(Boolean);
+  if (!runes.length) return "";
+  return `
+    <section class="payment-resource-group rune-payment-group">
+      <div class="payment-resource-heading">
+        <strong>${locale() === LOCALES.KO ? "룬으로 지불" : "Pay With Runes"}</strong>
+        <span>${locale() === LOCALES.KO
+          ? "에너지는 룬을 탈진시키고, 힘은 룬을 재활용합니다"
+          : "Energy exhausts a Rune; Power recycles it"}</span>
+      </div>
+      <div class="pay-runes">${runes.join("")}</div>
+    </section>
+  `;
 }
 
 function paymentRune(rune, payment, card, powerCost) {
@@ -2644,17 +2884,18 @@ function paymentRune(rune, payment, card, powerCost) {
   const poolSelected = payment.poolEnergyIds?.length || 0;
   const runeEnergyNeeded = Math.max(0, energyCost - poolSelected);
   const energyDisabled = rune.exhausted || (!energySelected && energyRuneIds.length >= runeEnergyNeeded);
+  const showEnergy = energySelected || (energyCost > 0 && !energyDisabled);
+  const showPower = powerSelected || (totalPowerAmount(powerCost) > 0 && !powerDisabled);
+  if (!showEnergy && !showPower) return "";
   return `
     <article class="pay-rune ${energySelected ? "selected-energy" : ""} ${powerSelected ? "selected-power" : ""}">
       <span class="rune payment-rune-card ${rune.exhausted ? "spent" : ""}" style="--rune:${rune.color}">
         ${rune.image ? `<img src="${rune.image}" alt="${cardName(rune)}" />` : `<span class="rune-swatch"></span>`}
         <span class="rune-card-caption">${domainText(rune.domain)}${rune.exhausted ? ` · ${t("spent", locale())}` : ""}</span>
-        ${energySelected ? `<strong>${t("energySelected", locale())}</strong>` : ""}
-        ${powerSelected ? `<strong>${t("powerSelected", locale())}</strong>` : ""}
       </span>
-      <div class="actions">
-        <button data-action="pay-rune" data-rune="${rune.instanceId}" data-mode="energy" ${energyDisabled ? "disabled" : ""}>${t("energy", locale())}</button>
-        <button data-action="pay-rune" data-rune="${rune.instanceId}" data-mode="power" ${powerDisabled ? "disabled" : ""}>${t("power", locale())}</button>
+      <div class="payment-mode-buttons">
+        ${showEnergy ? `<button class="${energySelected ? "selected" : ""}" data-action="pay-rune" data-rune="${rune.instanceId}" data-mode="energy" aria-pressed="${energySelected}">${t("energy", locale())}</button>` : ""}
+        ${showPower ? `<button class="${powerSelected ? "selected" : ""}" data-action="pay-rune" data-rune="${rune.instanceId}" data-mode="power" aria-pressed="${powerSelected}">${domainText(rune.domain)} ${t("power", locale())}</button>` : ""}
       </div>
     </article>
   `;
@@ -2671,12 +2912,12 @@ function graveyardPanel(playerId) {
     <section class="graveyard-panel modal-panel">
       <div class="section-head">
         <div>
-          <h2>${player.name} ${t("trash", locale())}</h2>
+          <h2>${playerName(player)} ${t("trash", locale())}</h2>
           <span>${t("cardCount", locale(), { n: player.trash.length })}</span>
         </div>
         <button data-action="close-graveyard">${t("close", locale())}</button>
       </div>
-      <div class="cards graveyard-cards">
+      <div class="cards graveyard-cards" data-scroll-key="graveyard-${player.id}">
         ${player.trash.map((card) => `
           <article class="${imageCardClass(card, "graveyard-card")}" data-card-id="${card.instanceId}">
             ${cardImage(card)}
@@ -2694,10 +2935,10 @@ function banishedPanel(playerId) {
   return `
     <section class="graveyard-panel modal-panel banished-panel">
       <div class="section-head">
-        <div><h2>${player.name} ${t("banished", locale())}</h2><span>${t("cardCount", locale(), { n: cards.length })}</span></div>
+        <div><h2>${playerName(player)} ${t("banished", locale())}</h2><span>${t("cardCount", locale(), { n: cards.length })}</span></div>
         <button data-action="close-banished">${t("close", locale())}</button>
       </div>
-      <div class="cards graveyard-cards">
+      <div class="cards graveyard-cards" data-scroll-key="banished-${player.id}">
         ${cards.map((card) => `<article class="${imageCardClass(card, "graveyard-card")}" data-card-id="${card.instanceId}">${cardImage(card)}</article>`).join("") || `<p class="empty">${t("banishedEmpty", locale())}</p>`}
       </div>
     </section>`;
@@ -2716,7 +2957,7 @@ function intelPanel(playerId) {
     <section class="intel-panel modal-panel reveal-panel">
       <div class="section-head">
         <div>
-          <h2>${player.name}: ${t("revealedIntel", locale())}</h2>
+          <h2>${playerName(player)}: ${t("revealedIntel", locale())}</h2>
           <span>${t("availableUntilTurnEnds", locale())}</span>
         </div>
         <button data-action="close-intel">${t("close", locale())}</button>
@@ -2748,12 +2989,14 @@ function intelPanel(playerId) {
 
 function choicePanel() {
   const choice = game.pendingChoice;
+  if (choice.effect === "triggerOrder") return triggerOrderPanel(choice);
   if (choice.effect === "combatDamage") return combatDamagePanel(choice);
   if (choice.effect === "alphaStrikeDamage") return alphaStrikeDamagePanel(choice);
   if (choice.effect === "payDeflect") return deflectPaymentPanel(choice);
   if (choice.effect === "predictChoice") return predictChoicePanel(choice);
   if (choice.effect === "acknowledgeReveal") return revealConfirmationPanel(choice);
   const instruction = choiceEffectInstruction(choice);
+  const repeatProgress = repeatedDamageProgress(choice);
   return `
     <section class="choice-panel modal-panel ${choice.effect === "sabotage" ? "reveal-panel" : ""}">
       <div class="section-head">
@@ -2761,6 +3004,7 @@ function choicePanel() {
           <h2>${choice.effect === "sabotage" ? `${cardName(choice.card)}: ${t("revealedHand", locale())}` : `${choice.data?.declareTrigger ? t("declaring", locale()) : t("resolving", locale())} ${cardName(choice.card)}`}</h2>
           <span>${localizedChoicePrompt(choice)}</span>
           ${instruction ? `<p class="choice-instruction">${instruction}</p>` : ""}
+          ${repeatProgress}
         </div>
         ${choice.optional ? `<button data-action="decline-effect">${t("decline", locale())}</button>` : ""}
       </div>
@@ -2770,6 +3014,87 @@ function choicePanel() {
       </div>
     </section>
   `;
+}
+
+function triggerOrderPanel(choice) {
+  const state = choice.data?.triggerOrderState;
+  const group = state?.groups?.[state.groupIndex];
+  const chosen = group?.orderedTriggers || [];
+  const triggerOptions = choice.options.filter((option) => !option.confirmTriggerOrder);
+  const confirmOption = choice.options.find((option) => option.confirmTriggerOrder);
+  const total = triggerOptions.length;
+  const mandatoryRemaining = triggerOptions.filter((option) => !option.optionalTrigger && !option.selected).length;
+  return `
+    <section class="choice-panel modal-panel trigger-order-panel">
+      <div class="section-head trigger-order-head">
+        <div>
+          <h2>${t("triggerOrderTitle", locale())}</h2>
+          <span>${t("triggerOrderProgress", locale(), { selected: chosen.length, total })}</span>
+          <p class="choice-instruction trigger-order-instruction">${t("triggerOrderHelp", locale())}</p>
+          ${mandatoryRemaining ? `<p class="trigger-order-required">${t("triggerOrderMandatoryRemaining", locale(), { n: mandatoryRemaining })}</p>` : ""}
+        </div>
+      </div>
+      <div class="trigger-order-track" aria-label="${t("triggerOrderSelected", locale())}">
+        ${Array.from({ length: total }, (_, index) => {
+          const trigger = chosen[index];
+          return `
+            <div class="trigger-order-step ${trigger ? "is-chosen" : "is-pending"}">
+              <b>${index + 1}</b>
+              <span>${trigger ? triggerOrderSourceName(trigger) : t("pending", locale())}</span>
+            </div>
+          `;
+        }).join("")}
+      </div>
+      ${chosen.length ? `
+        <div class="trigger-order-selected">
+          <strong>${t("triggerOrderSelected", locale())}</strong>
+          <ol>
+            ${chosen.map((trigger) => `<li><b>${triggerOrderSourceName(trigger)}</b><span>${triggerOrderEffectText(trigger)}</span></li>`).join("")}
+          </ol>
+        </div>
+      ` : ""}
+      <div class="choice-grid trigger-order-grid">
+        ${triggerOptions.map((option) => triggerOrderOptionButton(choice, option)).join("")}
+      </div>
+      ${confirmOption ? `
+        <div class="trigger-order-confirm">
+          <button type="button" class="primary" data-action="choose-effect" data-choice="${confirmOption.id}" ${confirmOption.disabled ? "disabled aria-disabled=\"true\"" : ""}>${t("triggerOrderConfirm", locale())}</button>
+        </div>
+      ` : ""}
+    </section>
+  `;
+}
+
+function triggerOrderOptionButton(choice, option) {
+  const group = choice.data?.triggerOrderState?.groups?.[choice.data.triggerOrderState.groupIndex];
+  const trigger = group?.triggers?.find((candidate) => candidate.id === option.id);
+  const preview = choicePreviewCard(option);
+  const sourceName = trigger ? triggerOrderSourceName(trigger) : (preview ? cardName(preview) : localizedChoiceOptionLabel(option));
+  return `
+    <div class="choice-option-wrap trigger-order-option-wrap">
+      <button type="button" class="choice-option trigger-order-option ${option.selected ? "is-selected" : ""}" data-action="choose-effect" data-choice="${option.id}" data-card-id="${option.cardId || ""}" aria-pressed="${Boolean(option.selected)}">
+        <strong class="trigger-order-rank">${option.selected
+          ? t("triggerOrderChooseRank", locale(), { n: option.selectionOrder })
+          : t(option.optionalTrigger ? "triggerOrderOptional" : "triggerOrderMandatory", locale())}</strong>
+        ${option.cardId ? choiceOptionImage(option) : ""}
+        <span class="choice-card-name">${sourceName}</span>
+        <span class="trigger-order-kind">${triggerKindLabel(trigger) || t("triggeredAbility", locale())}</span>
+        <small class="trigger-order-effect">${triggerOrderEffectText(trigger, option)}</small>
+      </button>
+      ${preview && !preview.redacted ? `<button type="button" class="choice-card-view" data-action="view-choice-card" data-card-id="${preview.instanceId}">${t("viewFullCard", locale())}</button>` : ""}
+    </div>
+  `;
+}
+
+function triggerOrderSourceName(trigger) {
+  const source = findVisibleCard(trigger?.sourceCardId) || trigger?.sourceCardSnapshot;
+  return source ? cardName(source) : (triggerKindLabel(trigger) || t("triggeredAbility", locale()));
+}
+
+function triggerOrderEffectText(trigger, option = null) {
+  const source = findVisibleCard(trigger?.sourceCardId) || trigger?.sourceCardSnapshot;
+  if (source) return escapeHtml(cardText(source));
+  return escapeHtml(triggerKindLabel(trigger) || localizedChoiceOptionLabel(option || {}) || t("triggeredAbility", locale()));
 }
 
 function predictChoicePanel(choice) {
@@ -2810,6 +3135,7 @@ function predictChoicePanel(choice) {
 }
 
 function localizedChoicePrompt(choice) {
+  if (choice.effect === "triggerOrder") return t("triggerOrderHelp", locale());
   if (locale() === "en") return choice.prompt;
   return t("chooseEffectPrompt", locale(), { name: cardName(choice.card) });
 }
@@ -2849,7 +3175,7 @@ function revealConfirmationPanel(choice) {
           </article>
         `).join("") || `<p class="empty">${t("noCardsInHand", locale())}</p>`}
       </div>
-      <div class="actions">
+      <div class="actions reveal-confirmation-actions">
         <button type="button" class="primary" data-action="choose-effect" data-choice="continue">${t("confirm", locale())}</button>
       </div>
     </section>
@@ -2883,7 +3209,7 @@ function choiceCardContext(cardId, card = null) {
     if (player.trash.some((candidate) => candidate.instanceId === cardId)) return { playerId: player.id, zone: "trash", location: "trash" };
     if ((player.banished || []).some((candidate) => candidate.instanceId === cardId)) return { playerId: player.id, zone: "banished", location: "banished" };
   }
-  if (game.showdown?.chain.some((item) => item.card?.instanceId === cardId) || game.actionChain?.chain.some((item) => item.card?.instanceId === cardId)) {
+  if (game.showdown?.chain?.some((item) => item?.card?.instanceId === cardId) || game.actionChain?.chain?.some((item) => item?.card?.instanceId === cardId)) {
     return { playerId: card?.controllerId || card?.ownerId || null, zone: "chain", location: "chain" };
   }
   return { playerId: card?.controllerId || card?.ownerId || null, zone: "unknown", location: "unknown" };
@@ -2928,16 +3254,47 @@ function localizedChoiceOptionLabel(option) {
     keep: t("keepOnTop", locale()),
     recycle: t("recycle", locale()),
     "recycle-all": t("recycleAll", locale()),
-    swap: t("reverseOrder", locale())
+    swap: t("reverseOrder", locale()),
+    "basic-rune-energy": "탈진 → 에너지 +1",
+    "basic-rune-power": "재활용 → 힘 +1"
   };
+  const localAbilityId = String(option.id || "").split(":").at(-1);
+  if (labels[localAbilityId]) return labels[localAbilityId];
   if (labels[option.id]) return labels[option.id];
   if (/^Pay Energy \d+$/i.test(option.label || "")) return option.label.replace(/^Pay Energy/i, t("payEnergy", locale()));
   if (/^(Do not|Decline|Keep cards)/i.test(option.label || "")) return t("decline", locale());
-  return option.label;
+  return localizeKoreanChoiceLabel(localizedDynamicText(option.label));
 }
 
 function choicePreviewCard(option) {
   return option?.card && !option.card.redacted ? option.card : findChoicePreviewCard(option?.cardId);
+}
+
+function repeatedDamageProgress(choice) {
+  const declarationSpec = choice.effect === "declarePlayTarget"
+    ? choice.data?.currentDeclaration?.spec
+    : null;
+  const declaredRepeatedDamage = declarationSpec?.kind === "dealDamageUnit"
+    && declarationSpec?.selectRepeatedTargetsOnPlay;
+  if (choice.effect !== "damageUnit" && !declaredRepeatedDamage) return "";
+  const total = declaredRepeatedDamage
+    ? choice.data?.max || declarationSpec.repeat || 1
+    : choice.data?.repeatTotal || 1;
+  if (total < 2) return "";
+  const step = declaredRepeatedDamage
+    ? Math.min(total, (choice.data?.selectedForCurrentStep?.length || 0) + 1)
+    : Math.max(1, total - (choice.data?.remaining || total) + 1);
+  const amount = declaredRepeatedDamage ? declarationSpec.amount || 0 : choice.data?.amount || 0;
+  const mayRepeatTarget = Boolean(declaredRepeatedDamage
+    ? declarationSpec.allowRepeatedTargets
+    : choice.data?.allowRepeatedTargets);
+  const label = locale() === LOCALES.KO
+    ? (declaredRepeatedDamage ? `피해 ${amount} 대상 · ${step}/${total}회 선언` : `피해 ${amount} · ${step}/${total}회`)
+    : (declaredRepeatedDamage ? `${amount} damage target · declare ${step}/${total}` : `${amount} damage · ${step}/${total}`);
+  const detail = locale() === LOCALES.KO
+    ? (mayRepeatTarget ? "같은 유닛을 다시 선택할 수 있습니다." : "이전에 선택한 유닛은 다시 선택할 수 없습니다.")
+    : (mayRepeatTarget ? "The same unit may be selected again." : "Previously selected units cannot be selected again.");
+  return `<p class="choice-repeat-progress"><strong>${label}</strong><span>${detail}</span></p>`;
 }
 
 function choiceEffectInstruction(choice) {
@@ -2945,15 +3302,15 @@ function choiceEffectInstruction(choice) {
   const amount = choice.data?.amount || choice.data?.remaining || 0;
   if (locale() === LOCALES.KO) {
     const instructionsKo = {
-      trashGear: `${sourceName}: 처치하여 소유자의 폐기장에 놓을 장비를 선택하세요.`,
-      markTemporaryGear: `${sourceName}: 일시적으로 만들 장비를 선택하세요.`,
+      trashGear: `${sourceName}: 처치하여 소유자의 폐기장에 놓을 도구를 선택하세요.`,
+      markTemporaryGear: `${sourceName}: 일시적으로 만들 도구를 선택하세요.`,
       damageUnit: `${sourceName}: 피해 ${amount || "지정된 수치"}를 받을 유닛을 선택하세요.`,
       returnUnitToHand: `${sourceName}: 소유자의 손으로 되돌릴 유닛을 선택하세요.`,
       readyUnit: `${sourceName}: 준비시킬 아군 탈진 유닛을 선택하세요.`,
       sabotage: `${sourceName}: 재활용할 상대의 공개된 비유닛 카드를 선택하세요.`,
-      equipGear: `${sourceName}: 이 장비를 부착할 유닛을 선택하세요.`,
-      stealEnemyGear: `${sourceName}: 추가 비용을 지불한 뒤 가져올 적 장비를 선택하세요.`,
-      payDeflect: `${sourceName}: 굴절 파워를 지불할 룬을 선택하세요.`,
+      equipGear: `${sourceName}: 이 도구를 부착할 유닛을 선택하세요.`,
+      stealEnemyGear: `${sourceName}: 추가 비용을 지불한 뒤 가져올 적 도구를 선택하세요.`,
+      payDeflect: `${sourceName}: 굴절 힘을 지불할 룬을 선택하세요.`,
       declarePlayTarget: `${sourceName}: 비용을 지불하기 전에 대상을 선언하세요.`,
       declareMoveDestination: `${sourceName}: 상대가 반응하기 전에 이동 목적지를 선언하세요.`,
       secondDrawBuff: `${sourceName}: 두 번째 카드 뽑기 보너스를 받을 아군 유닛을 선택하세요.`,
@@ -3031,12 +3388,12 @@ function combatDamagePanel(choice) {
       <div class="section-head">
         <div>
           <h2>${t("damageAssign", locale())}</h2>
-          <span>${t("assigningDamage", locale(), { actor: assigning?.name || t("nobody", locale()), amount: choice.data?.remaining || 0, target: targetPlayer?.name || t("opponent", locale()) })}</span>
+          <span>${t("assigningDamage", locale(), { actor: assigning ? playerName(assigning) : t("nobody", locale()), amount: choice.data?.remaining || 0, target: targetPlayer ? playerName(targetPlayer) : t("opponent", locale()) })}</span>
         </div>
       </div>
       <div class="combat-summary">
         <strong>${choice.data?.remaining || 0}</strong>
-        <span>available damage</span>
+        <span>${locale() === LOCALES.KO ? "배정 가능한 피해" : "available damage"}</span>
         <small>${t("autoLethalHint", locale())}</small>
       </div>
       <div class="choice-grid combat-choice-grid">
@@ -3060,7 +3417,7 @@ function deflectPaymentPanel(choice) {
         <strong class="deflect-progress">${selected}/${amount}</strong>
       </div>
       <p class="choice-instruction">${locale() === LOCALES.KO
-        ? `이 대상을 선택하려면 파워로 사용할 룬 ${amount}개를 선택해야 합니다. 선택한 룬은 룬 덱으로 재활용됩니다.`
+        ? `이 대상을 선택하려면 힘으로 사용할 룬 ${amount}개를 선택해야 합니다. 선택한 룬은 룬 덱으로 재활용됩니다.`
         : `Choose ${amount} rune${amount === 1 ? "" : "s"} to pay as Power. Chosen runes are recycled to the Rune Deck.`}</p>
       <div class="deflect-rune-grid">
         ${choice.options.map((option) => {
@@ -3068,7 +3425,7 @@ function deflectPaymentPanel(choice) {
           return `
             <button type="button" class="deflect-rune-option" data-action="choose-effect" data-choice="${option.id}">
               ${rune?.image ? `<img class="deflect-rune-art" src="${rune.image}" alt="${cardName(rune)}" />` : `<span class="rune-swatch" style="--rune:${rune?.color || "#94a3b8"}"></span>`}
-              <strong>${rune ? domainText(rune.domain) : option.label}</strong>
+              <strong>${rune ? domainText(rune.domain) : localizedDynamicText(option.label)}</strong>
               <span>${rune?.exhausted ? t("spent", locale()) : t("ready", locale())}</span>
             </button>
           `;
@@ -3093,7 +3450,7 @@ function alphaStrikeDamagePanel(choice) {
       </div>
       <div class="combat-summary">
         <strong>${remaining}</strong>
-        <span>available damage</span>
+        <span>${locale() === LOCALES.KO ? "배정 가능한 피해" : "available damage"}</span>
         <small>${choiceEffectInstruction(choice)}</small>
       </div>
       <div class="alpha-strike-targets">
@@ -3102,7 +3459,7 @@ function alphaStrikeDamagePanel(choice) {
           return `
             <div class="alpha-strike-target">
               ${choiceOptionImage(option)}
-              <strong>${target ? cardName(target) : option.label}</strong>
+              <strong>${target ? cardName(target) : localizedDynamicText(option.label)}</strong>
               <label>
                 <span>${t("damage", locale())}</span>
                 <input type="number" min="1" max="${remaining}" value="1" data-alpha-target="${option.cardId}" />
@@ -3119,7 +3476,9 @@ function alphaStrikeDamagePanel(choice) {
 function combatDamageOption(info, legal) {
   const card = findVisibleCard(info.cardId);
   const optionId = legal ? info.cardId : "";
-  const amountLabel = info.amount ? `${info.amount} damage${info.lethalNow ? " lethal" : ""}` : "";
+  const amountLabel = info.amount
+    ? (locale() === LOCALES.KO ? `${info.amount} 피해${info.lethalNow ? " · 처치 가능" : ""}` : `${info.amount} damage${info.lethalNow ? " lethal" : ""}`)
+    : "";
   return `
     <button
       class="choice-option card-choice-option combat-choice ${legal ? "" : "disabled-choice"}"
@@ -3129,8 +3488,8 @@ function combatDamageOption(info, legal) {
       ${legal ? "" : "disabled"}
     >
       ${choiceOptionImage({ cardId: info.cardId })}
-      <span>${card?.name || "Unit"}</span>
-      <strong>${legal ? amountLabel : info.reason}</strong>
+      <span>${card ? cardName(card) : (locale() === LOCALES.KO ? "유닛" : "Unit")}</span>
+      <strong>${legal ? amountLabel : localizedDynamicText(info.reason, { fallback: "현재 이 대상에게 피해를 배정할 수 없습니다." })}</strong>
     </button>
   `;
 }
@@ -3140,10 +3499,10 @@ function choiceOptionImage(option) {
   const optionCard = typeof option === "object" ? option.card : null;
   const visibleCard = findVisibleCard(cardId);
   const card = option?.revealed && optionCard ? optionCard : (visibleCard && !visibleCard.redacted ? visibleCard : optionCard || visibleCard || null);
-  if (!card && option.image) return `<span class="choice-card-art"><img src="${option.image}" alt="${option.label || "Card"}" loading="lazy" /></span>`;
-  if (!card) return `<div class="choice-card-fallback">${option.label || "Card"}</div>`;
-  if (!card.image) return `<div class="choice-card-fallback">${card.name}</div>`;
-  return `<span class="choice-card-art"><img src="${card.image}" alt="${card.name}" loading="lazy" /></span>`;
+  if (!card && option.image) return `<span class="choice-card-art"><img src="${option.image}" alt="${localizedDynamicText(option.label || (locale() === LOCALES.KO ? "카드" : "Card"))}" loading="lazy" /></span>`;
+  if (!card) return `<div class="choice-card-fallback">${localizedDynamicText(option.label || (locale() === LOCALES.KO ? "카드" : "Card"))}</div>`;
+  if (!card.image) return `<div class="choice-card-fallback">${cardName(card)}</div>`;
+  return `<span class="choice-card-art"><img src="${card.image}" alt="${cardName(card)}" loading="lazy" /></span>`;
 }
 
 function findVisibleCard(cardId) {
@@ -3169,8 +3528,8 @@ function findVisibleCard(cardId) {
     ...game.battlefields,
     ...game.battlefields.flatMap((field) => field.units),
     ...game.battlefields.flatMap((field) => (field.hidden || []).map((item) => item.card)),
-    ...(game.showdown?.chain.map((item) => item.card) || []),
-    ...(game.actionChain?.chain.map((item) => item.card) || [])
+    ...(game.showdown?.chain.map((item) => item?.card).filter(Boolean) || []),
+    ...(game.actionChain?.chain.map((item) => item?.card).filter(Boolean) || [])
   ];
   return pools.find((card) => card?.instanceId === cardId || card?.id === cardId) || null;
 }
@@ -3191,7 +3550,7 @@ function isVisibleSelectableCard(cardId) {
 function showdownPanel() {
   const showdown = game.showdown;
   const field = game.battlefields.find((candidate) => candidate.instanceId === showdown.battlefieldId);
-  const chain = [...showdown.chain].reverse();
+  const chain = [...(showdown.chain || [])].filter(chainItemVisibleInTree).reverse();
   return `
     <section class="showdown-panel">
       <div class="section-head">
@@ -3199,7 +3558,7 @@ function showdownPanel() {
           <h2>${t("showdown", locale())}: ${field ? cardName(field) : t("battlefield", locale())}</h2>
           <span>${chain.length ? t("resolveChainFirst", locale()) : t("passToFight", locale())}</span>
         </div>
-        <button class="primary" data-action="pass-showdown">${t("pass", locale())}</button>
+        <button class="primary" data-action="pass-showdown" ${viewerCanAct() ? "" : "disabled"}>${t("pass", locale())}</button>
       </div>
       <div class="chain-row">
         ${chain.map((item, index) => chainCard(item, index)).join("") || `<p class="empty">${t("chainEmpty", locale())}</p>`}
@@ -3209,15 +3568,17 @@ function showdownPanel() {
 }
 
 function chainCard(item, index) {
-  const player = game.players.find((candidate) => candidate.id === item.playerId);
-  const motionClass = uiMotion.chained.has(item.card.instanceId)
-    ? (hasKeyword(item.card, "Ambush") ? "ambush-chain" : (item.card.tags?.includes("Reaction") ? "reaction-chain" : "chain-enter"))
+  const player = game.players.find((candidate) => candidate.id === item?.playerId);
+  const card = item?.card || findVisibleCard(item?.trigger?.sourceCardId);
+  const cardId = card?.instanceId || "";
+  const motionClass = cardId && uiMotion.chained.has(cardId)
+    ? (hasKeyword(card, "Ambush") ? "ambush-chain" : (card.tags?.includes("Reaction") ? "reaction-chain" : "chain-enter"))
     : "";
   return `
-    <button type="button" class="chain-card ${motionClass}" data-action="view-chain-card" data-card-id="${item.card.instanceId}" title="${t("viewFullCard", locale())}">
+    <button type="button" class="chain-card ${motionClass}" data-action="view-chain-card" data-card-id="${cardId}" title="${t("viewFullCard", locale())}" ${cardId ? "" : "disabled"}>
       <strong>${t(index === 0 ? "next" : "queued", locale())}</strong>
-      <span>${cardName(item.card)}</span>
-      <small>${player?.name || ""} / ${t(item.status || "finalized", locale())}</small>
+      <span>${chainItemTitle(item)}</span>
+      <small>${player ? playerName(player) : ""} / ${localizedDynamicText(t(item?.status || "finalized", locale()))}</small>
     </button>
   `;
 }
@@ -3246,30 +3607,46 @@ function chainZonePanel() {
   ];
   const items = [...chainItems, ...triggerItems];
   const responding = responsePromptInfo();
-  if (!items.length && !responding) return "";
+  if (!items.length && !responding) {
+    chainZoneCollapsed = false;
+    return "";
+  }
   return `
-    <section class="chain-zone" aria-label="${t("processingQueue", locale())}" aria-live="polite">
+    <section class="chain-zone ${chainZoneCollapsed ? "is-collapsed" : ""}" aria-label="${t("processingQueue", locale())}" aria-live="polite">
       <div class="chain-zone-head">
         <div>
           <strong>${t("processingQueue", locale())}</strong>
           <span>${items.length ? `${items.length} ${t("pending", locale())}` : t("responseWindow", locale())}</span>
+          ${responding ? `<em>${t("youMayRespond", locale())}</em>` : ""}
         </div>
-        ${responding ? `<em>${t("youMayRespond", locale())}</em>` : ""}
+        <button type="button" class="chain-zone-toggle" data-action="toggle-chain-zone" aria-expanded="${chainZoneCollapsed ? "false" : "true"}" aria-controls="chain-zone-content">
+          <span aria-hidden="true">${chainZoneCollapsed ? "▾" : "▴"}</span>
+          ${t(chainZoneCollapsed ? "showChain" : "hideChain", locale())}
+        </button>
       </div>
-      <div class="chain-stack">
-        ${items.map((item, index) => chainZoneItem(item, items.length - index)).join("") || `<p class="empty">${t("noChainItem", locale())}</p>`}
+      <div id="chain-zone-content" class="chain-zone-content" ${chainZoneCollapsed ? "hidden" : ""}>
+        <div class="chain-stack" data-scroll-key="chain-stack">
+          ${items.map((item, index) => chainZoneItem(item, items.length - index)).join("") || `<p class="empty">${t("noChainItem", locale())}</p>`}
+        </div>
+        ${responding ? responsePrompt(responding) : ""}
       </div>
-      ${responding ? responsePrompt(responding) : ""}
     </section>
   `;
 }
 
 function normalizeUiChain(items = []) {
-  return items.map((item, index) => ({
+  return items.filter(chainItemVisibleInTree).map((item, index) => ({
     ...item,
     id: item.id || `${item.card?.instanceId || "chain"}-${index}`,
     status: item.status || "pending"
   }));
+}
+
+function chainItemVisibleInTree(item) {
+  // Declaring a card from hand makes that card and its destination public. In
+  // particular, units must remain visible while their payment is pending so
+  // both players can respond to the actual declared play.
+  return Boolean(item);
 }
 
 function chainZoneItem(item, order) {
@@ -3290,7 +3667,7 @@ function chainZoneItem(item, order) {
       <span>${t("source", locale())}: ${source}</span>
       ${targets.length ? `<small>${t("target", locale())}: ${targets.join(", ")}</small>` : ""}
       ${effectText ? `<p class="chain-zone-effect">${escapeHtml(effectText)}</p>` : ""}
-      <em>${t(item.status || "pending", locale())}</em>
+      <em>${localizedDynamicText(t(item.status || "pending", locale()))}</em>
     </button>
   `;
 }
@@ -3303,7 +3680,7 @@ function chainItemEffectText(item) {
 }
 
 function realtimeFeedbackOverlay() {
-  const feedback = uiMotion.feedback || recentFeedback;
+  const feedback = recentFeedback;
   if (!feedback) return "";
   const targets = (feedback.targetIds || []).map(targetLabel).filter(Boolean);
   const sourceZone = feedback.sourceZone ? `${t("from", locale())}: ${sourceZoneLabel(feedback.sourceZone)}` : "";
@@ -3311,7 +3688,7 @@ function realtimeFeedbackOverlay() {
     <section class="realtime-feedback ${feedback.kind} persistent-feedback" aria-live="polite">
       <button type="button" class="feedback-dismiss" data-action="dismiss-feedback" aria-label="${t("close", locale())}">×</button>
       <span>${feedback.title}</span>
-      <strong>${feedback.name}</strong>
+      <strong>${localizedDynamicText(feedback.name)}</strong>
       ${sourceZone ? `<em>${sourceZone}</em>` : ""}
       ${targets.length ? `<small>${t("target", locale())}: ${targets.join(", ")}</small>` : ""}
       ${feedback.result ? `<p>${localizedLogEntry(feedback.result)}</p>` : ""}
@@ -3321,7 +3698,7 @@ function realtimeFeedbackOverlay() {
 
 function responsePromptInfo() {
   const chain = game.actionChain || (game.phase === "showdown" ? game.showdown : null);
-  if (!chain || chain.priorityPlayerId !== viewerPlayerId() || game.pendingChoice || game.pendingPayment) return null;
+  if (!chain || !viewerCanAct() || chain.priorityPlayerId !== viewerPlayerId() || game.pendingChoice || game.pendingPayment) return null;
   const latest = [...normalizeUiChain(chain.chain)].reverse()[0] || null;
   if (!latest) return { title: t("responseWindow", locale()), detail: t("responseHint", locale()) };
   const targets = chainItemTargetIds(latest).map(targetLabel).filter(Boolean);
@@ -3393,7 +3770,7 @@ function targetLabel(cardId) {
 function playerPerspectiveLabel(playerId) {
   if (playerId === viewerPlayerId()) return t("you", locale());
   const player = game.players.find((candidate) => candidate.id === playerId);
-  return isOnlineGame() ? t("opponent", locale()) : (player?.name || t("opponent", locale()));
+  return isOnlineGame() ? t("opponent", locale()) : (player ? playerName(player) : t("opponent", locale()));
 }
 
 function sourceZoneLabel(zone) {
@@ -3408,7 +3785,7 @@ function sourceZoneLabel(zone) {
     runeDeck: t("runeDeck", locale()),
     chain: t("chain", locale())
   };
-  return labels[zone] || zone;
+  return labels[zone] || localizedDynamicText(zone);
 }
 
 function triggerQueuePanel() {
@@ -3428,7 +3805,7 @@ function triggerQueuePanel() {
         ${queued.map((trigger, index) => triggerChip({
           label: triggerLabel(trigger),
           owner: index === 0 ? t("next", locale()) : t("queued", locale()),
-          status: trigger.status || t("finalized", locale()),
+          status: localizedDynamicText(trigger.status || t("finalized", locale())),
           sourceCardId: trigger.sourceCardId
         })).join("")}
       </div>
@@ -3463,7 +3840,7 @@ function triggerChip(item) {
     <article class="trigger-chip" ${item.sourceCardId ? `data-card-id="${item.sourceCardId}"` : ""}>
       <strong>${item.owner}</strong>
       <span>${item.label}</span>
-      ${item.status ? `<small>${item.status}</small>` : ""}
+      ${item.status ? `<small>${localizedDynamicText(item.status)}</small>` : ""}
     </article>
   `;
 }
@@ -3475,8 +3852,8 @@ function setupPanel() {
         <article class="setup-player ${player.id === game.setupPlayerId ? "active" : ""}">
           <div class="section-head">
             <div>
-              <h2>${player.name}</h2>
-              <span>${player.legend.name} / ${player.champion.name}</span>
+              <h2>${playerName(player)}</h2>
+              <span>${cardName(player.legend)} / ${cardName(player.champion)}</span>
             </div>
           </div>
           <div class="identity-row">
@@ -3506,8 +3883,8 @@ function championSelectPanel() {
         <article class="setup-player ${player.id === game.championSelectPlayerId ? "active" : ""}">
           <div class="section-head">
             <div>
-              <h2>${player.name}</h2>
-              <span>${player.legend.name}</span>
+              <h2>${playerName(player)}</h2>
+              <span>${cardName(player.legend)}</span>
             </div>
           </div>
           <div class="identity-row">
@@ -3568,7 +3945,7 @@ function mulliganPanel() {
         <article class="mulligan-player active waiting">
           <div class="section-head">
             <div>
-              <h2>${player?.name || t("opponentSide", locale())}</h2>
+              <h2>${player ? playerName(player) : t("opponentSide", locale())}</h2>
               <span>${t("opponentMulligan", locale())}</span>
             </div>
           </div>
@@ -3581,7 +3958,7 @@ function mulliganPanel() {
       <article class="mulligan-player active">
         <div class="section-head">
           <div>
-            <h2>${player.name}</h2>
+            <h2>${playerName(player)}</h2>
             <span>${t("mulliganInstruction", locale())}</span>
           </div>
           <div class="actions inline">
@@ -3622,17 +3999,17 @@ function playerSide(player, side) {
           ${miniIdentity(player.champion, player)}
         </div>
         <div class="player-summary">
-          <h2>${player.name}</h2>
-          <div class="player-stats">
+          <h2>${playerName(player)}</h2>
+          <div class="player-stats" data-scroll-key="player-stats-${player.id}">
+            <span class="xp-stat">${t("level", locale())} ${player.xp || 0}</span>
             <span class="deck-stat">${t("deck", locale())} ${player.mainDeck.length}</span>
             <span class="hand-stat">${t("hand", locale())} ${player.hand.length}</span>
-            <button class="trash-button" data-action="toggle-graveyard" data-player="${player.id}" title="${t("viewTrashTitle", locale(), { name: player.name })}">
+            <button class="trash-button" data-action="toggle-graveyard" data-player="${player.id}" title="${t("viewTrashTitle", locale(), { name: playerName(player) })}">
               ${t("trash", locale())} ${player.trash.length}
             </button>
-            <button class="trash-button banished-button" data-action="toggle-banished" data-player="${player.id}" title="${t("viewBanishedTitle", locale(), { name: player.name })}">
+            <button class="trash-button banished-button" data-action="toggle-banished" data-player="${player.id}" title="${t("viewBanishedTitle", locale(), { name: playerName(player) })}">
               ${t("banished", locale())} ${(player.banished || []).length}
             </button>
-            <span class="xp-stat">XP ${player.xp || 0}</span>
             ${intel ? `<button class="intel-button" data-action="toggle-intel" data-player="${player.id}">${t("intel", locale())}</button>` : ""}
           </div>
           ${championPanelStatus(player)}
@@ -3656,6 +4033,7 @@ function playerSide(player, side) {
 }
 
 function miniIdentity(card, player = null) {
+  if (!card) return "";
   const championState = player && ["champion", "played"].includes(player.champion?.zone)
     && card?.instanceId === player.champion?.instanceId
     ? player.championPlayed || player.champion.zone === "played" ? " deployed" : " ready"
@@ -3675,15 +4053,14 @@ function championPanelStatus(player) {
   if (!["champion", "played"].includes(player.champion.zone)) return "";
   const deployed = player.championPlayed || player.champion.zone === "played";
   const mine = viewerPlayerId() === player.id;
-  const legalDestinations = mine ? legalChampionPlayDestinations(game) : [];
-  const canUse = mine && viewerCanAct() && !deployed && legalDestinations.length > 0 && canPayCard(player, player.champion);
+  const canUse = mine && !deployed && uiLegalActions.some((action) => action.kind === "beginPlayChampion");
   const reason = deployed
     ? t("alreadyUsed", locale())
     : !mine
       ? t("opponentChampion", locale())
       : game.phase !== "action" && game.phase !== "showdown"
         ? t("notActionPhase", locale())
-        : !canPayCard(player, player.champion)
+        : !canUse
           ? t("needCost", locale())
           : t("readyState", locale());
   return `
@@ -3714,7 +4091,9 @@ function battlefieldCard(field) {
     <article class="battlefield location-column ${showdownActive ? "showdown-location" : ""}" data-card-id="${field.instanceId}">
       <div class="field-lane top-lane ${topTarget.className}" data-scroll-key="field-${field.instanceId}-${topPlayer.id}" ${topTarget.attrs}>
         <span class="lane-label">${t("opponentUnits", locale())}</span>
-        ${battlefieldLaneContents(topPlayer, field, topUnits, topHidden, "top")}
+        <div class="field-lane-track">
+          ${battlefieldLaneContents(topPlayer, field, topUnits, topHidden, "top")}
+        </div>
       </div>
       <div class="field-center location-card">
         <div class="field-image">${cardImage(field)}</div>
@@ -3725,7 +4104,9 @@ function battlefieldCard(field) {
       </div>
       <div class="field-lane bottom-lane ${bottomTarget.className}" data-scroll-key="field-${field.instanceId}-${bottomPlayer.id}" ${bottomTarget.attrs}>
         <span class="lane-label">${t("yourUnits", locale())}</span>
-        ${battlefieldLaneContents(bottomPlayer, field, bottomUnits, bottomHidden, "bottom")}
+        <div class="field-lane-track">
+          ${battlefieldLaneContents(bottomPlayer, field, bottomUnits, bottomHidden, "bottom")}
+        </div>
       </div>
     </article>
   `;
@@ -3733,10 +4114,12 @@ function battlefieldCard(field) {
 
 function emptyBattlefieldColumn(index) {
   return `
-    <article class="battlefield location-column empty-location" aria-label="Empty battlefield slot ${index}">
+    <article class="battlefield location-column empty-location" aria-label="${locale() === LOCALES.KO ? `빈 전장 칸 ${index}` : `Empty battlefield slot ${index}`}">
       <div class="field-lane top-lane">
         <span class="lane-label">${t("opponentUnits", locale())}</span>
-        <span class="unit-placeholder">${t("noUnits", locale())}</span>
+        <div class="field-lane-track">
+          <span class="unit-placeholder">${t("noUnits", locale())}</span>
+        </div>
       </div>
       <div class="field-center location-card placeholder-location-card">
         <div class="field-image placeholder">
@@ -3749,7 +4132,9 @@ function emptyBattlefieldColumn(index) {
       </div>
       <div class="field-lane bottom-lane">
         <span class="lane-label">${t("yourUnits", locale())}</span>
-        <span class="unit-placeholder">${t("noUnits", locale())}</span>
+        <div class="field-lane-track">
+          <span class="unit-placeholder">${t("noUnits", locale())}</span>
+        </div>
       </div>
     </article>
   `;
@@ -3758,13 +4143,13 @@ function emptyBattlefieldColumn(index) {
 function battlefieldStatus(field) {
   if (field.controlledBy) {
     const controller = game.players.find((player) => player.id === field.controlledBy);
-    return `${controller?.name || "Player"} controls`;
+    return locale() === LOCALES.KO ? `${controller ? playerName(controller) : "플레이어"}님이 지배 중` : `${controller?.name || "Player"} controls`;
   }
   const controllers = [...new Set(field.units.map((unit) => unit.controllerId))];
-  if (controllers.length > 1) return "Contested";
+  if (controllers.length > 1) return locale() === LOCALES.KO ? "경합 중" : "Contested";
   if (controllers.length === 1) {
     const occupant = game.players.find((player) => player.id === controllers[0]);
-    return `${occupant?.name || "Player"} present`;
+    return locale() === LOCALES.KO ? `${occupant ? playerName(occupant) : "플레이어"}님이 주둔 중` : `${occupant?.name || "Player"} present`;
   }
   return t("uncontrolled", locale());
 }
@@ -3785,7 +4170,7 @@ function hiddenCardBack(item, field) {
   const targetGlow = uiMotion.targetIds.has(item.card.instanceId) ? " target-card-glow" : "";
   if (controlledByViewer) {
     return `
-      <button class="hidden-card-back hidden-card-owned owner-${item.ownerId} ${playable ? "usable-card" : ""}${sourceGlow}${targetGlow}" data-action="select-card" data-card="${item.card.instanceId}" data-card-id="${item.card.instanceId}" title="${item.card.name}">
+      <button class="hidden-card-back hidden-card-owned owner-${item.ownerId} ${playable ? "usable-card" : ""}${sourceGlow}${targetGlow}" data-action="select-card" data-card="${item.card.instanceId}" data-card-id="${item.card.instanceId}" title="${cardName(item.card)}">
         ${cardImage(item.card)}
         <span class="hidden-label">${t("hiddenZone", locale())}</span>
       </button>
@@ -3793,7 +4178,7 @@ function hiddenCardBack(item, field) {
   }
   if (visibleByIntel && !controlledByViewer) {
     return `
-      <article class="${imageCardClass(item.card, `hidden-revealed owner-${item.ownerId}${sourceGlow}${targetGlow}`)}" data-card-id="${item.card.instanceId}" title="${item.card.name}">
+      <article class="${imageCardClass(item.card, `hidden-revealed owner-${item.ownerId}${sourceGlow}${targetGlow}`)}" data-card-id="${item.card.instanceId}" title="${cardName(item.card)}">
         ${cardImage(item.card)}
         <span class="status-line">${t("revealed", locale())}</span>
       </article>
@@ -3843,7 +4228,8 @@ function visibleBattlefields() {
 }
 
 function activePlayerId() {
-  if (game.phase === "first-player") return online.room?.hostPlayerId || game.hostPlayerId || "p1";
+  if (isOnlineGame() && game.authoritativeActorId) return game.authoritativeActorId;
+  if (game.phase === "first-player") return firstPlayerDecisionActorId(game);
   if (game.pendingPayment?.playerId) return game.pendingPayment.playerId;
   if (game.pendingChoice?.playerId) return game.pendingChoice.playerId;
   if (game.phase === "champion-select") return game.championSelectPlayerId;
@@ -3866,7 +4252,7 @@ function championCard(player) {
   if (!["champion", "played"].includes(player.champion.zone)) return "";
   if (player.championPlayed || player.champion.zone === "played") {
     return `
-      <article class="champion-zone-slot champion-zone-used" aria-label="${player.champion.name} has been played">
+      <article class="champion-zone-slot champion-zone-used" aria-label="${locale() === LOCALES.KO ? `${cardName(player.champion)} 챔피언을 사용했습니다` : `${player.champion.name} has been played`}">
         <span class="zone-label">${t("championZone", locale())}</span>
         ${cardImage(player.champion)}
         <span class="status-line">${t("deployed", locale())}</span>
@@ -3883,9 +4269,82 @@ function championCard(player) {
 
 function handCard(card) {
   return `
-    <article class="${imageCardClass(card, `${card.type} ${motionCardClass(card, "hand")}`)}" data-card-id="${card.instanceId}">
+    <article class="${imageCardClass(card, `${card.type} ${motionCardClass(card, "hand")}`)}" data-card-id="${card.instanceId}" role="button" tabindex="0" aria-label="${escapeHtml(cardName(card))}">
       ${cardImage(card)}
     </article>
+  `;
+}
+
+function visibleCardStatuses(card) {
+  return cardStatusItems(card, {
+    locale: locale(),
+    keywordLabel: (keyword) => keywordText([keyword]),
+    cardLabel: (name) => localizedDynamicText(name),
+    domainLabel: (domain) => domainText(domain)
+  });
+}
+
+function cardStatusBadges(card) {
+  const statuses = visibleCardStatuses(card)
+    .filter((status) => !["stunned", "exhausted", "damage", "attachments", "attacker", "defender"].includes(status.kind));
+  if (!statuses.length) return "";
+  const visible = statuses.slice(0, 2);
+  const remaining = statuses.length - visible.length;
+  const summary = statuses.map((status) => status.badge).join(", ");
+  return `
+    <span class="unit-state-badges" aria-label="${escapeHtml(locale() === LOCALES.KO ? `적용 상태: ${summary}` : `Active statuses: ${summary}`)}" title="${escapeHtml(summary)}">
+      ${visible.map((status) => `<span class="unit-state-badge tone-${status.tone}">${escapeHtml(status.badge)}</span>`).join("")}
+      ${remaining > 0 ? `<span class="unit-state-badge more">${locale() === LOCALES.KO ? `외 ${remaining}` : `+${remaining} more`}</span>` : ""}
+    </span>
+  `;
+}
+
+function cardStatusClassNames(card) {
+  return visibleCardStatuses(card)
+    .filter((status) => ["stunned", "buff", "temporaryMight", "lastingMight", "keywords", "cannotMove"].includes(status.kind))
+    .map((status) => `status-${status.kind.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`)
+    .join(" ");
+}
+
+function cardStatusPanel(card, { compact = false } = {}) {
+  const statuses = visibleCardStatuses(card);
+  const isUnit = card.type === "unit";
+  const printedMight = Number(card.might) || 0;
+  const boardMight = isUnit ? currentMight(game, card) : 0;
+  const stateTitle = locale() === LOCALES.KO ? "현재 카드 상태" : "Current card status";
+  const stateCount = statuses.length
+    ? (locale() === LOCALES.KO ? `${statuses.length}개 효과 적용 중` : `${statuses.length} active effects`)
+    : (locale() === LOCALES.KO ? "추가 효과 없음" : "No additional effects");
+  const sourceLabel = locale() === LOCALES.KO ? "출처" : "Source";
+  return `
+    <section class="card-status-panel ${compact ? "compact" : ""}" aria-label="${stateTitle}">
+      <div class="card-status-heading">
+        <strong>${stateTitle}</strong>
+        <span>${stateCount}</span>
+      </div>
+      ${isUnit ? `
+        <div class="might-breakdown" aria-label="${locale() === LOCALES.KO ? "현재 위력 계산" : "Current Might calculation"}">
+          <span>${locale() === LOCALES.KO ? "기본" : "Base"} <b>${printedMight}</b></span>
+          ${(card.buffs || 0) ? `<span class="positive">${locale() === LOCALES.KO ? "버프" : "Buff"} <b>+${card.buffs}</b></span>` : ""}
+          ${(card.mightModifier || 0) ? `<span class="${card.mightModifier > 0 ? "positive" : "negative"}">${locale() === LOCALES.KO ? "변경" : "Modifier"} <b>${card.mightModifier > 0 ? "+" : ""}${card.mightModifier}</b></span>` : ""}
+          <span class="current">${locale() === LOCALES.KO ? "현재" : "Current"} <b>${boardMight}</b></span>
+        </div>
+      ` : ""}
+      ${statuses.length ? `
+        <div class="card-status-list">
+          ${statuses.map((status) => `
+            <article class="card-status-item tone-${status.tone}">
+              <span class="card-status-icon" aria-hidden="true">${status.tone === "negative" ? "!" : status.tone === "positive" ? "+" : status.tone === "warning" ? "◆" : "•"}</span>
+              <div>
+                <strong>${escapeHtml(status.badge)}</strong>
+                <p>${escapeHtml(status.detail)}</p>
+                <small>${escapeHtml(status.duration)}${status.source ? ` · ${sourceLabel}: ${escapeHtml(status.source)}` : ""}</small>
+              </div>
+            </article>
+          `).join("")}
+        </div>
+      ` : `<p class="card-status-empty">${locale() === LOCALES.KO ? "이 카드에는 현재 기절, 버프, 위력 변경, 추가 키워드 같은 효과가 적용되어 있지 않습니다." : "This card currently has no stun, buff, Might modifier, or granted keyword."}</p>`}
+    </section>
   `;
 }
 
@@ -3898,7 +4357,7 @@ function boardCard(card, location) {
   if (card.type === "unit") return unitToken(card, location, owner, motion, attachments, flashed);
   return `
     <article class="${imageCardClass(card, `${card.type} owner-${card.ownerId} controller-${card.controllerId} ${attachments.length ? "has-attachments" : ""} ${card.exhausted ? "exhausted" : ""} ${flashed ? "effect-flash" : ""} ${motion}`)}" data-card-id="${card.instanceId}" data-location="${location}">
-      <span class="owner-chip">${owner?.name || card.ownerId}</span>
+      <span class="owner-chip">${owner ? playerName(owner) : card.ownerId}</span>
       ${moveSelectButton(card)}
       ${cardImage(card)}
       ${attachmentStrip(attachments)}
@@ -3909,10 +4368,10 @@ function boardCard(card, location) {
 
 function baseToken(card, location, owner, motion, attachments, flashed) {
   const domain = domainText(card.domains?.[0]) || (card.tags?.[0] ? keywordText([card.tags[0]]) : cardType(card));
-  const state = card.exhausted ? t("exhausted", locale()) : t("readyState", locale());
+  const state = card.stunned ? t("stunned", locale()) : card.exhausted ? t("exhausted", locale()) : t("readyState", locale());
   const mainBadge = card.type === "unit" ? `${t("might", locale())} ${effectiveMight(card)}` : cardType(card);
   return `
-    <article class="unit-token base-token ${card.type}-token owner-${card.ownerId} controller-${card.controllerId} ${attachments.length ? "has-attachments" : ""} ${card.exhausted ? "exhausted" : "ready"} ${flashed ? "effect-flash" : ""} ${motion}" data-card-id="${card.instanceId}" data-location="${location}">
+    <article class="unit-token base-token ${card.type}-token owner-${card.ownerId} controller-${card.controllerId} ${attachments.length ? "has-attachments" : ""} ${card.exhausted ? "exhausted" : "ready"} ${cardStatusClassNames(card)} ${flashed ? "effect-flash" : ""} ${motion}" data-card-id="${card.instanceId}" data-location="${location}">
       <div class="unit-token-art">
         ${card.image ? `<img src="${card.image}" alt="${cardName(card)}" loading="lazy" />` : `<span>${cardName(card)}</span>`}
       </div>
@@ -3924,9 +4383,10 @@ function baseToken(card, location, owner, motion, attachments, flashed) {
           <em>${state}</em>
           ${card.damage ? `<em>${card.damage} ${t("damageShort", locale())}</em>` : ""}
           ${attachments.length ? `<em>${attachments.length} ${t("attachedGear", locale())}</em>` : ""}
+          ${cardStatusBadges(card)}
         </div>
       </div>
-      <span class="owner-chip">${owner?.name || card.ownerId}</span>
+      <span class="owner-chip">${owner ? playerName(owner) : card.ownerId}</span>
       ${card.type === "unit" ? moveSelectButton(card) : ""}
       ${attachmentStrip(attachments)}
     </article>
@@ -3940,7 +4400,7 @@ function unitToken(card, location, owner, motion, attachments, flashed) {
   const combatStats = showdownUnitStats(card, location);
   const displayMight = combatStats?.might ?? effectiveMight(card);
   return `
-    <article class="unit-token ${zoneClass} owner-${card.ownerId} controller-${card.controllerId} ${attachments.length ? "has-attachments" : ""} ${card.exhausted ? "exhausted" : ""} ${flashed ? "effect-flash" : ""} ${motion}" data-card-id="${card.instanceId}" data-location="${location}">
+    <article class="unit-token ${zoneClass} owner-${card.ownerId} controller-${card.controllerId} ${attachments.length ? "has-attachments" : ""} ${card.exhausted ? "exhausted" : ""} ${cardStatusClassNames(card)} ${flashed ? "effect-flash" : ""} ${motion}" data-card-id="${card.instanceId}" data-location="${location}">
       <div class="unit-token-art">
         ${card.image ? `<img src="${card.image}" alt="${cardName(card)}" loading="lazy" />` : `<span>${cardName(card)}</span>`}
       </div>
@@ -3952,9 +4412,10 @@ function unitToken(card, location, owner, motion, attachments, flashed) {
           <em>${state}</em>
           ${card.damage ? `<em>${card.damage} ${t("damageShort", locale())}</em>` : ""}
           ${combatStats ? `<b class="combat-stat">${t("currentMight", locale())} ${combatStats.might}</b><em class="${combatStats.remaining <= 0 ? "lethal-stat" : "health-stat"}">${t("remainingHealth", locale())} ${combatStats.remaining}</em>` : ""}
+          ${cardStatusBadges(card)}
         </div>
       </div>
-      <span class="owner-chip">${owner?.name || card.ownerId}</span>
+      <span class="owner-chip">${owner ? playerName(owner) : card.ownerId}</span>
       ${moveSelectButton(card)}
       ${attachmentStrip(attachments)}
     </article>
@@ -3970,24 +4431,22 @@ function showdownUnitStats(card, location) {
     : card.controllerId === game.showdown.attackerId
       ? "attacker"
       : card.controllerId === game.showdown.defenderId
-        ? "defender"
-        : card.combatRole || null;
-  const might = Math.max(0, currentCombatMight(game, battlefield, card, role));
+      ? "defender"
+      : card.combatRole || null;
+  const damageState = unitDamageState(game, card, { battlefield, role });
   return {
     role,
-    might,
-    damage: card.damage || 0,
-    remaining: Math.max(0, might - (card.damage || 0))
+    ...damageState
   };
 }
 
 function attachmentStrip(attachments) {
   if (!attachments.length) return "";
   return `
-    <div class="attachment-strip" aria-label="Attached gear">
+    <div class="attachment-strip" aria-label="${locale() === LOCALES.KO ? "부착된 도구" : "Attached gear"}">
       ${attachments.map((gear) => `
-        <button class="attached-gear ${game.selectedCardId === gear.instanceId ? "selected-attachment" : ""}" data-card-id="${gear.instanceId}" title="${gear.name}">
-          ${gear.image ? `<img src="${gear.image}" alt="${gear.name}" loading="lazy" />` : `<span>${gear.name}</span>`}
+        <button class="attached-gear ${game.selectedCardId === gear.instanceId ? "selected-attachment" : ""}" data-card-id="${gear.instanceId}" title="${cardName(gear)}">
+          ${gear.image ? `<img src="${gear.image}" alt="${cardName(gear)}" loading="lazy" />` : `<span>${cardName(gear)}</span>`}
         </button>
       `).join("")}
     </div>
@@ -4002,7 +4461,7 @@ function moveSelectButton(card) {
       class="move-select-chip ${selected ? "selected" : ""}"
       data-action="toggle-move-selection"
       data-unit="${card.instanceId}"
-      title="${selected ? "Remove from standard move" : "Add to standard move"}"
+      title="${selected ? (locale() === LOCALES.KO ? "일반 이동 선택에서 제외" : "Remove from standard move") : (locale() === LOCALES.KO ? "일반 이동 대상으로 선택" : "Add to standard move")}"
     >
       ${selected ? "OK" : "+"}
     </button>
@@ -4059,7 +4518,7 @@ function moveButtons(card, location) {
   for (const [index, field] of visibleBattlefields().entries()) {
     if (location === field.instanceId) continue;
     if (location !== "base" && !hasKeyword(card, "Ganking")) continue;
-    buttons.push(`<button data-action="move" data-unit="${card.instanceId}" data-destination="${field.instanceId}" title="${field.name}">${t("moveToField", locale(), { n: index + 1 })}</button>`);
+    buttons.push(`<button data-action="move" data-unit="${card.instanceId}" data-destination="${field.instanceId}" title="${cardName(field)}">${t("moveToField", locale(), { n: index + 1 })}</button>`);
   }
   return buttons.join("");
 }
@@ -4073,14 +4532,15 @@ function actionBar(player, card) {
   const chainSummary = showdown || actionChain;
   const responseInfo = responsePromptInfo();
   const waiting = isOnlineGame() && !viewerCanAct();
+  const rejection = !waiting && !disabled ? actionRejection : null;
   if (!card || disabled || waiting) {
     const quickActions = globalActionButtons(player);
     return `
-      <section class="action-bar ${chainSummary ? "showdown-action-bar" : ""}">
+      <section class="action-bar ${chainSummary ? "showdown-action-bar" : ""} ${rejection ? "action-rejected" : ""}">
         <div class="action-context">
-          <span class="bar-label">${chainSummary ? chainSummary.label : t("action", locale())}</span>
-          <strong>${waiting ? t("waitingForOpponent", locale()) : responseInfo?.title || chainSummary?.title || (disabled ? t("resolvingStep", locale()) : t("noAction", locale()))}</strong>
-          <span>${waiting ? t("waitingForOpponent", locale()) : responseInfo?.detail || chainSummary?.detail || (disabled ? t("finishDialog", locale()) : t("selectCardHint", locale()))}</span>
+          <span class="bar-label">${rejection ? (locale() === LOCALES.KO ? "요청 거부" : "Rejected") : chainSummary ? chainSummary.label : t("action", locale())}</span>
+          <strong>${waiting ? t("waitingForOpponent", locale()) : rejection?.title || responseInfo?.title || chainSummary?.title || (disabled ? t("resolvingStep", locale()) : t("noAction", locale()))}</strong>
+          <span>${waiting ? t("waitingForOpponent", locale()) : rejection?.detail || responseInfo?.detail || chainSummary?.detail || (disabled ? t("finishDialog", locale()) : t("selectCardHint", locale()))}</span>
         </div>
         <div class="actions inline">
           ${waiting ? `<button disabled>${t("noAction", locale())}</button>` : responseInfo ? `<button class="primary" data-action="toggle-hand">${handOpen ? t("hideHand", locale()) : t("playReaction", locale())}</button><button data-action="pass-showdown">${t("pass", locale())}</button>` : quickActions.join("") || `<button disabled>${t("noAction", locale())}</button>`}
@@ -4098,11 +4558,11 @@ function actionBar(player, card) {
   const context = selectedContext(card.instanceId);
   const actions = mergeActionButtons(selectedActions(card, context), globalActionButtons(player, card));
   return `
-    <section class="action-bar ${chainSummary ? "showdown-action-bar" : ""}">
+    <section class="action-bar ${chainSummary ? "showdown-action-bar" : ""} ${rejection ? "action-rejected" : ""}">
       <div class="action-context">
-        <span class="bar-label">${chainSummary ? chainSummary.label : t("selected", locale())}</span>
-          <strong>${responseInfo?.title || chainSummary?.title || cardName(card)}</strong>
-        <span>${responseInfo ? `${responseInfo.detail} / ${t("selected", locale())}: ${cardName(card)}` : chainSummary ? `${chainSummary.detail} / ${t("selected", locale())}: ${cardName(card)}` : actionHint(card, context, actions)}</span>
+        <span class="bar-label">${rejection ? (locale() === LOCALES.KO ? "요청 거부" : "Rejected") : chainSummary ? chainSummary.label : t("selected", locale())}</span>
+          <strong>${rejection?.title || responseInfo?.title || chainSummary?.title || cardName(card)}</strong>
+        <span>${rejection?.detail || (responseInfo ? `${responseInfo.detail} / ${t("selected", locale())}: ${cardName(card)}` : chainSummary ? `${chainSummary.detail} / ${t("selected", locale())}: ${cardName(card)}` : actionHint(card, context, actions))}</span>
       </div>
       <div class="actions inline">
         ${actions.join("") || `<button disabled>${t("noAction", locale())}</button>`}
@@ -4171,36 +4631,31 @@ function handActions(card, player) {
   const inShowdown = game.phase === "showdown";
   const inActionChain = game.phase === "action" && Boolean(game.actionChain);
   const actions = [];
-  if (canPayCard(player, card)) {
-    for (const destination of legalCardPlayDestinations(game, card.instanceId)) {
-      const field = game.battlefields.find((candidate) => candidate.instanceId === destination);
-      const label = field
-        ? (inShowdown
-          ? (hasKeyword(card, "Ambush") ? keywordText(["Ambush"]) : (card.tags?.includes("Reaction") ? t("chainReaction", locale()) : t("chainAction", locale())))
-          : t("playToBattlefield", locale(), { name: cardName(field) }))
-        : inShowdown
-          ? (card.tags?.includes("Reaction") ? t("chainReaction", locale()) : t("chainAction", locale()))
-          : inActionChain
-            ? t("chainReaction", locale())
-            : (card.type === "spell" ? t("cast", locale()) : t("playBase", locale()));
-      actions.push(`<button data-action="begin-play" data-card="${card.instanceId}" data-destination="${destination}">${label}</button>`);
-    }
+  const legalCardActions = uiLegalActions.filter((action) => action.cardId === card.instanceId);
+  for (const command of legalCardActions.filter((action) => action.kind === "beginPlayCard")) {
+    const destination = command.destination;
+    const field = game.battlefields.find((candidate) => candidate.instanceId === destination);
+    const label = field
+      ? (inShowdown
+        ? (hasKeyword(card, "Ambush") ? keywordText(["Ambush"]) : (card.tags?.includes("Reaction") ? t("chainReaction", locale()) : t("chainAction", locale())))
+        : t("playToBattlefield", locale(), { name: cardName(field) }))
+      : inShowdown
+        ? (card.tags?.includes("Reaction") ? t("chainReaction", locale()) : t("chainAction", locale()))
+        : inActionChain
+          ? t("chainReaction", locale())
+          : (card.type === "spell" ? t("cast", locale()) : t("playBase", locale()));
+    actions.push(`<button data-action="begin-play" data-card="${card.instanceId}" data-destination="${destination}">${label}</button>`);
   }
-  if (!inShowdown && !inActionChain && hasKeyword(card, "Hidden")) {
-    for (const field of game.battlefields.filter((candidate) =>
-      candidate.controlledBy === player.id
-      && hiddenCardsAtBattlefieldForPlayer(candidate, player.id) < hiddenSlotLimit(candidate))) {
-      if (!canPayPowerCost(player, [{ domain: "Any", amount: 1 }])) continue;
-      actions.push(`<button data-action="hide-card" data-card="${card.instanceId}" data-destination="${field.instanceId}">${t("hideAtBattlefield", locale(), { name: cardName(field) })}</button>`);
-    }
+  for (const command of legalCardActions.filter((action) => action.kind === "hideCard")) {
+    const field = game.battlefields.find((candidate) => candidate.instanceId === command.destination);
+    if (field) actions.push(`<button data-action="hide-card" data-card="${card.instanceId}" data-destination="${field.instanceId}">${t("hideAtBattlefield", locale(), { name: cardName(field) })}</button>`);
   }
   return actions;
 }
 
 function championActions(player) {
   if (!player.champion) return [];
-  if (!canPayCard(player, player.champion)) return [];
-  return legalChampionPlayDestinations(game).map((destination) => {
+  return uiLegalActions.filter((action) => action.kind === "beginPlayChampion").map(({ destination }) => {
     if (destination === "base") return `<button data-action="begin-champion" data-destination="base">${t("playChampionToBase", locale())}</button>`;
     const field = game.battlefields.find((candidate) => candidate.instanceId === destination);
     return `<button data-action="begin-champion" data-destination="${destination}">${t("playChampionToField", locale(), { name: cardName(field) })}</button>`;
@@ -4216,9 +4671,26 @@ function unitActions(card, context) {
 }
 
 function activatedActions(card) {
-  if (!canActivate(card)) return [];
-  const label = card.type === "legend" ? t("useLegend", locale()) : t("activateCard", locale(), { name: cardName(card) });
-  return [`<button data-action="activate-card" data-card="${card.instanceId}">${label}</button>`];
+  const abilities = legalActivatedAbilityOptions(game, card.instanceId);
+  if (!abilities.length || !viewerCanAct()) return [];
+  if (card.type === "rune") {
+    return abilities.flatMap((ability) => {
+      if (!["addEnergy", "addPower"].includes(ability.kind)) return [];
+      const amount = ability.amount;
+      if (ability.kind === "addEnergy") {
+        const label = locale() === LOCALES.KO ? `탈진 → 에너지 +${amount}` : `Exhaust → +${amount} Energy`;
+        return [`<button class="rune-action rune-action-energy" data-action="activate-card" data-card="${card.instanceId}" data-ability="${ability.id}"><strong>${label}</strong><small>${locale() === LOCALES.KO ? "룬은 탈진 상태가 됩니다" : "This Rune becomes exhausted"}</small></button>`];
+      }
+      const domain = domainText(ability.domain);
+      const label = locale() === LOCALES.KO ? `재활용 → ${domain} 힘 +${amount}` : `Recycle → +${amount} ${domain} Power`;
+      return [`<button class="rune-action rune-action-power" data-action="activate-card" data-card="${card.instanceId}" data-ability="${ability.id}"><strong>${label}</strong><small>${locale() === LOCALES.KO ? "룬 덱 맨 아래로 되돌아갑니다" : "Return this Rune to the bottom of the Rune Deck"}</small></button>`];
+    });
+  }
+  const baseLabel = card.type === "legend" ? t("useLegend", locale()) : t("activateCard", locale(), { name: cardName(card) });
+  return abilities.map((ability) => {
+    const label = abilities.length > 1 ? `${baseLabel}: ${localizedDynamicText(ability.label)}` : baseLabel;
+    return `<button data-action="activate-card" data-card="${card.instanceId}" data-ability="${ability.id}">${label}</button>`;
+  });
 }
 
 function hiddenActions(card, context) {
@@ -4229,60 +4701,12 @@ function hiddenActions(card, context) {
   return [`<button data-action="begin-play" data-card="${card.instanceId}" data-destination="${context.location}">${t("revealHidden", locale())}</button>`];
 }
 
-function hiddenPlayable(hidden, field, player = currentPlayer(game)) {
+function hiddenPlayable(hidden, field, player = viewerPlayer()) {
   if (!hidden || !field || !player || !hiddenCardIsControlledBy(hidden, player.id)) return false;
-  return legalCardPlayDestinations(game, hidden.card.instanceId).includes(field.instanceId);
-}
-
-function canPayCard(player, card) {
-  const cost = adjustedDisplayCost(player, card);
-  const readyEnergy = player.runes.filter((rune) => !rune.exhausted).length;
-  if (readyEnergy + availablePoolEnergy(player, card) < cost.energy) return false;
-  return canPayPowerCost(player, cost.power);
-}
-
-function adjustedDisplayCost(player, card) {
-  const cost = {
-    energy: card.energy || 0,
-    power: structuredClone(card.power || [])
-  };
-  if (game.phase !== "showdown" || card.type !== "spell" || !game.showdown) return cost;
-  const battlefield = game.battlefields.find((field) => field.instanceId === game.showdown.battlefieldId);
-  if (!battlefield) return cost;
-  for (const unit of battlefield.units) {
-    for (const effect of (unit.effects || []).filter((candidate) => candidate.timing === "combatStatic")) {
-      if (effect.kind !== "spellCostModifier") continue;
-      const friendly = unit.controllerId === player.id;
-      cost.energy += friendly ? (effect.friendlyEnergy || 0) : (effect.enemyEnergy || 0);
-      cost.power = adjustDisplayPowerCost(cost.power, friendly ? (effect.friendlyPower || 0) : (effect.enemyPower || 0));
-      if (effect.minEnergy != null) cost.energy = Math.max(effect.minEnergy, cost.energy);
-    }
-  }
-  cost.energy = Math.max(0, cost.energy);
-  return cost;
-}
-
-function adjustDisplayPowerCost(requirements, delta) {
-  const next = structuredClone(requirements || []);
-  if (delta > 0) return [...next, { domain: "Any", amount: delta }];
-  let remove = Math.abs(delta);
-  for (let index = next.length - 1; index >= 0 && remove > 0; index -= 1) {
-    const amount = Math.min(next[index].amount, remove);
-    next[index].amount -= amount;
-    remove -= amount;
-  }
-  return next.filter((requirement) => requirement.amount > 0);
-}
-
-function availablePoolEnergy(player, card = null) {
-  return runePoolEnergy(player).filter((resource) => poolEnergyCanPay(resource, card)).length;
-}
-
-function canPayPowerCost(player, powerCost) {
-  const amount = totalPowerAmount(powerCost || []);
-  if (!amount) return true;
-  if (player.runes.length < amount) return false;
-  return Boolean(choosePowerRunes(player.runes, powerCost || []));
+  return uiLegalActions.some((action) =>
+    action.kind === "beginPlayCard"
+    && action.cardId === hidden.card.instanceId
+    && action.destination === field.instanceId);
 }
 
 function actionHint(card, context, actions) {
@@ -4290,9 +4714,13 @@ function actionHint(card, context, actions) {
     if (!context) return t("selectCardHint", locale());
     if (actions.length) return t("availableActions", locale());
     if (context.zone === "attachment") return t("attachedGear", locale());
-    if (card.exhausted) return t("exhausted", locale());
+    const activationReason = activationBlockedReason(card);
+    if (activationReason) return localizedCommandFailure(activationReason).title;
+    if (card.exhausted && card.type !== "rune") return t("exhausted", locale());
     if (context.playerId !== viewerPlayerId()) return t("opponent", locale());
-    return t("noAction", locale());
+    if (game.phase === "showdown") return "결전 체인에는 행동, 반응 또는 매복 카드만 추가할 수 있습니다.";
+    if (game.actionChain) return "열린 체인에는 반응 능력만 추가할 수 있습니다.";
+    return "현재 조건에서 실행할 수 있는 행동이 없습니다.";
   }
   if (!context) return "Select a playable card or unit";
   if (actions.length) return "Use the buttons, or click a highlighted zone";
@@ -4308,7 +4736,7 @@ function actionHint(card, context, actions) {
 
 function selectedContext(cardId) {
   for (const player of game.players) {
-    if (player.legend.instanceId === cardId) return { playerId: player.id, zone: "legend", location: "legend" };
+    if (player.legend?.instanceId === cardId) return { playerId: player.id, zone: "legend", location: "legend" };
     if (player.availableChampions.some((card) => card.instanceId === cardId)) return { playerId: player.id, zone: "champion-choice", location: "champion-choice" };
     if (player.hand.some((card) => card.instanceId === cardId)) return { playerId: player.id, zone: "hand", location: "hand" };
     if (player.base.some((card) => card.instanceId === cardId)) return { playerId: player.id, zone: "base", location: "base" };
@@ -4363,46 +4791,6 @@ function pruneMoveSelection() {
   }
 }
 
-function canActivate(card) {
-  if (game.pendingPayment || game.pendingChoice) return false;
-  if (!viewerCanAct()) return false;
-  const activatedEffects = (card.effects || []).filter((effect) => effect.timing === "activated");
-  const hasActivated = activatedEffects.length > 0;
-  const playerControlsForge = game.battlefields.some((field) => field.controlledBy === viewerPlayerId() && (field.effects || []).some((effect) => effect.kind === "legendAttachEquipment"));
-  if (!hasActivated && !(card.type === "legend" && playerControlsForge)) return false;
-  if (card.exhausted && !activatedEffects.some((effect) => effect.exhaust === false)) return false;
-  if (canActivateReactionAbility(card)) return true;
-  if (game.actionChain) {
-    return false;
-  }
-  if (card.type === "legend" && playerControlsForge && game.phase === "action") return viewerPlayerId() === card.controllerId;
-  if (card.type === "legend") return false;
-  return game.phase === "action" && viewerPlayerId() === card.controllerId;
-}
-
-function canActivateReactionAbility(card) {
-  const activatedEffects = (card.effects || []).filter((effect) => effect.timing === "activated");
-  if (!activatedEffects.length) return false;
-  const reactionEffects = activatedEffects.filter((effect) =>
-    effect.abilityKeywords?.includes("Reaction")
-    || card.tags?.includes("Reaction")
-    || card.keywords?.includes("Reaction"));
-  if (!reactionEffects.length) return false;
-  if (game.pendingPayment) {
-    const player = game.players.find((candidate) => candidate.id === game.pendingPayment.playerId);
-    const paidCard = player ? paymentDisplayCard(player, game.pendingPayment) : null;
-    return game.pendingPayment.playerId === card.controllerId
-      && reactionEffects.some((effect) =>
-        ["addEnergy", "addPower"].includes(effect.kind)
-        && (!card.exhausted || effect.exhaust === false)
-        && (effect.restriction !== "spell" || paidCard?.type === "spell")
-      );
-  }
-  if (game.actionChain) return game.actionChain.priorityPlayerId === card.controllerId && viewerPlayerId() === card.controllerId;
-  if (game.phase === "showdown" && game.showdown) return game.showdown.priorityPlayerId === card.controllerId && viewerPlayerId() === card.controllerId;
-  return game.phase === "action" && viewerPlayerId() === card.controllerId;
-}
-
 function activationBlockedReason(card) {
   const activatedEffects = (card.effects || []).filter((effect) => effect.timing === "activated");
   if (!activatedEffects.length) return "";
@@ -4443,16 +4831,15 @@ function canUseTarget(card, context, destination, ownerId) {
   if (context.playerId !== viewerPlayerId()) return false;
   if (context.zone === "hand") {
     if (card.type !== "unit") return false;
-    return legalCardPlayDestinations(game, card.instanceId).includes(destination);
+    return uiLegalActions.some((action) =>
+      action.kind === "beginPlayCard" && action.cardId === card.instanceId && action.destination === destination);
   }
   if (context.zone === "champion") {
-    return legalChampionPlayDestinations(game).includes(destination);
+    return uiLegalActions.some((action) => action.kind === "beginPlayChampion" && action.destination === destination);
   }
   if (context.zone === "base" || context.zone === "battlefield") {
-    if (game.phase !== "action" || card.type !== "unit" || card.exhausted || card.cantMoveThisTurn) return false;
-    if (destination === context.location) return false;
-    if (context.location !== "base" && destination !== "base" && !hasKeyword(card, "Ganking")) return false;
-    return true;
+    return uiLegalActions.some((action) =>
+      action.kind === "moveUnit" && action.unitId === card.instanceId && action.destinationId === destination);
   }
   return false;
 }
@@ -4465,10 +4852,18 @@ function runeSummary(player) {
       ready: 0,
       color: rune.color,
       image: rune.image || "",
-      name: cardName(rune)
+      name: cardName(rune),
+      cardId: rune.instanceId,
+      cardReady: !rune.exhausted
     };
     item.total += 1;
-    if (!rune.exhausted) item.ready += 1;
+    if (!rune.exhausted) {
+      item.ready += 1;
+      if (!item.cardReady) {
+        item.cardId = rune.instanceId;
+        item.cardReady = true;
+      }
+    }
     counts.set(rune.domain, item);
   }
   const poolEnergy = runePoolEnergy(player).filter((resource) => poolEnergyCanPay(resource));
@@ -4476,24 +4871,26 @@ function runeSummary(player) {
   return `
     <div class="rune-summary">
       ${[...counts.entries()].map(([domain, item]) => `
-        <span class="rune-count" style="--rune:${item.color}" title="${escapeHtml(item.name)} · ${domainText(domain)} ${item.ready}/${item.total}">
+        <button type="button" class="rune-count" data-action="select-card" data-card="${item.cardId}" style="--rune:${item.color}" title="${escapeHtml(item.name)} · ${domainText(domain)} ${item.ready}/${item.total}">
           ${item.image ? `<img class="rune-summary-art" src="${item.image}" alt="${escapeHtml(item.name)}" loading="lazy" />` : ""}
-          <b>${domain}</b> ${item.ready}/${item.total}
-        </span>
+          <span class="rune-summary-value"><b>${domainText(domain)}</b><em>${item.ready}/${item.total}</em></span>
+        </button>
       `).join("") || `<span class="rune-count muted">${t("noRunes", locale())}</span>`}
-      ${poolEnergy.length ? `<span class="rune-count generated"><b>${t("energy", locale())}</b> +${poolEnergy.length}</span>` : ""}
-      ${poolPower.length ? `<span class="rune-count power-pool"><b>${t("power", locale())}</b> ${poolPower.length}</span>` : ""}
+      ${poolEnergy.length ? `<span class="rune-count generated"><span class="rune-summary-symbol" aria-hidden="true">⚡</span><span class="rune-summary-value"><b>${t("energy", locale())}</b><em>+${poolEnergy.length}</em></span></span>` : ""}
+      ${poolPower.length ? `<span class="rune-count power-pool"><span class="rune-summary-symbol" aria-hidden="true">◆</span><span class="rune-summary-value"><b>${t("power", locale())}</b><em>${poolPower.length}</em></span></span>` : ""}
     </div>
   `;
 }
 
 function runeChip(rune) {
   const spent = rune.exhausted ? " spent" : "";
+  const canRecycle = (rune.effects || []).some((effect) => effect.timing === "activated" && effect.kind === "addPower" && effect.exhaust === false);
   return `
-    <button type="button" class="rune rune-card-chip${spent}" data-action="select-card" data-card="${rune.instanceId}" style="--rune:${rune.color}" title="${translateCardText(rune.text, locale())}">
+    <button type="button" class="rune rune-card-chip${spent}" data-action="select-card" data-card="${rune.instanceId}" style="--rune:${rune.color}" title="${cardText(rune)}">
       ${rune.image ? `<img src="${rune.image}" alt="${cardName(rune)}" loading="lazy" />` : `<span class="rune-swatch"></span>`}
       <span class="rune-card-caption">${domainText(rune.domain)}</span>
-      ${rune.exhausted ? `<strong>${t("spent", locale())}</strong>` : ""}
+      ${rune.exhausted ? `<strong>${t("exhausted", locale())}</strong>` : ""}
+      ${rune.exhausted && canRecycle ? `<small class="rune-recycle-ready">${locale() === LOCALES.KO ? "재활용 가능" : "Can recycle"}</small>` : ""}
     </button>
   `;
 }
@@ -4534,6 +4931,7 @@ function inspector(card) {
         ${["unit", "gear"].includes(card.type) ? `<strong>${t("might", locale())} ${card.type === "unit" ? card.might + (card.buffs || 0) + (card.mightModifier || 0) : card.might || 0}</strong>` : ""}
         <p>${shortCardText(cardText(card))}</p>
         ${(card.keywords || []).length ? `<small>${keywordText(card.keywords)}</small>` : ""}
+        ${cardStatusPanel(card, { compact: true })}
         <button class="secondary view-full-card" data-action="view-full-card">${t("viewFullCard", locale())}</button>
         ${attachments.length ? `
           <button class="secondary attached-gear-toggle" data-action="toggle-attachments" data-card="${card.instanceId}">
@@ -4583,7 +4981,10 @@ function fullCardModal(card) {
       </div>
       <div class="full-card-body">
         ${card.image ? `<img src="${card.image}" alt="${cardName(card)}" />` : ""}
-        <p>${cardText(card)}</p>
+        <div class="full-card-copy">
+          <p>${cardText(card)}</p>
+          ${cardStatusPanel(card)}
+        </div>
       </div>
     </section>
   `;
@@ -4607,7 +5008,6 @@ function isFlashed(cardId) {
 
 app.addEventListener("click", (event) => {
   try {
-    unlockAudio();
     if (handlePendingChoiceClick(event)) return;
   } catch (error) {
     reportUiException(error, "pending choice click");
@@ -4638,11 +5038,6 @@ function handlePendingChoiceClick(event) {
 
 app.addEventListener("click", (event) => {
   try {
-    const globalAction = event.target.closest("button")?.dataset.action;
-    if (handleAudioSettingAction(globalAction)) {
-      render();
-      return;
-    }
     if (appView !== "game") {
       if (isTextEditingTarget(event.target)) return;
       handleShellClick(event);
@@ -4655,11 +5050,9 @@ app.addEventListener("click", (event) => {
     const payRunes = app.querySelector(".pay-runes");
     if (payRunes) paymentRunesScrollLeft = payRunes.scrollLeft;
 
-    const button = event.target.closest("button");
-    const cardNode = button ? null : event.target.closest("[data-card-id]");
+    const { button, cardNode, targetZone } = resolveBoardClickTarget(event.target);
     if (cardNode) setUiSelectedCard(cardNode.dataset.cardId);
 
-    const targetZone = !cardNode && !button ? event.target.closest("[data-zone-action]") : null;
     if (targetZone) {
       const { zoneAction, card, unit, destination } = targetZone.dataset;
       if (zoneAction === "begin-play") {
@@ -4683,7 +5076,7 @@ app.addEventListener("click", (event) => {
       return;
     }
 
-    const { action, card, unit, destination, player, battlefield, rune, energy, mode, choice } = button.dataset;
+    const { action, card, unit, destination, player, battlefield, rune, energy, mode, choice, ability } = button.dataset;
     if (action === "sideboard-select-main") sideboardSelectedMain = button.dataset.cardNumber;
     if (action === "sideboard-swap-in") {
       const match = activeBetweenGamesMatch();
@@ -4706,7 +5099,10 @@ app.addEventListener("click", (event) => {
     if (action === "toggle-log") logOpen = !logOpen;
     if (action === "dismiss-feedback") clearRealtimeFeedback();
     if (action === "toggle-inspector") inspectorOpen = !inspectorOpen;
+    if (action === "toggle-chain-zone") chainZoneCollapsed = !chainZoneCollapsed;
     if (action === "confirm-first-player") dispatchGameCommand({ kind: "confirmFirstPlayer" }, () => confirmFirstPlayer(game));
+    if (action === "roll-first-player") dispatchGameCommand({ kind: "rollFirstPlayer" }, () => rollFirstPlayer(game, activePlayerId()));
+    if (action === "choose-first-player") dispatchGameCommand({ kind: "chooseFirstPlayer", playerId: player }, () => chooseFirstPlayer(game, activePlayerId(), player));
     if (action === "toggle-hand") handOpen = !handOpen;
     if (action === "toggle-graveyard") graveyardOpenPlayerId = graveyardOpenPlayerId === player ? null : player;
     if (action === "toggle-banished") banishedOpenPlayerId = banishedOpenPlayerId === player ? null : player;
@@ -4773,7 +5169,7 @@ app.addEventListener("click", (event) => {
       }
     }
     if (action === "confirm-online-result") onlineLeaveRoom();
-    if (action === "pass-showdown") dispatchGameCommand({ kind: "passShowdown" }, () => passShowdown(game));
+    if (action === "pass-showdown") dispatchGameCommand({ kind: "passShowdown" }, () => passShowdown(game, activePlayerId()));
     if (action === "begin-play") {
       handOpen = false;
       dispatchGameCommand({ kind: "beginPlayCard", cardId: card, destination }, () => beginPlayCard(game, card, destination));
@@ -4792,7 +5188,10 @@ app.addEventListener("click", (event) => {
       dispatchGameCommand({ kind: "moveUnits", unitIds: [...moveSelection], destinationId: destination }, () => moveUnits(game, [...moveSelection], destination));
       moveSelection.clear();
     }
-    if (action === "activate-card") dispatchGameCommand({ kind: "activateCard", cardId: card }, () => activateCard(game, card));
+    if (action === "activate-card") dispatchGameCommand(
+      { kind: "activateCard", cardId: card, abilityId: ability || undefined },
+      (resolved) => activateCard(game, resolved.cardId, resolved.abilityId || null)
+    );
     if (action === "pay-rune") dispatchGameCommand({ kind: "togglePaymentRune", runeId: rune, mode }, () => togglePaymentRune(game, rune, mode));
     if (action === "pay-pool-energy") dispatchGameCommand({ kind: "togglePaymentPoolEnergy", energyId: energy }, () => togglePaymentPoolEnergy(game, energy));
     if (action === "pay-pool-power") dispatchGameCommand({ kind: "togglePaymentPoolPower", powerId: button.dataset.power }, () => togglePaymentPoolPower(game, button.dataset.power));
@@ -4816,6 +5215,15 @@ app.addEventListener("click", (event) => {
   }
 });
 
+app.addEventListener("keydown", (event) => {
+  if (!['Enter', ' '].includes(event.key)) return;
+  const cardNode = event.target.closest?.("[data-card-id][role='button']");
+  if (!cardNode || !app.contains(cardNode)) return;
+  event.preventDefault();
+  setUiSelectedCard(cardNode.dataset.cardId);
+  render();
+});
+
 app.addEventListener("input", (event) => {
   try {
     const target = event.target;
@@ -4830,14 +5238,6 @@ app.addEventListener("input", (event) => {
     if (action === "sideboard-first-player") {
       sideboardFirstPlayerId = target.value;
       render();
-      return;
-    }
-    if (action === "settings-volume") {
-      settings.volume = clampVolume(Number(target.value) / 100);
-      configureAudio({ volume: settings.volume });
-      const label = target.closest("label")?.querySelector("span");
-      if (label) label.textContent = `음량 ${Math.round(settings.volume * 100)}%`;
-      saveSettings();
       return;
     }
     if (action === "online-code-input") {
@@ -4906,19 +5306,6 @@ function isTextEditingTarget(target) {
     || Boolean(target?.isContentEditable);
 }
 
-function handleAudioSettingAction(action) {
-  if (action !== "toggle-sound" && action !== "toggle-voice") return false;
-  if (action === "toggle-sound") settings.sound = !settings.sound;
-  if (action === "toggle-voice") settings.voice = !settings.voice;
-  configureAudio({ enabled: settings.sound, voice: settings.voice, volume: settings.volume });
-  saveSettings();
-  if (settings.sound) {
-    unlockAudio();
-    playPresentationCue({ kind: "ui" });
-  }
-  return true;
-}
-
 function renderDeckSearchOnly() {
   if (appView !== "decks") return;
   const deck = getSelectedDeckRecord();
@@ -4929,15 +5316,18 @@ function renderDeckSearchOnly() {
   const results = filteredDeckCards();
   library.innerHTML = results.map((card) => libraryCard(card, deck)).join("");
   library.scrollTop = scrollTop;
-  if (count) count.textContent = `${results.length} cards`;
+  if (count) count.textContent = locale() === LOCALES.KO ? `${results.length}장` : `${results.length} cards`;
 }
 
 function handleShellClick(event) {
   const button = event.target.closest("button");
   if (!button) return;
-  const { action, deck, cardNumber, domain, slot, room } = button.dataset;
+  const { action, deck, cardNumber, domain, slot, room, tab } = button.dataset;
   if (action === "menu-home") appView = "menu";
-  if (action === "menu-decks") appView = "decks";
+  if (action === "menu-decks") {
+    appView = "decks";
+    deckEditor.mobileView = "list";
+  }
   if (action === "menu-multiplayer") {
     connectDefaultMultiplayer();
   }
@@ -4955,14 +5345,20 @@ function handleShellClick(event) {
   if (action === "deck-select") {
     deckEditor.selectedDeckId = deck;
     deckEditor.selectedCardNumber = deckHeroCard(getSelectedDeckRecord())?.cardNumber || null;
+    deckEditor.mobileView = "edit";
+    deckEditor.mobileTab = "deck";
   }
   if (action === "deck-new") {
     const record = createNewDeckRecord();
     deckStore.decks.push(record);
     deckEditor.selectedDeckId = record.id;
     deckEditor.selectedCardNumber = null;
+    deckEditor.mobileView = "edit";
+    deckEditor.mobileTab = "deck";
     saveDeckStore();
   }
+  if (action === "deck-mobile-list") deckEditor.mobileView = "list";
+  if (action === "deck-mobile-tab" && ["deck", "runes", "cards", "detail"].includes(tab)) deckEditor.mobileTab = tab;
   if (action === "deck-save") saveDeckStore();
   if (action === "deck-ai-recommend") void runDeckAiRecommendation();
   if (action === "deck-ai-apply") {
@@ -4977,7 +5373,10 @@ function handleShellClick(event) {
     });
     deckEditor.aiRecommendation = null;
   }
-  if (action === "deck-card-focus") deckEditor.selectedCardNumber = cardNumber;
+  if (action === "deck-card-focus") {
+    deckEditor.selectedCardNumber = cardNumber;
+    if (window.matchMedia?.("(max-width: 760px)").matches) deckEditor.mobileTab = "detail";
+  }
   if (action === "deck-set-legend") {
     mutateSelectedDeck((selected) => {
       if (cardByNumber(cardNumber)?.type === "legend") selected.legend = cardNumber;
@@ -5022,7 +5421,7 @@ function coachAnalysisView() {
           <div>
             <p class="eyebrow visible">${korean ? "자가대전 AI 코치" : "Self-play AI coach"}</p>
             <h1>${korean ? "경기 분석" : "Match review"}</h1>
-            <p>${escapeHtml(report.overview || (korean ? "아직 분석할 결정이 없습니다." : "There are no decisions to review yet."))}</p>
+            <p>${escapeHtml(korean ? localizedDynamicText(report.overview || "아직 분석할 결정이 없습니다.") : (report.overview || "There are no decisions to review yet."))}</p>
           </div>
           <div class="actions inline">
             <button data-action="coach-deep-review" ${aiDeepReviewRunning || !aiReplay?.decisions?.length ? "disabled" : ""}>${aiDeepReviewRunning ? (korean ? "대안 시뮬레이션 중…" : "Simulating…") : (korean ? "정밀 롤아웃 분석" : "Deep rollout review")}</button>
@@ -5036,16 +5435,16 @@ function coachAnalysisView() {
         </div>
         <section class="coach-deck-advice">
           <h2>${korean ? "덱 구축 분석" : "Deck analysis"}</h2>
-          ${(report.deckAdvice?.observations || []).map((item) => `<p>${escapeHtml(item)}</p>`).join("")}
-          ${(report.deckAdvice?.recommendations || []).map((item) => `<p class="coach-recommendation">${escapeHtml(item)}</p>`).join("") || `<p>${korean ? "카드 교체를 권고하려면 더 많은 자가대전 표본이 필요합니다." : "More self-play samples are needed for card replacement advice."}</p>`}
+          ${(report.deckAdvice?.observations || []).map((item) => `<p>${escapeHtml(korean ? localizedDynamicText(item) : item)}</p>`).join("")}
+          ${(report.deckAdvice?.recommendations || []).map((item) => `<p class="coach-recommendation">${escapeHtml(korean ? localizedDynamicText(item) : item)}</p>`).join("") || `<p>${korean ? "카드 교체를 권고하려면 더 많은 자가대전 표본이 필요합니다." : "More self-play samples are needed for card replacement advice."}</p>`}
         </section>
         <section class="coach-deck-advice coach-matchup-plan">
           <h2>${korean ? "상대 덱 대응 플랜" : "Matchup plan"}</h2>
-          <p>${escapeHtml(report.matchupPlan?.plan || "")}</p>
+          <p>${escapeHtml(korean ? localizedDynamicText(report.matchupPlan?.plan || "") : (report.matchupPlan?.plan || ""))}</p>
           <small>${korean ? "플랜 신뢰도" : "Plan confidence"} ${report.matchupPlan?.confidence === "high" ? "높음" : report.matchupPlan?.confidence === "medium" ? "보통" : "낮음"}</small>
           ${report.matchupPlan?.matchupWinRate == null ? "" : `<p>이 덱 조합 자가대전 승률 ${(report.matchupPlan.matchupWinRate * 100).toFixed(1)}% · ${report.matchupPlan.matchupGames}경기</p>`}
           <h3>${korean ? "현재 학습 환경의 주요 채용 카드" : "Most played cards in the learned meta"}</h3>
-          <div class="coach-meta-cards">${(report.matchupPlan?.metaCards || []).map((card) => `<span>${escapeHtml(card.name)} · 채용 ${(card.inclusionRate * 100).toFixed(1)}%</span>`).join("") || `<span>${korean ? "아직 충분한 환경 표본이 없습니다." : "Not enough meta samples yet."}</span>`}</div>
+          <div class="coach-meta-cards">${(report.matchupPlan?.metaCards || []).map((card) => `<span>${escapeHtml(korean ? localizedDynamicText(card.name) : card.name)} · 채용 ${(card.inclusionRate * 100).toFixed(1)}%</span>`).join("") || `<span>${korean ? "아직 충분한 환경 표본이 없습니다." : "Not enough meta samples yet."}</span>`}</div>
         </section>
         <section class="coach-turning-points">
           <h2>${korean ? "중요한 판단" : "Key decisions"}</h2>
@@ -5082,9 +5481,9 @@ function coachDecisionCard(item) {
   return `
     <article class="coach-decision severity-${item.severity}">
       <div><span>${item.turnNumber}턴 · ${item.category === "mulligan" ? "멀리건" : "플레이"}</span><strong>${item.severity === "critical" ? "치명적 실수" : item.severity === "mistake" ? "실수" : item.severity === "inaccuracy" ? "부정확" : "좋은 판단"}</strong></div>
-      <p>선택: ${escapeHtml(selected?.label || "-")} · 예상 승률 ${((selected?.expectedWinRate || 0) * 100).toFixed(1)}%</p>
-      <p>추천: ${escapeHtml(best?.label || "-")} · 예상 승률 ${((best?.expectedWinRate || 0) * 100).toFixed(1)}%</p>
-      <p>${escapeHtml(item.explanation || "")}</p>
+      <p>선택: ${escapeHtml(locale() === LOCALES.KO ? localizedDynamicText(selected?.label || "-") : (selected?.label || "-"))} · 예상 승률 ${((selected?.expectedWinRate || 0) * 100).toFixed(1)}%</p>
+      <p>추천: ${escapeHtml(locale() === LOCALES.KO ? localizedDynamicText(best?.label || "-") : (best?.label || "-"))} · 예상 승률 ${((best?.expectedWinRate || 0) * 100).toFixed(1)}%</p>
+      <p>${escapeHtml(locale() === LOCALES.KO ? localizedDynamicText(item.explanation || "") : (item.explanation || ""))}</p>
       <small>신뢰도 ${item.confidence === "high" ? "높음" : item.confidence === "medium" ? "보통" : "낮음"}</small>
     </article>
   `;
@@ -5196,10 +5595,10 @@ async function runDeckAiRecommendation() {
 function neuralAiStatusText() {
   const korean = locale() === LOCALES.KO;
   if (neuralAiLoadState === "loading") return korean ? "저장된 완성 모델을 불러오는 중입니다." : "Loading the saved trained model.";
-  if (neuralAiLoadState === "error") return korean ? `완성 모델을 사용할 수 없어 기본 AI로 실행합니다: ${neuralAiLoadError} · 다음 AI 기능 실행 시 다시 로드합니다.` : `Using the baseline AI because the trained model is unavailable: ${neuralAiLoadError} · The next AI feature will retry.`;
+  if (neuralAiLoadState === "error") return korean ? `완성 모델을 사용할 수 없어 기본 AI로 실행합니다: ${localizedDynamicText(neuralAiLoadError, { fallback: "모델 파일을 불러오지 못했습니다." })} · 다음 AI 기능 실행 시 다시 불러옵니다.` : `Using the baseline AI because the trained model is unavailable: ${neuralAiLoadError} · The next AI feature will retry.`;
   if (neuralAiLoadState === "idle") return korean ? "완성 모델은 AI 기능을 처음 사용할 때만 로드됩니다." : "The trained model loads only when an AI feature is first used.";
   return korean
-    ? `AI 세대 ${activeAiGeneration()} · 자가대전 ${activeAiGames()}경기 학습 · 순환 PPO 준비됨`
+    ? `AI 세대 ${activeAiGeneration()} · 자가대전 ${activeAiGames()}경기 학습 · 순환형 학습 모델 준비됨`
     : `AI generation ${activeAiGeneration()} · ${activeAiGames()} self-play games · recurrent PPO ready`;
 }
 

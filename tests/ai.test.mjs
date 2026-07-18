@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { decklists } from "../src/cards.mjs";
 import {
-  activeActorId, applyAiAction, cloneGame, enumerateLegalActions
+  actionKey, activeActorId, applyAiAction, cloneGame, enumerateLegalActions, resolveLegalAction
 } from "../src/ai/actions.mjs";
 import { buildMatchReport } from "../src/ai/coach.mjs";
 import { metaCardLeaderboard, mutateDeck, updateDeckLearning } from "../src/ai/deckbuilding.mjs";
@@ -19,9 +19,25 @@ test("AI legal-action environment only emits executable actions", () => {
     const actorId = activeActorId(game);
     const actions = enumerateLegalActions(game, actorId);
     assert.ok(actions.length > 0);
-    for (const action of actions) assert.equal(applyAiAction(cloneGame(game), action, actorId).ok, true);
+    for (const action of actions) {
+      assert.equal(actionKey(resolveLegalAction(game, action, actorId)), actionKey(action));
+      assert.equal(applyAiAction(cloneGame(game), action, actorId).ok, true);
+    }
     assert.equal(applyAiAction(game, actions.at(-1), actorId).ok, true);
   }
+});
+
+test("AI can take its play-order roll and choose whether to go first or second", () => {
+  const game = createGame({ decks: decks.slice(0, 2), randomFirstPlayer: true, randomSeed: 123 });
+
+  assert.deepEqual(enumerateLegalActions(game, "p1"), [{ kind: "rollFirstPlayer" }]);
+  assert.equal(applyAiAction(game, { kind: "rollFirstPlayer" }, "p1").ok, true);
+  assert.deepEqual(enumerateLegalActions(game, "p2"), [{ kind: "rollFirstPlayer" }]);
+  assert.equal(applyAiAction(game, { kind: "rollFirstPlayer" }, "p2").ok, true);
+  assert.equal(activeActorId(game), "p2");
+  assert.equal(applyAiAction(game, { kind: "chooseFirstPlayer", playerId: "p2" }, "p2").ok, true);
+  assert.equal(game.firstPlayerId, "p2");
+  assert.equal(game.phase, "champion-select");
 });
 
 test("AI observations never expose an opponent hand without current intel", () => {

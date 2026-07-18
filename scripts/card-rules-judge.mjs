@@ -400,6 +400,36 @@ export function deriveTextRuleFindings(card) {
   if (unconditionalEnterReady && !hasEffect(effects, "static", "entersReady")) {
     findings.push(cardFinding(card, "TEXT_MISSING_ENTERS_READY", `${label}: unconditional enter-ready text has no static:entersReady effect.`));
   }
+  if (/(?:^|\n)\s*This enters exhausted\s*\.?/im.test(text)
+    && !hasEffect(effects, "static", "entersExhausted")) {
+    findings.push(cardFinding(card, "TEXT_MISSING_ENTERS_EXHAUSTED", `${label}: unconditional enter-exhausted text has no static:entersExhausted effect.`));
+  }
+  if (/You may play me to an open battlefield/i.test(text)
+    && !hasEffect(effects, "static", "canEnterOpenBattlefield")) {
+    findings.push(cardFinding(card, "TEXT_MISSING_OPEN_BATTLEFIELD_ENTRY", `${label}: open-battlefield play permission has no shared static effect.`));
+  }
+  if (/You may pay (?:Energy )?1 to hide a card with \[?Hidden\]? instead of/i.test(text)
+    && !hasEffect(effects, "static", "hideWithEnergyInsteadOfPower")) {
+    findings.push(cardFinding(card, "TEXT_MISSING_HIDE_ENERGY_ALTERNATIVE", `${label}: alternate Energy hide cost has no shared static effect.`));
+  }
+  if (/spells and abilities can't ready enemy units and gear/i.test(text)
+    && !hasEffect(effects, "static", "opponentsCannotReadyByEffects")) {
+    findings.push(cardFinding(card, "TEXT_MISSING_ENEMY_READY_LOCK", `${label}: enemy ready restriction has no shared static effect.`));
+  }
+  if (/buff me\. Then, if I am at a battlefield, buff all other friendly units there/i.test(text)
+    && !hasEffect(effects, "onPlay", "buffSelfThenOtherFriendlyHere")) {
+    findings.push(cardFinding(card, "TEXT_MISSING_GROUP_BUFF", `${label}: self-then-allies buff text has no matching shared on-play effect.`));
+  }
+  const recycleFromTrashes = /Kill this:\s*Recycle up to (\d+) cards from trashes/i.exec(text);
+  if (recycleFromTrashes) {
+    const effect = effects.find((candidate) => candidate.timing === "activated" && candidate.kind === "recycleCardsFromTrashes");
+    if (!effect || effect.amount !== Number(recycleFromTrashes[1]) || effect.killSelfCost !== true) {
+      findings.push(cardFinding(card, "TEXT_RECYCLE_TRASHES_MISMATCH", `${label}: self-kill recycle ability is not represented exactly.`, {
+        amount: Number(recycleFromTrashes[1]),
+        killSelfCost: true
+      }, effect || null));
+    }
+  }
   if (/If an opponent controls a battlefield, I enter ready/i.test(text)
     && !hasEffect(effects, "static", "enterReadyIfOpponentControlsBattlefield")) {
     findings.push(cardFinding(card, "TEXT_MISSING_CONTROLLED_BATTLEFIELD_READY", `${label}: conditional enter-ready text has no matching shared static effect.`));

@@ -9,7 +9,7 @@ export default card({
   rarity: "Uncommon",
   domains: [DOMAINS.MIND],
   tags: ["Fae"],
-  keywords: ["Temporary"],
+  keywords: [],
   energy: 4,
   power: [{ domain: DOMAINS.ANY, amount: 1 }],
   might: 3,

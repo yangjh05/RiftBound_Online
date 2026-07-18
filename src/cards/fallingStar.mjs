@@ -21,6 +21,7 @@ export default card({
           "target": "unit",
           "amount": 3,
           "repeat": 2,
+          "selectRepeatedTargetsOnPlay": true,
           "allowRepeatedTargets": true
       }
   ]

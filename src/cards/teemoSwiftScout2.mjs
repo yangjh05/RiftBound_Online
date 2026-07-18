@@ -14,8 +14,13 @@ export default card({
   image: "https://cdn.piltoverarchive.com/cards/OGN-307.webp",
   text: "You may pay 1 to hide a card with HIDDEN instead of Rune.\n1, Tap: Put a Teemo unit you own into your hand from your Champion Zone or the board.",
   effects: [
-    {
+      {
+          "timing": "static",
+          "kind": "hideWithEnergyInsteadOfPower"
+      },
+      {
       timing: "activated",
+      exhaust: true,
       kind: "returnOwnedTagUnitToHand",
       tag: "Teemo",
       costEnergy: 1

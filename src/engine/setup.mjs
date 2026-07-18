@@ -52,7 +52,9 @@ function createPlayer(id, deck, instantiate) {
     runes: [],
     trash: [],
     banished: [],
-    turnScoredBattlefields: new Set(),
+    // Game state crosses the multiplayer JSON boundary, so persisted
+    // collections must remain plain data rather than Set/Map instances.
+    turnScoredBattlefields: [],
     cardsPlayedThisTurn: 0,
     drawCountThisTurn: 0,
     endTurnReadyRunes: 0,

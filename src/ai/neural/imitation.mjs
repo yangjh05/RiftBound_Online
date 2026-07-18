@@ -1,5 +1,5 @@
 import { createGame } from "../../engine.mjs";
-import { activeActorId, applyAiAction, enumerateLegalActions, actionKey, planPaymentActions } from "../actions.mjs";
+import { activeActorId, applyAiAction, auditDecisionBoundary, enumerateLegalActions, actionKey, planPaymentActions } from "../actions.mjs";
 import { DEFAULT_AI_MODEL, evaluateState, scoreActions } from "../policy.mjs";
 import { ACTION_DIM, encodeActionSet, encodeOpponentDeckTarget, encodeState } from "./encoding.mjs";
 import { NEURAL_HIDDEN_SIZE } from "./model.mjs";
@@ -20,6 +20,7 @@ export function collectBaselineImitation(options) {
       firstPlayerId: gameNumber % 2 ? "p2" : "p1",
       interactive: true,
       manualActionChainPriority: true,
+      decisionSafety: "strict",
       random,
       randomSeed: deterministicGameSeed(options.seed, gameNumber)
     });
@@ -31,6 +32,8 @@ export function collectBaselineImitation(options) {
     let paymentPlan = [];
     for (; actionCount < (options.maxActions || 640) && game.phase !== "complete"; actionCount += 1) {
       const actorId = activeActorId(game);
+      const boundaryViolations = auditDecisionBoundary(game, actorId);
+      if (boundaryViolations.length) { failure = `decision-safety:${boundaryViolations[0].kind}`; break; }
       const legal = actorId ? enumerateLegalActions(game, actorId) : [];
       if (!actorId || !legal.length) { failure = "no-legal-action"; break; }
       if (game.turnSequence !== intentTurnSequence) {
@@ -73,11 +76,15 @@ export function collectBaselineImitation(options) {
         return: 0,
         teacherConfidence: confidence,
         selectedKind: selected.action.kind,
+        selectedActionKey: selected.key,
+        legalActionKeys: legal.map(actionKey),
         originalLegalCount: actionSet.originalLegalCount,
         actionSetTruncated: actionSet.truncated,
         imitation: true
       });
       if (!applyAiAction(game, selected.action, actorId)?.ok) { failure = "teacher-action-failed"; break; }
+      const postActionViolations = auditDecisionBoundary(game);
+      if (postActionViolations.length) { failure = `decision-safety:${postActionViolations[0].kind}`; break; }
       if (paymentPlan.length && selected.key === actionKey(paymentPlan[0])) paymentPlan.shift();
     }
     const didComplete = game.phase === "complete" && Boolean(game.winnerId);
@@ -88,6 +95,7 @@ export function collectBaselineImitation(options) {
       truncatedSteps: [...stepsByPlayer.values()].flat().filter((step) => step.actionSetTruncated).length,
       maxLegalActions: Math.max(0, ...[...stepsByPlayer.values()].flat().map((step) => step.originalLegalCount || 0)),
       actionKinds: countValues([...stepsByPlayer.values()].flat().map((step) => step.selectedKind)),
+      decisionSafetyViolations: structuredClone(game.decisionSafety?.violations || []),
       deckByPlayer: Object.fromEntries(game.players.map((player, index) => [player.id, pair[index]?.id || null])),
       failure,
       terminalState: didComplete ? null : publicProgressDiagnostic(game)
@@ -97,7 +105,16 @@ export function collectBaselineImitation(options) {
         const reward = didComplete ? (player.id === game.winnerId ? 1 : -1) : 0;
         const steps = stepsByPlayer.get(player.id);
         for (const step of steps) step.return = reward;
-        if (steps.length) trajectories.push({ gameId, playerId: player.id, imitation: true, completed: didComplete, steps });
+        if (steps.length) trajectories.push({
+          gameId,
+          playerId: player.id,
+          imitation: true,
+          completed: didComplete,
+          engineFingerprint: options.engineFingerprint || null,
+          decisionSafetyVersion: game.decisionSafety?.version || null,
+          decisionSafetyViolations: structuredClone(game.decisionSafety?.violations || []),
+          steps
+        });
       }
     }
     if (didComplete) completed += 1;

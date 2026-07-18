@@ -9,7 +9,8 @@ const root = path.resolve(__dirname, "..");
 const desktopUrl = process.env.RIFTBOUND_DESKTOP_URL || "";
 const host = "127.0.0.1";
 const preferredPort = 4173;
-let updateCheckStarted = false;
+let startupStarted = false;
+let gameWindow = null;
 
 const contentTypes = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -20,7 +21,7 @@ const contentTypes = new Map([
   [".svg", "image/svg+xml; charset=utf-8"]
 ]);
 
-async function createWindow() {
+async function createGameWindow() {
   const appUrl = desktopUrl || await startBundledServer();
   const win = new BrowserWindow({
     width: 1440,
@@ -36,14 +37,12 @@ async function createWindow() {
       sandbox: true
     }
   });
+  gameWindow = win;
+  win.once("closed", () => {
+    if (gameWindow === win) gameWindow = null;
+  });
 
   win.loadURL(appUrl);
-
-  win.webContents.once("did-finish-load", () => {
-    if (updateCheckStarted) return;
-    updateCheckStarted = true;
-    startAutoUpdate({ app, dialog, win });
-  });
 
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (isAppUrl(url, appUrl)) return { action: "allow" };
@@ -57,6 +56,76 @@ async function createWindow() {
       shell.openExternal(url);
     }
   });
+}
+
+async function runStartup() {
+  if (startupStarted) return;
+  startupStarted = true;
+  const updateWindow = createUpdateWindow();
+  const report = (status) => {
+    if (!updateWindow.isDestroyed()) updateWindow.webContents.send("update-status", status);
+  };
+
+  await updateWindow.__ready;
+  let result;
+  do {
+    result = await startAutoUpdate({ app, dialog, win: updateWindow, onStatus: report });
+    if (result.status !== "error") break;
+    const choice = await dialog.showMessageBox(updateWindow, {
+      type: "warning",
+      title: "업데이트 확인 실패",
+      message: "업데이트 서버에 연결하지 못했습니다.",
+      detail: `${friendlyUpdateError(result.error)}\n\n인터넷 연결을 확인한 뒤 다시 시도하거나 현재 버전으로 게임을 시작할 수 있습니다.`,
+      buttons: ["다시 시도", "현재 버전으로 시작"],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true
+    });
+    if (choice.response !== 0) break;
+  } while (true);
+
+  if (result.status === "applying") return;
+  report({ phase: "launching", message: "게임을 시작하는 중입니다…", progress: 1 });
+  await delay(350);
+  if (!updateWindow.isDestroyed()) updateWindow.close();
+  await createGameWindow();
+}
+
+function createUpdateWindow() {
+  const win = new BrowserWindow({
+    width: 620,
+    height: 420,
+    resizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    show: false,
+    frame: false,
+    title: "Riftbound Online",
+    backgroundColor: "#090d14",
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, "updater-preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  });
+  win.__ready = new Promise((resolve, reject) => {
+    win.webContents.once("did-finish-load", resolve);
+    win.webContents.once("did-fail-load", (_event, code, description) => reject(new Error(`${description} (${code})`)));
+  });
+  win.loadFile(path.join(__dirname, "updater.html"));
+  win.once("ready-to-show", () => win.show());
+  return win;
+}
+
+function friendlyUpdateError(error) {
+  if (error?.name === "AbortError") return "서버 응답 시간이 초과되었습니다.";
+  return error?.message || String(error || "알 수 없는 오류");
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function isAppUrl(url, appUrl) {
@@ -121,10 +190,13 @@ function pathToFileUrl(filePath) {
 }
 
 app.whenReady().then(() => {
-  createWindow();
+  runStartup().catch(async (error) => {
+    await dialog.showErrorBox("Riftbound Online 시작 실패", error?.message || String(error));
+    app.quit();
+  });
 
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0 && !gameWindow) createGameWindow();
   });
 });
 

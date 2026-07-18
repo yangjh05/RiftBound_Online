@@ -18,15 +18,18 @@ export default card({
     {
       timing: "death",
       kind: "draw",
+      abilityId: "leaves-board",
       amount: 1
     },
     {
       timing: "death",
       kind: "channelRunes",
+      abilityId: "leaves-board",
       amount: 1
     },
     {
       timing: "activated",
+      exhaust: true,
       kind: "killSelf",
       costPower: [{ domain: DOMAINS.CHAOS, amount: 1 }]
     }

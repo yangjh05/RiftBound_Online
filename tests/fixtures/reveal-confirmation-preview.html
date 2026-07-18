@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <title>Reveal confirmation preview</title>
+  </head>
+  <body>
+    <div class="floating-panels has-modal">
+      <section class="choice-panel modal-panel reveal-confirmation-panel">
+        <div class="section-head">
+          <div>
+            <h2>다이애나: 공개됨</h2>
+            <span>공개된 카드를 확인한 뒤 확인을 누르세요.</span>
+          </div>
+        </div>
+        <div class="revealed-card-grid">
+          <article class="revealed-card-item">
+            <span class="choice-card-art"><span class="choice-card-fallback">공개 카드 1</span></span>
+            <strong>공개 카드 1</strong>
+            <button type="button">전체 카드 보기</button>
+          </article>
+          <article class="revealed-card-item">
+            <span class="choice-card-art"><span class="choice-card-fallback">공개 카드 2</span></span>
+            <strong>공개 카드 2</strong>
+            <button type="button">전체 카드 보기</button>
+          </article>
+          <article class="revealed-card-item">
+            <span class="choice-card-art"><span class="choice-card-fallback">공개 카드 3</span></span>
+            <strong>공개 카드 3</strong>
+            <button type="button">전체 카드 보기</button>
+          </article>
+          <article class="revealed-card-item">
+            <span class="choice-card-art"><span class="choice-card-fallback">공개 카드 4</span></span>
+            <strong>공개 카드 4</strong>
+            <button type="button">전체 카드 보기</button>
+          </article>
+        </div>
+        <div class="actions reveal-confirmation-actions">
+          <button type="button" class="primary" data-testid="reveal-confirm">확인</button>
+        </div>
+      </section>
+    </div>
+  </body>
+</html>

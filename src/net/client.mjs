@@ -4,10 +4,13 @@ export function configureOnlineServer(baseUrl = "") {
   apiBaseUrl = String(baseUrl).replace(/\/+$/u, "");
 }
 
+export function configuredMultiplayerServer(build = {}) {
+  return String(build.multiplayerBaseUrl || build.updateBaseUrl || "").replace(/\/+$/u, "");
+}
+
 export async function fetchRooms(options = {}) {
   const response = await fetch(apiUrl("/api/rooms"), {
-    signal: options.signal,
-    headers: apiBaseUrl ? { "ngrok-skip-browser-warning": "true" } : undefined
+    signal: options.signal
   });
   return readResponse(response);
 }
@@ -51,9 +54,7 @@ export async function persistAiReplay(replay) {
 }
 
 export async function fetchAiTrainingStatus() {
-  const response = await fetch(apiUrl("/api/ai/status"), {
-    headers: apiBaseUrl ? { "ngrok-skip-browser-warning": "true" } : undefined
-  });
+  const response = await fetch(apiUrl("/api/ai/status"));
   return readResponse(response);
 }
 
@@ -96,30 +97,50 @@ function openRemoteRoomEvents(roomId, playerToken, handlers) {
   let closed = false;
   const url = apiUrl(`/api/rooms/${encodeURIComponent(roomId)}/events?token=${encodeURIComponent(playerToken)}`);
   (async () => {
-    try {
-      const response = await fetch(url, {
-        signal: controller.signal,
-        headers: { "ngrok-skip-browser-warning": "true" }
-      });
-      if (!response.ok || !response.body) throw new Error(`Event stream failed with ${response.status}.`);
-      handlers.open?.();
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      while (!closed) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const blocks = buffer.split(/\r?\n\r?\n/u);
-        buffer = blocks.pop() || "";
-        for (const block of blocks) dispatchRemoteEventBlock(block, handlers);
+    let retryDelay = 750;
+    while (!closed) {
+      try {
+        const response = await fetch(url, {
+          signal: controller.signal
+        });
+        if (!response.ok || !response.body) throw new Error(`Event stream failed with ${response.status}.`);
+        handlers.open?.();
+        retryDelay = 750;
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (!closed) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const blocks = buffer.split(/\r?\n\r?\n/u);
+          buffer = blocks.pop() || "";
+          for (const block of blocks) dispatchRemoteEventBlock(block, handlers);
+        }
+        if (!closed) handlers.error?.("Connection interrupted. Reconnecting...");
+      } catch (error) {
+        if (closed || error?.name === "AbortError") break;
+        handlers.error?.(error.message || "Connection interrupted. Reconnecting...");
       }
-      if (!closed) handlers.error?.("Connection closed.");
-    } catch (error) {
-      if (!closed && error?.name !== "AbortError") handlers.error?.(error.message || "Connection interrupted.");
+      if (closed) break;
+      await reconnectDelay(retryDelay, controller.signal);
+      retryDelay = Math.min(5000, retryDelay * 2);
     }
   })();
   return { close: () => { closed = true; controller.abort(); } };
+}
+
+function reconnectDelay(milliseconds, signal) {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve();
+    const finish = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, milliseconds);
+    signal.addEventListener("abort", finish, { once: true });
+  });
 }
 
 function dispatchRemoteEventBlock(block, handlers) {
@@ -139,8 +160,7 @@ function postJson(url, body) {
   return fetch(apiUrl(url), {
     method: "POST",
     headers: {
-      "content-type": "application/json",
-      ...(apiBaseUrl ? { "ngrok-skip-browser-warning": "true" } : {})
+      "content-type": "application/json"
     },
     body: JSON.stringify(body)
   });

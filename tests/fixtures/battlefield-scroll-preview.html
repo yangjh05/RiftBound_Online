@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Battlefield lane scroll preview</title>
+  <link rel="stylesheet" href="../../src/styles.css" />
+  <style>
+    body { min-height: 100vh; padding: 16px; background: #050a14; }
+    .battlefield.location-column { width: min(520px, calc(100vw - 32px)); height: 360px; margin: 0 auto; }
+    .unit-token { color: white; }
+  </style>
+</head>
+<body>
+  <article class="battlefield location-column">
+    <div class="field-lane top-lane" data-testid="opponent-lane">
+      <span class="lane-label">상대 유닛</span>
+      <div class="field-lane-track">
+        <div class="unit-token"><div class="unit-token-body"><strong>상대 1</strong><span>유닛</span></div></div>
+        <div class="unit-token"><div class="unit-token-body"><strong>상대 2</strong><span>유닛</span></div></div>
+        <div class="unit-token"><div class="unit-token-body"><strong>상대 3</strong><span>유닛</span></div></div>
+        <div class="unit-token"><div class="unit-token-body"><strong>상대 4</strong><span>유닛</span></div></div>
+        <div class="unit-token"><div class="unit-token-body"><strong>상대 5</strong><span>유닛</span></div></div>
+        <div class="unit-token"><div class="unit-token-body"><strong>상대 6</strong><span>유닛</span></div></div>
+      </div>
+    </div>
+    <div class="field-center location-card placeholder-location-card">
+      <div class="field-image placeholder"><span>전장</span></div>
+      <div class="battlefield-head"><h2>스크롤 테스트 전장</h2><span>경합 중</span></div>
+    </div>
+    <div class="field-lane bottom-lane" data-testid="player-lane">
+      <span class="lane-label">내 유닛</span>
+      <div class="field-lane-track">
+        <div class="unit-token"><div class="unit-token-body"><strong>아군 1</strong><span>유닛</span></div></div>
+        <div class="unit-token"><div class="unit-token-body"><strong>아군 2</strong><span>유닛</span></div></div>
+        <div class="unit-token"><div class="unit-token-body"><strong>아군 3</strong><span>유닛</span></div></div>
+        <div class="unit-token"><div class="unit-token-body"><strong>아군 4</strong><span>유닛</span></div></div>
+        <div class="unit-token"><div class="unit-token-body"><strong>아군 5</strong><span>유닛</span></div></div>
+        <div class="unit-token"><div class="unit-token-body"><strong>아군 6</strong><span>유닛</span></div></div>
+      </div>
+    </div>
+  </article>
+</body>
+</html>

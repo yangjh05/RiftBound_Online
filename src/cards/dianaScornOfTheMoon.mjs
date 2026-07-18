@@ -20,6 +20,7 @@ export default card({
       "effects": [
         {
           "timing": "activated",
+          "exhaust": true,
           "kind": "addEnergy",
           "amount": 1,
           "restriction": "showdown",

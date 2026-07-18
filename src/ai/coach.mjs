@@ -202,6 +202,8 @@ function actionLabel(game, action) {
   const destinationName = destination?.name || (destinationId === "base" ? "기지" : "");
   const labels = {
     confirmFirstPlayer: "선공 확인",
+    rollFirstPlayer: "선후공 주사위 굴림",
+    chooseFirstPlayer: "선후공 선택",
     selectChampion: `${card?.name || "챔피언"} 선택`,
     selectBattlefield: `${destination?.name || "전장"} 선택`,
     toggleMulliganCard: `${card?.name || "카드"} 멀리건 선택`,

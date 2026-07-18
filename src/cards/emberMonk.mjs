@@ -9,7 +9,7 @@ export default card({
   rarity: "Common",
   domains: [DOMAINS.CHAOS],
   tags: ["Bandle City"],
-  keywords: ["Hidden"],
+  keywords: [],
   energy: 4,
   power: [],
   might: 4,

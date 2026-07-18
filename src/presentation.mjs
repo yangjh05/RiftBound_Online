@@ -17,6 +17,20 @@ export function resetPresentationState(state) {
   return state;
 }
 
+export function chainCardInstanceIds(game) {
+  return [
+    ...(game?.showdown?.chain || []),
+    ...(game?.actionChain?.chain || [])
+  ]
+    .filter(chainItemVisibleInPresentation)
+    .map((item) => item?.card?.instanceId)
+    .filter(Boolean);
+}
+
+function chainItemVisibleInPresentation(item) {
+  return Boolean(item) && !(item.itemType === "card" && ["unit", "gear"].includes(item.card?.type));
+}
+
 export function snapshotPresentationGame(game, mightOf = defaultMight) {
   const units = [];
   for (const player of game.players || []) {
@@ -51,7 +65,7 @@ export function snapshotPresentationGame(game, mightOf = defaultMight) {
     victoryScore: game.victoryScore || 8,
     players,
     units,
-    chain: chain.map((item, index) => ({
+    chain: chain.filter(chainItemVisibleInPresentation).map((item, index) => ({
       id: item.id || item.card?.instanceId || `chain-${index}`,
       playerId: item.playerId,
       name: item.card?.name || item.trigger?.kind || "Effect",
@@ -60,6 +74,7 @@ export function snapshotPresentationGame(game, mightOf = defaultMight) {
       reaction: Boolean(item.card?.tags?.includes("Reaction") || item.card?.keywords?.includes("Reaction"))
     })),
     showdownId: game.showdown?.battlefieldId || null,
+    scoreEvents: (game.scoreEvents || []).map((event) => ({ ...event })),
     effectStamp: game.effectFlash?.stamp || 0,
     effectMessage: game.effectFlash?.message || "",
     logHead: game.log?.[0] || "",
@@ -105,10 +120,10 @@ export function advancePresentation(state, current, viewerId) {
   for (const event of scoreEvents) {
     cues.push({
       kind: event.winning ? "victory-score" : event.comeback ? "comeback" : "score",
-      calloutKo: event.winning ? "승부가 결정됩니다" : event.comeback ? "전세가 뒤집혔습니다" : event.kind === "lock" ? "승기를 굳힙니다" : "전장을 가져옵니다",
-      calloutEn: event.winning ? "The match is decided" : event.comeback ? "The tide has turned" : event.kind === "lock" ? "The lead is locked in" : "The battlefield is claimed"
+      calloutKo: event.winning ? "승부가 결정됩니다" : event.comeback ? "전세가 뒤집혔습니다" : event.kind === "lock" ? "승기를 굳힙니다" : scoreCallout(event.scoreSource, "ko"),
+      calloutEn: event.winning ? "The match is decided" : event.comeback ? "The tide has turned" : event.kind === "lock" ? "The lead is locked in" : scoreCallout(event.scoreSource, "en")
     });
-    impacts.push(impact(event.winning ? "finisher" : event.comeback ? "comeback" : "score", event.winning ? "MATCH POINT" : event.comeback ? "TURNAROUND" : "SCORE", event.titleKo, event.winning ? "Match point" : event.comeback ? "Turnaround" : "Score", event.titleEn));
+    impacts.push(impact(event.winning ? "finisher" : event.comeback ? "comeback" : "score", event.winning ? "MATCH POINT" : event.comeback ? "TURNAROUND" : "SCORE", event.titleKo, event.winning ? "Match point" : event.comeback ? "Turnaround" : "Score", event.titleEn, event.detailKo, event.detailEn));
     addedHighlights.push(addHighlight(state, event));
   }
 
@@ -159,19 +174,22 @@ export function advancePresentation(state, current, viewerId) {
       calloutKo: won ? "승리를 쟁취했습니다" : "치열한 승부가 끝났습니다",
       calloutEn: won ? "Victory is yours" : "The battle is over"
     });
-    impacts.push(impact(won ? "victory" : "defeat", won ? "VICTORY" : "DEFEAT", won ? "승리를 쟁취했습니다" : "치열한 승부가 끝났습니다", won ? "Victory" : "Defeat", won ? "The match is yours" : "The battle is over"));
+    impacts.push(impact(won ? "victory" : "defeat", won ? "VICTORY" : "DEFEAT", won ? "승리를 쟁취했습니다" : "치열한 승부가 끝났습니다", won ? "Victory" : "Defeat", won ? "The match is yours" : "The battle is over", `${current.players.find((player) => player.id === current.winnerId)?.name || "승자"} · 최종 ${current.players.find((player) => player.id === current.winnerId)?.score || 0}점`, `${current.players.find((player) => player.id === current.winnerId)?.name || "Winner"} · ${current.players.find((player) => player.id === current.winnerId)?.score || 0} final points`));
     const winner = current.players.find((player) => player.id === current.winnerId);
-    addedHighlights.push(addHighlight(state, makeHighlight({
-      id: `victory-${current.winnerId}-${current.turnSequence}`,
-      kind: "victory",
-      playerId: current.winnerId,
-      turn: current.turnNumber,
-      weight: 100,
-      titleKo: current.surrenderedPlayerId ? "상대의 항복을 받아낸 압박" : "승부를 끝낸 마지막 한 수",
-      titleEn: current.surrenderedPlayerId ? "Pressure forced the surrender" : "The final decisive play",
-      detailKo: `${winner?.name || "승자"}님이 ${winner?.score || 0}점으로 경기를 마무리했습니다.`,
-      detailEn: `${winner?.name || "The winner"} closed the match at ${winner?.score || 0} points.`
-    })));
+    const winningScoreAlreadyCaptured = addedHighlights.some((highlight) => highlight?.winning && highlight.playerId === current.winnerId);
+    if (!winningScoreAlreadyCaptured) {
+      addedHighlights.push(addHighlight(state, makeHighlight({
+        id: `victory-${current.winnerId}-${current.turnSequence}`,
+        kind: "victory",
+        playerId: current.winnerId,
+        turn: current.turnNumber,
+        weight: 100,
+        titleKo: current.surrenderedPlayerId ? "상대의 항복을 받아낸 압박" : "승부를 끝낸 마지막 한 수",
+        titleEn: current.surrenderedPlayerId ? "Pressure forced the surrender" : "The final decisive play",
+        detailKo: `${winner?.name || "승자"}님이 ${winner?.score || 0}점으로 경기를 마무리했습니다.`,
+        detailEn: `${winner?.name || "The winner"} closed the match at ${winner?.score || 0} points.`
+      })));
+    }
   }
 
   state.sequence += 1;
@@ -193,19 +211,27 @@ export function rankPresentationHighlights(highlights, limit = 3) {
 
 function scoreChanges(previous, current) {
   const results = [];
+  const previousEventIds = new Set((previous.scoreEvents || []).map((event) => event.id));
+  const newScoreEvents = (current.scoreEvents || []).filter((event) => !previousEventIds.has(event.id));
   for (const player of current.players) {
     const before = previous.players.find((candidate) => candidate.id === player.id);
     if (!before || player.score <= before.score) continue;
     const opponent = current.players.find((candidate) => candidate.id !== player.id);
     const previousOpponent = previous.players.find((candidate) => candidate.id === opponent?.id);
     const amount = player.score - before.score;
+    const playerEvents = newScoreEvents.filter((event) => event.playerId === player.id);
+    const sourceEvent = playerEvents.length === 1 ? playerEvents[0] : null;
+    const scoreSource = sourceEvent?.kind || (playerEvents.length ? "mixed" : "unknown");
     const wasBehindBy = (previousOpponent?.score || 0) - before.score;
     const nowDifference = player.score - (opponent?.score || 0);
     const winning = player.score >= current.victoryScore || current.winnerId === player.id;
     const comeback = wasBehindBy >= 2 && nowDifference >= 0;
     const closing = !winning && player.score >= current.victoryScore - 2 && nowDifference >= 2;
-    const titleKo = winning ? "승부를 결정한 득점" : comeback ? "경기를 뒤집은 득점" : closing ? "승기를 굳힌 득점" : amount >= 2 ? "한 번에 만든 대량 득점" : "전장을 가져온 득점";
-    const titleEn = winning ? "Match-winning score" : comeback ? "Score that turned the match" : closing ? "Score that locked the lead" : amount >= 2 ? "Multi-point swing" : "Battlefield score";
+    const sourceTitles = scoreSourceTitles(scoreSource, sourceEvent);
+    const titleKo = winning ? `승부를 결정한 ${sourceTitles.ko}` : comeback ? `경기를 뒤집은 ${sourceTitles.ko}` : closing ? `승기를 굳힌 ${sourceTitles.ko}` : amount >= 2 ? `한 번에 만든 ${sourceTitles.ko}` : sourceTitles.ko;
+    const titleEn = winning ? `Match-winning ${sourceTitles.en}` : comeback ? `${sourceTitles.en} that turned the match` : closing ? `${sourceTitles.en} that locked the lead` : amount >= 2 ? `Multi-point ${sourceTitles.en}` : sourceTitles.en;
+    const sourceDetailKo = scoreSourceDetail(sourceEvent, "ko");
+    const sourceDetailEn = scoreSourceDetail(sourceEvent, "en");
     results.push(makeHighlight({
       id: `score-${player.id}-${current.turnSequence}-${player.score}`,
       kind: winning ? "finisher" : comeback ? "comeback" : closing ? "lock" : "score",
@@ -214,13 +240,45 @@ function scoreChanges(previous, current) {
       weight: winning ? 96 : comeback ? 88 : closing ? 76 : amount >= 2 ? 72 : 44,
       titleKo,
       titleEn,
-      detailKo: `${player.name}님이 ${amount}점을 획득해 ${player.score}:${opponent?.score || 0}을 만들었습니다.`,
-      detailEn: `${player.name} gained ${amount} point${amount === 1 ? "" : "s"} to make it ${player.score}:${opponent?.score || 0}.`,
+      detailKo: `${sourceDetailKo}${player.name}님이 ${amount}점을 획득해 ${player.score}:${opponent?.score || 0}을 만들었습니다.`,
+      detailEn: `${sourceDetailEn}${player.name} gained ${amount} point${amount === 1 ? "" : "s"} to make it ${player.score}:${opponent?.score || 0}.`,
+      scoreSource,
       winning,
       comeback
     }));
   }
   return results;
+}
+
+function scoreSourceTitles(kind, event) {
+  if (kind === "battlefield") return { ko: "전장 득점", en: "battlefield score" };
+  if (kind === "effect") return { ko: "효과 득점", en: "effect score" };
+  if (kind === "burnout") return { ko: "상대 번아웃 득점", en: "opponent Burn Out score" };
+  if (kind === "mixed") return { ko: "복합 득점", en: "combined score" };
+  return event?.sourceName
+    ? { ko: `${event.sourceName} 득점`, en: `${event.sourceName} score` }
+    : { ko: "득점", en: "score" };
+}
+
+function scoreSourceDetail(event, locale) {
+  if (!event) return "";
+  if (locale === "ko") {
+    if (event.kind === "battlefield") return `${event.sourceName || "전장"}을 ${event.reason === "hold" ? "수성" : "정복"}해 얻은 점수입니다. `;
+    if (event.kind === "effect") return `${event.sourceName || "카드"} 효과로 얻은 점수입니다. `;
+    if (event.kind === "burnout") return `${event.sourceName || "상대"}의 번아웃으로 얻은 점수입니다. `;
+    return "";
+  }
+  if (event.kind === "battlefield") return `Scored by ${event.reason === "hold" ? "holding" : "conquering"} ${event.sourceName || "a battlefield"}. `;
+  if (event.kind === "effect") return `Scored by ${event.sourceName || "a card"}'s effect. `;
+  if (event.kind === "burnout") return `Scored from ${event.sourceName || "the opponent"}'s Burn Out. `;
+  return "";
+}
+
+function scoreCallout(kind, locale) {
+  const labels = locale === "ko"
+    ? { battlefield: "전장을 가져옵니다", effect: "효과로 득점합니다", burnout: "상대 번아웃으로 득점합니다", mixed: "연속으로 득점합니다", unknown: "득점합니다" }
+    : { battlefield: "The battlefield is claimed", effect: "A card effect scores", burnout: "The opponent burns out", mixed: "Multiple scores resolve", unknown: "A point is scored" };
+  return labels[kind] || labels.unknown;
 }
 
 function removedUnitEvent(previous, current) {
@@ -303,9 +361,9 @@ function addHighlight(state, highlight) {
   return highlight;
 }
 
-function impact(kind, kicker, titleKo, kickerEn, titleEn) {
+function impact(kind, kicker, titleKo, kickerEn, titleEn, detailKo = "", detailEn = "") {
   const priorities = { turn: 10, card: 20, trigger: 25, reaction: 30, ambush: 40, strike: 45, score: 55, showdown: 60, counter: 68, sweep: 72, comeback: 82, finisher: 92, defeat: 96, victory: 100 };
-  return { kind, kicker, titleKo, kickerEn, titleEn, priority: priorities[kind] || 20 };
+  return { kind, kicker, titleKo, kickerEn, titleEn, detailKo, detailEn, priority: priorities[kind] || 20 };
 }
 
 function highestImpact(impacts) {

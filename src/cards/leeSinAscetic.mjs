@@ -17,6 +17,6 @@ export default card({
   image: "https://cdn.piltoverarchive.com/cards/OGN-078.webp",
   text: "SHIELD (+1 Might while I'm a defender.)\nTap: Buff me. (I get a +1 Might buff.)\nI can have any number of buffs.",
   effects: [
-    { timing: "activated", kind: "buffUnit", target: "self", amount: 1, maxBuffs: 999 }
+    { timing: "activated", kind: "buffUnit", target: "self", amount: 1, maxBuffs: 999, exhaust: true }
   ]
 });

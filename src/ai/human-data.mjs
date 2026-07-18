@@ -1,17 +1,27 @@
 import { actionKey, enumerateLegalActions } from "./actions.mjs";
-import { ACTION_DIM, CARD_BINS, MAX_ACTIONS, STATE_DIM, encodeAction, encodeOpponentDeckTarget, encodeState, selectHierarchicalActions } from "./neural/encoding.mjs";
+import { ACTION_DIM, CARD_BINS, MAX_ACTIONS, STATE_DIM, encodeActionSet, encodeOpponentDeckTarget, encodeState } from "./neural/encoding.mjs";
+import { NEURAL_HIDDEN_SIZE } from "./neural/model.mjs";
+
+export const HUMAN_SAMPLE_VERSION = 2;
 
 export function encodeHumanDecisionSample(game, actorId, selectedAction, analysis) {
-  const legal = selectHierarchicalActions(enumerateLegalActions(game, actorId), MAX_ACTIONS);
+  const fullLegal = enumerateLegalActions(game, actorId);
   const selectedKey = actionKey(selectedAction);
   const recommendedKey = analysis?.best?.key || selectedKey;
+  const recommendedAction = fullLegal.find((action) => actionKey(action) === recommendedKey);
+  const actionSet = encodeActionSet(game, actorId, fullLegal, { requiredActions: [selectedAction, recommendedAction].filter(Boolean) });
+  const legal = actionSet.actions;
   const selectedIndex = Math.max(0, legal.findIndex((action) => actionKey(action) === selectedKey));
   const recommendedIndex = Math.max(0, legal.findIndex((action) => actionKey(action) === recommendedKey));
   return {
-    version: 1,
+    version: HUMAN_SAMPLE_VERSION,
     state: sparse(encodeState(game, actorId)),
-    actions: legal.map((action) => sparse(encodeAction(game, actorId, action))),
+    actions: legal.map((action, index) => sparse(actionSet.encoded.subarray(index * ACTION_DIM, (index + 1) * ACTION_DIM))),
     legalCount: legal.length,
+    originalLegalCount: fullLegal.length,
+    legalActionKeys: fullLegal.map(actionKey),
+    selectedActionKey: selectedKey,
+    recommendedActionKey: recommendedKey,
     selectedIndex,
     recommendedIndex,
     beliefTarget: sparse(encodeOpponentDeckTarget(game, actorId)),
@@ -28,11 +38,12 @@ export function encodeHumanDecisionSample(game, actorId, selectedAction, analysi
 export function hydrateHumanReplayTrajectories(replays, options = {}) {
   const trajectories = [];
   for (const replay of replays) {
+    if (!replay.winnerId) continue;
     const steps = [];
     for (const decision of replay.decisions || []) {
       if (decision.actorId !== replay.humanPlayerId) continue;
       const sample = decision.trainingSample;
-      if (!sample?.legalCount) continue;
+      if (sample?.version !== HUMAN_SAMPLE_VERSION || !sample?.legalCount) continue;
       const highQuality = sample.quality?.rollout
         && sample.quality?.confidence !== "low"
         && (sample.quality?.intervalWidth ?? 1) <= (options.maxIntervalWidth || 0.35);
@@ -46,16 +57,33 @@ export function hydrateHumanReplayTrajectories(replays, options = {}) {
         actions,
         selectedIndex: sample.regret >= (options.correctionThreshold || 0.03) ? sample.recommendedIndex : sample.selectedIndex,
         legalCount: sample.legalCount,
-        oldLogProbability: -Math.log(Math.max(1, sample.legalCount)),
+        oldLogProbability: 0,
         value: 0,
         beliefTarget: dense(sample.beliefTarget, CARD_BINS),
-        initialMemory: [],
+        initialMemory: new Float32Array(NEURAL_HIDDEN_SIZE),
         advantage: 1,
         return: won,
+        teacherConfidence: 1,
+        selectedActionKey: sample.regret >= (options.correctionThreshold || 0.03)
+          ? sample.recommendedActionKey
+          : sample.selectedActionKey,
+        legalActionKeys: sample.legalActionKeys,
+        originalLegalCount: sample.originalLegalCount,
+        imitation: true,
         source: "human-coaching"
       });
     }
-    if (steps.length) trajectories.push({ gameId: replay.id, playerId: replay.humanPlayerId, human: true, steps });
+    if (steps.length) trajectories.push({
+      gameId: replay.id,
+      playerId: replay.humanPlayerId,
+      human: true,
+      imitation: true,
+      completed: Boolean(replay.winnerId),
+      engineFingerprint: options.engineFingerprint || replay.engineFingerprint || null,
+      decisionSafetyVersion: 1,
+      decisionSafetyViolations: [],
+      steps
+    });
   }
   return trajectories;
 }

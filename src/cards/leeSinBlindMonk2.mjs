@@ -16,6 +16,7 @@ export default card({
   effects: [
       {
           "timing": "activated",
+          "exhaust": true,
           "kind": "buffUnit",
           "target": "friendlyUnit",
           "amount": 1,

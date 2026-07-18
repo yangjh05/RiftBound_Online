@@ -4,7 +4,7 @@ import {
   encodeActionSet, encodeState
 } from "./encoding.mjs";
 
-export const NEURAL_MODEL_VERSION = 2;
+export const NEURAL_MODEL_VERSION = 3;
 export const NEURAL_HIDDEN_SIZE = 64;
 const EMBEDDING_SIZE = 64;
 
@@ -24,7 +24,7 @@ export function createNeuralModel(options = {}) {
     layers,
     calibration: { temperature: 1, bins: [], ...(options.calibration || {}) },
     knowledge: structuredClone(options.knowledge || {}),
-    metadata: { algorithm: "recurrent-ppo-belief", cardRepresentation: "collision-free-vocabulary-embedding", ...(options.metadata || {}) }
+    metadata: { algorithm: "recurrent-ppo-belief", cardRepresentation: "relational-public-state-v3", actionRepresentation: "semantic-with-legal-set-collision-disambiguation", ...(options.metadata || {}) }
   };
   warmup(model);
   return model;

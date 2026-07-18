@@ -19,6 +19,10 @@ export default card({
     {
       timing: "static",
       kind: "opponentsUnitsOnlyToBase"
+    },
+    {
+      timing: "static",
+      kind: "opponentsCannotReadyByEffects"
     }
   ]
 });

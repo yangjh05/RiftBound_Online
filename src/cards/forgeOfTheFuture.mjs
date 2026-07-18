@@ -22,6 +22,13 @@ export default card({
           "count": 1,
           "ready": false,
           "destination": "base"
+      },
+      {
+          "timing": "activated",
+          "kind": "recycleCardsFromTrashes",
+          "amount": 4,
+          "killSelfCost": true,
+          "exhaust": false
       }
   ]
 });

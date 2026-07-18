@@ -23,6 +23,7 @@ export default card({
       },
       {
           "timing": "activated",
+          "exhaust": true,
           "kind": "dealDamageUnit",
           "target": "battlefieldUnit",
           "amountFromSelfMight": true,

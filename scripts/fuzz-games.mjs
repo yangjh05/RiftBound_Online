@@ -53,6 +53,7 @@ for (let gameIndex = 0; gameIndex < games; gameIndex += 1) {
       decks: decks.map((deck) => deck.id),
       trace,
       state: diagnosticGameState(game),
+      violations: error.violations,
       error: error.stack
     }, null, 2));
     process.exitCode = 1;
@@ -139,10 +140,40 @@ function assertInvariants(game) {
     }
   }
   const ids = game.players.flatMap((player) => allTopLevelCards(game, player)).map((card) => card.instanceId);
-  if (ids.length !== new Set(ids).size) throw new Error("A card instance exists in multiple top-level zones");
+  if (ids.length !== new Set(ids).size) {
+    const duplicates = [...new Set(ids.filter((id, index) => ids.indexOf(id) !== index))];
+    const locations = duplicates.map((id) => `${id}=${topLevelLocations(game, id).join("|")}`);
+    throw new Error(`A card instance exists in multiple top-level zones: ${locations.join(", ")}`);
+  }
   if (game.pendingChoice) validateSemanticChoice(game, game.pendingChoice);
   validateStableGameState(game);
   rulesOracle.checkState(game);
+}
+
+function topLevelLocations(game, instanceId) {
+  const locations = [];
+  for (const player of game.players) {
+    const zones = {
+      legend: [player.legend], champion: player.champion?.zone === "champion" ? [player.champion] : [],
+      availableChampions: player.availableChampions, availableBattlefields: player.availableBattlefields,
+      mainDeck: player.mainDeck, runeDeck: player.runeDeck, hand: player.hand, base: player.base,
+      runes: player.runes, trash: player.trash, banished: player.banished || []
+    };
+    for (const [zone, cards] of Object.entries(zones)) {
+      cards.filter(Boolean).forEach((card, index) => {
+        if (card.instanceId === instanceId) locations.push(`${player.id}.${zone}[${index}]`);
+      });
+    }
+  }
+  for (const field of game.battlefields) {
+    field.units.forEach((card, index) => {
+      if (card.instanceId === instanceId) locations.push(`${field.instanceId}.units[${index}]`);
+    });
+    (field.hidden || []).forEach((card, index) => {
+      if (card.instanceId === instanceId) locations.push(`${field.instanceId}.hidden[${index}]`);
+    });
+  }
+  return locations;
 }
 
 function allTopLevelCards(game, player) {
@@ -175,7 +206,7 @@ function diagnosticGameState(game) {
     actionChain: game.actionChain ? {
       phase: game.actionChain.phase,
       priorityPlayerId: game.actionChain.priorityPlayerId,
-      chain: game.actionChain.chain.map((item) => ({
+      chain: (game.actionChain.chain || []).filter(Boolean).map((item) => ({
         id: item.id,
         itemType: item.itemType,
         status: item.status,
@@ -187,7 +218,7 @@ function diagnosticGameState(game) {
     showdown: game.showdown ? {
       battlefieldId: game.showdown.battlefieldId,
       priorityPlayerId: game.showdown.priorityPlayerId,
-      chain: (game.showdown.chain || []).map((item) => ({ id: item.id, status: item.status, card: card(item.card) }))
+      chain: (game.showdown.chain || []).filter(Boolean).map((item) => ({ id: item.id, status: item.status, card: card(item.card) }))
     } : null,
     operations: (game.operations || []).map((operation) => ({ id: operation.id, kind: operation.kind, status: operation.status })),
     players: game.players.map((player) => ({

@@ -845,22 +845,25 @@ function runeCardsForDomain(domain) {
 
 const rawDecklists = {
   provingGroundsAnnie: {
-    id: "proving-grounds-annie", playerName: "Fury/Chaos Annie", source: "Curated Proving Grounds deck",
-    legend: "OGS-017/024", battlefields: ["OGN-290/298", "OGN-292/298", "OGN-298/298"],
+    id: "proving-grounds-annie", playerName: "Fury/Chaos Annie", source: "https://piltoverarchive.com/decks/view/bd4532f2-d433-42f2-89c8-594ba27ea0f0",
+    legend: "OGS-017/024", battlefields: ["OGN-298/298", "OGN-292/298", "OGN-290/298"],
     runes: [[DOMAINS.FURY, 6], [DOMAINS.CHAOS, 6]],
-    main: [["OGS-001/024",3],["OGS-010/024",3],["OGS-018/024",3],["OGS-002/024",1],["OGS-003/024",3],["OGS-011/024",3],["OGN-004/298",3],["OGN-013/298",3],["OGN-027/298",3],["OGN-036/298",3],["OGN-169/298",3],["OGN-173/298",3],["OGN-183/298",3],["OGN-185/298",3]]
+    main: [["OGS-010/024",1],["OGN-004/298",3],["OGN-169/298",1],["OGN-183/298",3],["OGN-168/298",2],["OGS-011/024",3],["OGN-013/298",3],["OGN-182/298",3],["OGN-185/298",3],["OGN-173/298",3],["OGN-036/298",3],["OGN-172/298",1],["OGN-176/298",3],["OGN-024/298",2],["OGN-039/298",3],["OGN-027/298",3]],
+    sideboard: [["OGN-169/298",2],["OGN-168/298",1],["OGN-172/298",2],["OGN-024/298",1],["OGN-028/298",2]]
   },
   provingGroundsMasterYi: {
-    id: "proving-grounds-master-yi", playerName: "Calm/Body Master Yi OGS", source: "Curated Proving Grounds deck",
-    legend: "OGS-019/024", battlefields: ["OGN-290/298", "OGN-295/298", "OGN-297/298"],
+    id: "proving-grounds-master-yi", playerName: "Calm/Body Master Yi OGS", source: "https://piltoverarchive.com/decks/view/498b3b03-22d6-49a1-83f8-2f4c9d0c3087",
+    legend: "OGS-019/024", battlefields: ["OGN-276/298", "OGN-284/298", "OGN-287/298"],
     runes: [[DOMAINS.CALM, 6], [DOMAINS.BODY, 6]],
-    main: [["OGS-004/024",3],["OGS-009/024",3],["OGS-020/024",3],["OGS-005/024",3],["OGS-008/024",1],["OGN-043/298",3],["OGN-044/298",3],["OGN-045/298",3],["OGN-046/298",3],["OGN-048/298",3],["OGN-058/298",3],["OGN-077/298",3],["OGN-082/298",3],["OGN-132/298",3]]
+    main: [["OGS-009/024",1],["OGN-043/298",3],["OGN-045/298",3],["OGN-129/298",3],["OGN-058/298",2],["OGN-048/298",2],["OGN-134/298",3],["OGN-077/298",3],["OGN-047/298",3],["OGN-064/298",1],["OGN-138/298",3],["OGN-154/298",2],["OGN-161/298",3],["OGN-082/298",3],["OGN-142/298",2],["OGN-160/298",3]],
+    sideboard: [["OGN-156/298",2],["OGN-128/298",2],["OGN-050/298",2],["OGN-064/298",1],["OGN-158/298",1]]
   },
   provingGroundsLux: {
-    id: "proving-grounds-lux", playerName: "Mind/Order Lux", source: "Curated Proving Grounds deck",
-    legend: "OGS-021/024", battlefields: ["OGN-279/298", "OGN-293/298", "OGN-298/298"],
+    id: "proving-grounds-lux", playerName: "Mind/Order Lux", source: "https://piltoverarchive.com/decks/view/157ef420-010b-43a0-b0b0-fdb701401676",
+    legend: "OGS-021/024", battlefields: ["OGN-276/298", "OGN-281/298", "OGN-288/298"],
     runes: [[DOMAINS.MIND, 6], [DOMAINS.ORDER, 6]],
-    main: [["OGS-006/024",3],["OGS-014/024",3],["OGS-022/024",1],["OGS-012/024",3],["OGS-015/024",3],["OGS-016/024",3],["OGN-087/298",3],["OGN-094/298",3],["OGN-095/298",3],["OGN-096/298",3],["OGN-103/298",3],["OGN-207/298",3],["OGN-213/298",3],["OGN-218/298",3]]
+    main: [["OGS-014/024",1],["OGN-210/298",3],["OGN-216/298",3],["OGN-209/298",3],["OGN-213/298",3],["OGN-236/298",3],["OGN-102/298",2],["OGN-218/298",3],["OGN-226/298",3],["OGN-085/298",3],["OGN-239/298",2],["OGS-015/024",2],["OGS-012/024",2],["OGN-105/298",2],["OGN-233/298",1],["OGS-022/024",1],["OGN-234/298",2],["OGN-122/298",1]],
+    sideboard: [["OGN-099/298",1],["OGN-224/298",3],["OGN-221/298",1],["OGS-012/024",1],["OGN-116/298",2]]
   },
   provingGroundsGaren: {
     id: "proving-grounds-garen", playerName: "Body/Order Garen", source: "Curated Proving Grounds deck",
@@ -869,29 +872,32 @@ const rawDecklists = {
     main: [["OGS-007/024",3],["OGS-013/024",3],["OGS-024/024",3],["OGS-008/024",1],["OGS-015/024",3],["OGS-016/024",3],["OGN-128/298",3],["OGN-134/298",3],["OGN-139/298",3],["OGN-145/298",3],["OGN-154/298",3],["OGN-207/298",3],["OGN-210/298",3],["OGN-218/298",3]]
   },
   originsMissFortune: {
-    id: "origins-miss-fortune", playerName: "Best Origins Miss Fortune", source: "https://riftbound.gg/decks/best-origins-miss-fortune/",
-    legend: "OGN-267/298", battlefields: ["OGN-295/298", "OGN-284/298", "OGN-276/298"],
-    runes: [[DOMAINS.BODY, 6], [DOMAINS.CHAOS, 6]],
-    main: [["OGN-268/298",2],["OGN-183/298",3],["OGN-179/298",2],["OGN-169/298",3],["OGN-173/298",2],["OGN-168/298",3],["OGN-134/298",3],["OGN-201/298",2],["OGN-154/298",1],["OGN-138/298",3],["OGN-162/298",1],["OGN-192/298",3],["OGN-196/298",1],["OGN-161/298",3],["OGN-142/298",1],["OGN-158/298",1],["OGN-186/298",3],["OGN-160/298",3]]
+    id: "origins-miss-fortune", playerName: "Best Origins Miss Fortune", source: "https://piltoverarchive.com/decks/view/eb4a253d-96a6-4fc1-a771-ba553a76ceee",
+    legend: "OGN-267/298", battlefields: ["OGN-276/298", "OGN-287/298", "OGN-284/298"],
+    runes: [[DOMAINS.BODY, 7], [DOMAINS.CHAOS, 5]],
+    main: [["OGN-162/298",1],["OGN-268/298",2],["OGN-169/298",2],["OGN-183/298",3],["OGN-156/298",3],["OGN-129/298",2],["OGN-168/298",2],["OGN-134/298",3],["OGN-128/298",3],["OGN-138/298",3],["OGN-180/298",2],["OGN-149/298",2],["OGN-148/298",1],["OGN-192/298",2],["OGN-161/298",3],["OGN-196/298",1],["OGN-203/298",1],["OGN-160/298",3],["OGN-158/298",1]],
+    sideboard: [["OGN-145/298",2],["OGN-193/298",1],["OGN-154/298",2],["OGN-148/298",1],["OGN-203/298",1],["OGN-158/298",1]]
   },
   originsKaisa: {
-    id: "origins-kaisa", playerName: "Best Origins Kai'Sa", source: "https://riftbound.gg/decks/best-origins-kaisa/",
-    legend: "OGN-247/298", battlefields: ["OGN-290/298", "OGN-288/298", "OGN-285/298"],
-    runes: [[DOMAINS.MIND, 6], [DOMAINS.FURY, 6]],
-    main: [["OGN-104/298",2],["OGN-095/298",3],["OGN-004/298",3],["OGN-009/298",3],["OGN-093/298",3],["OGN-029/298",3],["OGN-024/298",3],["OGN-122/298",1],["OGN-103/298",3],["OGN-096/298",3],["OGN-013/298",3],["OGN-039/298",1],["OGN-012/298",3],["OGN-027/298",3],["OGN-116/298",3]],
-    sideboard: [["OGN-087/298",3]]
+    id: "origins-kaisa", playerName: "Best Origins Kai'Sa", source: "https://piltoverarchive.com/decks/view/cfba6410-0018-4579-94f4-ee86a76e44f0",
+    legend: "OGN-299/298", battlefields: ["OGN-289/298", "OGN-296/298", "OGN-298/298"],
+    runes: [[DOMAINS.FURY, 6], [DOMAINS.MIND, 6]],
+    main: [["OGN-039/298",2],["OGN-004/298",2],["OGN-104/298",2],["OGN-095/298",3],["OGN-009/298",3],["OGN-013/298",1],["OGN-103/298",3],["OGN-096/298",3],["OGN-093/298",2],["OGN-029/298",3],["OGN-087/298",2],["OGN-024/298",3],["OGN-012/298",3],["OGN-106/298",2],["OGN-027/298",2],["OGN-116/298",3],["OGN-109/298",1]],
+    sideboard: [["OGN-004/298",1],["OGN-104/298",1],["OGN-093/298",1],["OGN-027/298",1],["OGN-114/298",1],["OGN-105/298",1],["OGN-248/298",1],["OGN-122/298",1]]
   },
   originsSett: {
-    id: "origins-sett", playerName: "Best Origins Sett", source: "https://riftbound.gg/decks/best-origins-sett/",
-    legend: "OGN-269/298", battlefields: ["OGN-297/298", "OGN-282/298", "OGN-280/298"],
-    runes: [[DOMAINS.BODY, 6], [DOMAINS.ORDER, 6]],
-    main: [["OGN-270/298",3],["OGN-156/298",3],["OGN-213/298",2],["OGN-128/298",2],["OGN-207/298",3],["OGN-154/298",3],["OGN-210/298",2],["OGN-139/298",3],["OGN-136/298",3],["OGN-240/298",1],["OGN-232/298",3],["OGN-155/298",3],["OGN-141/298",2],["OGN-164/298",2],["OGN-124/298",3],["OGN-145/298",2]]
+    id: "origins-sett", playerName: "Best Origins Sett", source: "https://piltoverarchive.com/decks/view/b67d8bf5-62c2-4838-8e80-cfe566d625ff",
+    legend: "OGN-269/298", battlefields: ["OGN-297/298", "OGN-280/298", "OGN-282/298"],
+    runes: [[DOMAINS.BODY, 7], [DOMAINS.ORDER, 5]],
+    main: [["OGN-156/298",2],["OGN-270/298",3],["OGN-139/298",3],["OGN-136/298",3],["OGN-217/298",3],["OGN-128/298",2],["OGN-213/298",3],["OGN-207/298",3],["OGN-132/298",3],["OGN-241/298",2],["OGN-141/298",3],["OGN-238/298",2],["OGN-155/298",3],["OGN-240/298",2],["OGN-164/298",3]],
+    sideboard: [["OGN-156/298",1],["OGN-145/298",2],["OGN-128/298",1],["OGN-224/298",2],["OGN-232/298",2]]
   },
   originsLeona: {
-    id: "origins-leona", playerName: "Origins Leona Stun", source: "https://riftbound.gg/decks/leona-stun-everything-ogn/",
-    legend: "OGN-261/298", battlefields: ["OGN-285/298", "OGN-279/298", "OGN-276/298"],
-    runes: [[DOMAINS.ORDER, 7], [DOMAINS.CALM, 5]],
-    main: [["OGN-210/298",3],["OGN-216/298",2],["OGN-044/298",3],["OGN-241/298",2],["OGN-054/298",2],["OGN-051/298",2],["OGN-240/298",2],["OGN-238/298",3],["OGN-045/298",2],["OGN-043/298",2],["OGN-224/298",2],["OGN-209/298",1],["OGN-058/298",2],["OGN-057/298",2],["OGN-050/298",3],["OGN-262/298",2],["OGN-221/298",3],["OGN-213/298",2]]
+    id: "origins-leona", playerName: "Origins Leona Stun", source: "https://riftbound.gg/decks/leona-radiant-dawn-deck-by-frodan-best-of-leona-houston-regional-qualifiers/",
+    legend: "OGN-261/298", battlefields: ["OGN-297/298", "OGN-282/298", "OGN-280/298"],
+    runes: [[DOMAINS.ORDER, 6], [DOMAINS.CALM, 6]],
+    main: [["OGN-044/298",3],["OGN-052/298",3],["OGN-054/298",3],["OGN-051/298",3],["OGN-240/298",3],["OGN-238/298",3],["OGN-232/298",1],["OGN-046/298",3],["OGN-045/298",3],["OGN-220/298",1],["OGN-058/298",3],["OGN-050/298",3],["OGN-262/298",3],["OGN-207/298",3],["OGN-077/298",2]],
+    sideboard: [["OGN-213/298",2],["OGN-224/298",3],["OGN-064/298",1],["OGN-229/298",1],["OGN-079/298",1]]
   },
   originsVolibear: {
     id: "origins-volibear", playerName: "Refined Origins Volibear", source: "https://riftbound.gg/decks/refined-origins-volibear/",
@@ -900,10 +906,11 @@ const rawDecklists = {
     main: [["OGN-156/298",3],["OGN-005/298",3],["OGN-134/298",3],["OGN-128/298",2],["OGN-029/298",2],["OGN-008/298",3],["OGN-024/298",1],["OGN-138/298",3],["OGN-148/298",3],["OGN-161/298",3],["OGN-011/298",1],["OGN-038/298",3],["OGN-041/298",1],["OGN-017/298",3],["OGN-160/298",3],["OGN-145/298",2],["OGN-159/298",1]]
   },
   originsYasuo: {
-    id: "origins-yasuo", playerName: "Riftbound.gg Origins Yasuo", source: "https://riftbound.gg/decks/yasuo-unforgiven-deck-copy-2/",
-    legend: "OGN-305/298", battlefields: ["OGN-297/298", "OGN-289/298", "OGN-285/298"],
-    runes: [[DOMAINS.CHAOS, 6], [DOMAINS.CALM, 6]],
-    main: [["OGN-169/298",3],["OGN-045/298",3],["OGN-058/298",3],["OGN-048/298",3],["OGN-260/298",3],["OGN-064/298",2],["OGN-077/298",3],["OGN-063/298",3],["OGN-204/298",1],["OGN-081/298",1],["OGN-197/298",3],["OGN-191/298",3],["OGN-078/298",3],["OGN-189/298",2],["OGN-076/298",2],["OGN-082/298",2]]
+    id: "origins-yasuo", playerName: "Riftbound.gg Origins Yasuo", source: "https://piltoverarchive.com/decks/view/d2134147-e658-4a40-976d-e0eaa1a2aa36",
+    legend: "OGN-259/298", battlefields: ["OGN-293/298", "OGN-292/298", "OGN-291/298"],
+    runes: [[DOMAINS.CALM, 6], [DOMAINS.CHAOS, 6]],
+    main: [["OGN-076/298",1],["OGN-046/298",3],["OGN-183/298",3],["OGN-045/298",3],["OGN-058/298",3],["OGN-060/298",3],["OGN-052/298",2],["OGN-185/298",3],["OGN-077/298",3],["OGN-173/298",1],["OGN-047/298",3],["OGN-055/298",2],["OGN-064/298",1],["OGN-194/298",3],["OGN-192/298",2],["OGN-082/298",1],["OGN-195/298",3]],
+    sideboard: [["OGN-201/298",1],["OGN-260/298",1],["OGN-064/298",1],["OGN-180/298",2],["OGN-080/298",1],["OGN-075/298",2]]
   },
   originsTeemo: {
     id: "origins-teemo", playerName: "Riftbound.gg Origins Teemo", source: "https://riftbound.gg/decks/teemo-swift-scout-deck-ypfrz/",
@@ -918,10 +925,11 @@ const rawDecklists = {
     main: [["OGN-216/298",3],["OGN-010/298",3],["OGN-003/298",3],["OGN-218/298",3],["OGN-208/298",3],["OGN-012/298",3],["OGN-001/298",1],["OGN-027/298",3],["OGN-020/298",3],["OGN-002/298",3],["OGN-254/298",3],["OGN-005/298",3],["OGN-245/298",3],["OGN-040/298",3]]
   },
   originsAhri: {
-    id: "origins-ahri", playerName: "SamaBR Origins Ahri", source: "https://riftbound.gg/decks/samabr-2nd-maxtapera-tournament/",
-    legend: "OGN-255/298", battlefields: ["OGN-289/298", "OGN-285/298", "OGN-279/298"],
-    runes: [[DOMAINS.MIND, 6], [DOMAINS.CALM, 6]],
-    main: [["OGN-103/298",3],["OGN-084/298",3],["OGN-119/298",3],["OGN-117/298",2],["OGN-073/298",3],["OGN-066/298",1],["OGN-112/298",3],["OGN-095/298",3],["OGN-045/298",2],["OGN-043/298",3],["OGN-058/298",3],["OGN-057/298",1],["OGN-048/298",3],["OGN-256/298",1],["OGN-064/298",2],["OGN-083/298",2],["OGN-077/298",2]]
+    id: "origins-ahri", playerName: "SamaBR Origins Ahri", source: "https://piltoverarchive.com/decks/view/435e84ab-249b-4d8f-a596-2f6999e24ab4",
+    legend: "OGN-255/298", battlefields: ["OGN-284/298", "OGN-280/298", "OGN-292/298"],
+    runes: [[DOMAINS.CALM, 4], [DOMAINS.MIND, 8]],
+    main: [["OGN-066/298",1],["OGN-120/298",1],["OGN-046/298",3],["OGN-095/298",2],["OGN-043/298",2],["OGN-044/298",3],["OGN-058/298",3],["OGN-103/298",3],["OGN-052/298",3],["OGN-077/298",2],["OGN-047/298",2],["OGN-055/298",2],["OGN-083/298",2],["OGN-106/298",2],["OGN-075/298",3],["OGN-116/298",3],["OGN-122/298",3]],
+    sideboard: [["OGN-050/298",2],["OGN-056/298",2],["OGN-067/298",1],["OGN-110/298",2],["OGN-123/298",1]]
   },
   originsViktor: {
     id: "origins-viktor", playerName: "Void Origins Viktor", source: "https://riftbound.gg/decks/void-7th-maxtapera-tournament/",

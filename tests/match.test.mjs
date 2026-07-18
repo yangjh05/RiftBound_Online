@@ -20,9 +20,12 @@ test("tournament decks require exactly 40 Main Deck cards and at most 8 Sideboar
   const deck = structuredClone(rawDecklists.originsKaisa);
   assert.equal(deck.main.reduce((sum, [, count]) => sum + count, 0), DECK_RULES.tournamentMainExact);
   assert.equal(validateDeckRecord(deck, cardByNumber).playable, true);
-  const [sideNumber, sideCount] = deck.sideboard[0];
+  const mainNumbers = new Set(deck.main.map(([number]) => number));
+  const sideEntry = deck.sideboard.find(([number]) => !mainNumbers.has(number));
+  assert.ok(sideEntry);
+  const [sideNumber, sideCount] = sideEntry;
   assert.ok(sideCount > 0);
-  deck.sideboard[0][1] -= 1;
+  deck.sideboard.splice(deck.sideboard.indexOf(sideEntry), 1);
   deck.main.push([sideNumber, 1]);
   assert.equal(validateDeckRecord(deck, cardByNumber).playable, false);
   assert.ok(validateDeckRecord(deck, cardByNumber).messages.some((message) => message.includes("tournament") && message.includes("exactly")));
@@ -40,11 +43,14 @@ test("tournament decks require exactly 40 Main Deck cards and at most 8 Sideboar
 test("sideboarding preserves the registered pool and immutable deck zones", () => {
   const registered = structuredClone(rawDecklists.originsKaisa);
   const candidate = structuredClone(registered);
-  const [sideNumber] = candidate.sideboard[0];
+  const mainNumbers = new Set(candidate.main.map(([number]) => number));
+  const sideEntry = candidate.sideboard.find(([number]) => !mainNumbers.has(number));
+  assert.ok(sideEntry);
+  const [sideNumber] = sideEntry;
   const [mainNumber] = candidate.main[0];
   candidate.main[0][1] -= 1;
   candidate.sideboard.push([mainNumber, 1]);
-  candidate.sideboard[0][1] -= 1;
+  candidate.sideboard.splice(candidate.sideboard.indexOf(sideEntry), 1);
   candidate.main.push([sideNumber, 1]);
   assert.equal(validateSideboardConfiguration(registered, candidate, cardByNumber).playable, true);
   candidate.battlefields.reverse();

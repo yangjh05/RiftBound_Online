@@ -15,22 +15,22 @@ const KEYWORD_TRANSLATIONS = {
   Action: { ko: "행동", confirmed: true },
   Assault: { ko: "맹공", confirmed: true },
   Shield: { ko: "보호막", confirmed: true },
-  Deathknell: { ko: "유언", confirmed: false },
-  Deflect: { ko: "굴절", confirmed: false },
+  Deathknell: { ko: "죽음의 종소리", confirmed: true },
+  Deflect: { ko: "굴절", confirmed: true },
   Ganking: { ko: "개입", confirmed: true },
   Hidden: { ko: "숨겨짐", confirmed: true },
   Legion: { ko: "군단", confirmed: true },
   Reaction: { ko: "반응", confirmed: true },
   Tank: { ko: "탱커", confirmed: true },
   Temporary: { ko: "일시적", confirmed: true },
-  Vision: { ko: "예지", confirmed: false },
+  Vision: { ko: "통찰", confirmed: true },
   Hunt: { ko: "추적", confirmed: false },
   Ambush: { ko: "기습", confirmed: false },
   Equip: { ko: "장착", confirmed: false },
   Repeat: { ko: "반복", confirmed: false },
   Weaponmaster: { ko: "무기의 달인", confirmed: false },
   Predict: { ko: "예측", confirmed: false },
-  Stun: { ko: "기절", confirmed: false },
+  Stun: { ko: "기절", confirmed: true },
   Add: { ko: "추가", confirmed: false },
   Level: { ko: "레벨", confirmed: false }
 };
@@ -40,7 +40,7 @@ const TYPE_TRANSLATIONS = {
   battlefield: "전장",
   unit: "유닛",
   spell: "주문",
-  gear: "장비",
+  gear: "도구",
   rune: "룬"
 };
 
@@ -51,7 +51,7 @@ const DOMAIN_TRANSLATIONS = {
   Fury: "격노",
   Mind: "정신",
   Order: "질서",
-  Any: "파워"
+  Any: "힘"
 };
 
 const UI_KO = {
@@ -63,7 +63,7 @@ const UI_KO = {
   dropUnitHere: "여기에 유닛 배치",
   legend: "레전드",
   locationSlot: "전장 칸",
-  mainDeck: "메인 덱",
+  mainDeck: "주 덱",
   noBattlefield: "전장 없음",
   noDeck: "덱 없음",
   noRunes: "룬 없음",
@@ -87,7 +87,7 @@ const UI_KO = {
   cannotPlay: "사용 불가",
   main: "메인",
   energy: "에너지",
-  power: "파워",
+  power: "힘",
   might: "위력",
   damageShort: "피해",
   exhausted: "탈진 상태",
@@ -98,12 +98,13 @@ const UI_KO = {
   close: "닫기",
   availableActions: "사용 가능한 행동",
   noAction: "행동 없음",
-  attachedGear: "부착된 장비",
-  hideAttachedGear: "부착된 장비 숨기기",
+  attachedGear: "부착된 도구",
+  hideAttachedGear: "부착된 도구 숨기기",
   costFor: "{name} 비용",
   noCost: "비용 없음",
   selected: "선택됨",
   generatedEnergy: "생성된 에너지",
+  generatedPower: "생성된 힘",
   effectPayment: "효과 비용",
   playCost: "사용 비용",
   damage: "피해",
@@ -114,6 +115,7 @@ const UI_KO = {
   keepHand: "손패 유지",
   mulligan: "멀리건",
   deck: "덱",
+  level: "레벨",
   trash: "폐기장",
   banished: "추방",
   runes: "룬",
@@ -143,6 +145,8 @@ const UI_KO = {
   source: "출처",
   target: "대상",
   chain: "체인",
+  hideChain: "체인 숨기기",
+  showChain: "체인 보기",
   pending: "대기 중",
   responseWindow: "반응 창",
   responseHint: "패스하거나 사용할 수 있는 반응 카드를 사용할 수 있습니다.",
@@ -168,7 +172,7 @@ const UI_KO = {
   log: "로그",
   toggleLog: "로그 열기/닫기",
   newGame: "새 게임",
-  surrender: "서렌더",
+  surrender: "항복",
   continueGame: "계속 플레이",
   restartConfirmTitle: "새 게임을 시작하시겠습니까?",
   restartConfirmDetail: "현재 진행 상황을 초기화하고 처음부터 다시 시작합니다.",
@@ -202,6 +206,16 @@ const UI_KO = {
   createDeck: "덱 만들기",
   chooseDeck: "덱을 선택하세요.",
   firstPlayerRoll: "선공 결정",
+  rollToChooseOrder: "두 플레이어가 주사위를 굴립니다. 높은 눈의 플레이어가 선공 또는 후공을 선택합니다.",
+  rollDie: "주사위 굴리기",
+  waitingForRoll: "굴림 대기",
+  rolledNumber: "주사위 {n}",
+  rollRound: "{n}차 굴림",
+  tiedRollAgain: "동점입니다. 두 플레이어가 다시 굴립니다.",
+  rollWinnerChooses: "{name}님이 굴림에서 이겼습니다. 선공 또는 후공을 선택해 주세요.",
+  waitingForOrderChoice: "{name}님의 선후공 선택을 기다리는 중입니다.",
+  chooseFirst: "선공 선택",
+  chooseSecond: "후공 선택",
   chooseChampion: "챔피언 선택",
   chooseBattlefield: "전장 선택",
   showdownPriority: "결전 우선권",
@@ -233,7 +247,7 @@ const UI_KO = {
   on: "켜짐",
   off: "꺼짐",
   energySelected: "에너지 선택됨",
-  powerSelected: "파워 선택됨",
+  powerSelected: "힘 선택됨",
   revealedIntel: "공개 정보",
   availableUntilTurnEnds: "이번 턴이 끝날 때까지 확인할 수 있습니다.",
   facedownCards: "뒷면 카드",
@@ -266,6 +280,16 @@ const UI_KO = {
   reverseOrder: "순서 뒤집기",
   triggers: "유발",
   resolvingTrigger: "유발 해결 중",
+  triggerOrderTitle: "동시 유발 효과 순서 선택",
+  triggerOrderProgress: "{total}개 중 {selected}개 선택",
+  triggerOrderHelp: "체인에 쌓을 순서대로 누르세요. 다시 누르면 취소되며, 마지막에 누른 효과부터 해결됩니다.",
+  triggerOrderSelected: "체인에 쌓을 순서",
+  triggerOrderChooseRank: "{n}번으로 선택됨",
+  triggerOrderMandatory: "강제 유발 · 선택 필요",
+  triggerOrderOptional: "선택 유발 · 누르지 않으면 발동하지 않음",
+  triggerOrderMandatoryRemaining: "강제 유발 {n}개를 더 선택해야 합니다.",
+  triggerOrderConfirm: "유발 순서 확인",
+  chooseNow: "지금 선택",
   opponentBattlefieldHidden: "상대 전장이 숨겨져 있습니다.",
   revealedAfterSetup: "두 플레이어가 준비를 마치면 공개됩니다.",
   battlefieldChoices: "전장 선택",
@@ -323,7 +347,7 @@ const UI_KO = {
   endTurnTrigger: "턴 종료 유발 효과",
   battlefieldTrigger: "전장 유발 효과",
   spellTrigger: "주문 유발 효과",
-  deathknellTrigger: "유언 유발 효과",
+  deathknellTrigger: "죽음의 종소리 유발 효과",
   eventTimeline: "게임 진행 기록",
   recentEvents: "개의 최근 이벤트",
   alreadyUsed: "이미 사용됨",
@@ -369,6 +393,7 @@ const UI_EN = {
   noCost: "No cost",
   selected: "Selected",
   generatedEnergy: "Generated Energy",
+  generatedPower: "Generated Power",
   effectPayment: "Effect payment",
   playCost: "Play cost",
   damage: "Damage",
@@ -379,6 +404,7 @@ const UI_EN = {
   keepHand: "Keep Hand",
   mulligan: "Mulligan",
   deck: "Deck",
+  level: "Level",
   trash: "Trash",
   banished: "Banished",
   runes: "Runes",
@@ -408,6 +434,8 @@ const UI_EN = {
   source: "Source",
   target: "Target",
   chain: "CHAIN",
+  hideChain: "Hide chain",
+  showChain: "Show chain",
   pending: "Pending",
   responseWindow: "Response window",
   responseHint: "Pass or play a legal response.",
@@ -467,6 +495,16 @@ const UI_EN = {
   createDeck: "Create deck",
   chooseDeck: "Choose a deck.",
   firstPlayerRoll: "First player roll",
+  rollToChooseOrder: "Both players roll a die. The higher roller chooses whether to play first or second.",
+  rollDie: "Roll die",
+  waitingForRoll: "Waiting to roll",
+  rolledNumber: "Rolled {n}",
+  rollRound: "Roll {n}",
+  tiedRollAgain: "Tie. Both players roll again.",
+  rollWinnerChooses: "{name} won the roll. Choose whether to play first or second.",
+  waitingForOrderChoice: "Waiting for {name} to choose the play order.",
+  chooseFirst: "Play first",
+  chooseSecond: "Play second",
   chooseChampion: "choose champion",
   chooseBattlefield: "choose battlefield",
   showdownPriority: "showdown priority",
@@ -531,6 +569,16 @@ const UI_EN = {
   reverseOrder: "Reverse order",
   triggers: "Triggers",
   resolvingTrigger: "Resolving trigger",
+  triggerOrderTitle: "Order simultaneous triggers",
+  triggerOrderProgress: "{selected} of {total} selected",
+  triggerOrderHelp: "Select triggers in Chain placement order. Select one again to cancel it; the last selected trigger resolves first.",
+  triggerOrderSelected: "Chain placement order",
+  triggerOrderChooseRank: "Selected as {n}",
+  triggerOrderMandatory: "Mandatory · selection required",
+  triggerOrderOptional: "Optional · skip to decline",
+  triggerOrderMandatoryRemaining: "Select {n} more mandatory trigger(s).",
+  triggerOrderConfirm: "Confirm trigger order",
+  chooseNow: "Choose now",
   opponentBattlefieldHidden: "Opponent battlefield hidden",
   revealedAfterSetup: "Revealed after both players finish setup.",
   battlefieldChoices: "Battlefield choices",
@@ -669,15 +717,11 @@ export function translateCardText(cardOrText, locale = LOCALES.EN) {
 
 export function normalizeKoreanCardTerminology(text = "") {
   return String(text)
-    .replace(/결전/gu, "쇼다운")
     .replace(/매복/gu, "기습")
     .replace(/탭:/gu, "탈진:")
-    .replace(/메인 덱/gu, "주 덱")
     .replace(/버림 더미|무덤/gu, "폐기장")
     .replace(/공격력/gu, "위력")
-    .replace(/체력치/gu, "체력")
-    .replace(/자원/gu, "룬")
-    .replace(/\[숨겨짐\]\s*\([^)]*\)/gu, "[숨겨짐] (룬 1개를 파워로 지불해 전장에 뒷면으로 숨깁니다. 다음 턴부터 쇼다운 중 반응으로 에너지 비용 0에 사용할 수 있습니다.)");
+    .replace(/체력치/gu, "체력");
 }
 
 export function translateCardTags(card, locale = LOCALES.EN) {
@@ -689,7 +733,9 @@ export function translateCardTags(card, locale = LOCALES.EN) {
 
 export function translateCostDomain(domain, locale = LOCALES.EN, card = null) {
   if (locale !== LOCALES.KO) return domain;
-  if (domain === "Any" && card?.domains?.length === 1) return translateDomain(card.domains[0], locale);
+  if (domain === "Any" && card?.domains?.length) {
+    return card.domains.map((cardDomain) => translateDomain(cardDomain, locale)).join("/");
+  }
   return translateDomain(domain, locale);
 }
 
@@ -714,7 +760,19 @@ export function cardSearchText(card, locale = LOCALES.EN) {
 
 export function translationMetadata() {
   return {
-    keywords: KEYWORD_TRANSLATIONS
+    keywords: KEYWORD_TRANSLATIONS,
+    ui: uiTranslationCoverage()
+  };
+}
+
+export function uiTranslationCoverage() {
+  const koreanKeys = Object.keys(UI_KO);
+  const englishKeys = Object.keys(UI_EN);
+  return {
+    koreanKeys,
+    englishKeys,
+    missingKorean: englishKeys.filter((key) => !(key in UI_KO)),
+    missingEnglish: koreanKeys.filter((key) => !(key in UI_EN))
   };
 }
 

@@ -3,16 +3,17 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { cards, decklists } from "../src/cards.mjs";
+import { cards, decklists, DOMAINS, makeRune } from "../src/cards.mjs";
 import { confirmFirstPlayer, createGame, selectChampion } from "../src/engine.mjs";
 import { activeActorId, enumerateLegalActions } from "../src/ai/actions.mjs";
 import { inferOpponentDeckBelief } from "../src/ai/belief.mjs";
-import { mutateBattlefieldSuite, mutateCardPackage, mutateRuneDistribution, mutateSideboardPackage } from "../src/ai/deckbuilding.mjs";
-import { ACTION_DIM, CARD_VOCABULARY, MAX_ACTIONS, encodeActionSet, encodeState, STATE_DIM, actionStage, cardIndex, selectHierarchicalActions } from "../src/ai/neural/encoding.mjs";
+import { mutateBattlefieldSuite, mutateCardPackage, mutateDeck, mutateRuneDistribution, mutateSideboardPackage } from "../src/ai/deckbuilding.mjs";
+import { ACTION_DIM, CARD_VOCABULARY, MAX_ACTIONS, encodeAction, encodeActionSet, encodeState, STATE_DIM, actionStage, cardIndex, selectHierarchicalActions } from "../src/ai/neural/encoding.mjs";
+import { actionFeatures } from "../src/ai/policy.mjs";
 import { createNeuralModel, createNeuralSession, deserializeNeuralModel, serializeNeuralModel } from "../src/ai/neural/model.mjs";
 import { readTrajectoryArchive, writeTrajectoryArchive } from "../src/ai/neural/archive.mjs";
 import { determinizeGame } from "../src/ai/rollout.mjs";
-import { applyResolvedSideboardSwap, enumerateSideboardActions } from "../src/ai/neural/selfplay.mjs";
+import { applyResolvedSideboardSwap, enumerateSideboardActions, leagueGamesPerOpponent, terminalRewards } from "../src/ai/neural/selfplay.mjs";
 import { normalizeMetaSnapshot } from "../src/ai/meta.mjs";
 import { encodeHumanDecisionSample, hydrateHumanReplayTrajectories } from "../src/ai/human-data.mjs";
 import { CARD_POOL_FORMATS, cardAllowedInPool, cardNumbersForPool } from "../src/card-pools.mjs";
@@ -20,8 +21,23 @@ import { buildMetaPreset, ORIGINS_HOUSTON_2025 } from "../src/ai/meta-presets.mj
 import { weightedDeckPick } from "../src/ai/neural/imitation.mjs";
 import { evaluateBehaviorCloning, trainBehaviorCloning } from "../src/ai/neural/trainer.mjs";
 import { assessBehaviorCloningQuality, auditImitationDataset } from "../src/ai/neural/quality.mjs";
+import { FOCUSED_TRAINING_DECK_IDS, resolveTrainingDecks, sameLegendIdentity } from "../src/ai/training-decks.mjs";
 
 const decks = Object.values(decklists);
+
+test("focused training uses only Sett, Annie, Kai'Sa, canonical Master Yi, and Leona", () => {
+  const selected = resolveTrainingDecks(decklists, "origins-era");
+  assert.deepEqual(selected.map((deck) => deck.id), FOCUSED_TRAINING_DECK_IDS);
+  assert.equal(selected.some((deck) => deck.id === "keenan-xiong"), false);
+  assert.throws(() => resolveTrainingDecks(decklists, "origins-era", ["origins-sett", "unknown-deck"]), /unknown-deck/);
+  for (const deck of selected) {
+    for (const roll of [0.05, 0.2, 0.35, 0.55, 0.9]) {
+      assert.equal(sameLegendIdentity(deck, mutateDeck(deck, {}, () => roll)), true);
+    }
+  }
+  const changedLegend = { ...structuredClone(selected[0]), legend: structuredClone(selected[1].legend) };
+  assert.equal(sameLegendIdentity(selected[0], changedLegend), false);
+});
 
 test("training random seeds reproduce deck and Rune shuffles", () => {
   const create = () => createGame({
@@ -58,6 +74,105 @@ test("neural public-state encoding and Bayesian belief do not depend on hidden h
   assert.deepEqual(Array.from(encodeState(game, viewerId)), before);
   assert.deepEqual(inferOpponentDeckBelief(game, viewerId).posterior.map((item) => [item.deckId, item.probability]), beliefBefore.posterior.map((item) => [item.deckId, item.probability]));
   assert.equal(before.length, STATE_DIM);
+});
+
+test("AI encodings distinguish a Rune's Energy and Power activated abilities", () => {
+  const game = createGame({ decks: decks.slice(0, 2), interactive: true, manualActionChainPriority: true });
+  const actor = game.players[0];
+  const rune = {
+    ...makeRune(DOMAINS.BODY),
+    instanceId: "encoded-basic-rune",
+    ownerId: actor.id,
+    controllerId: actor.id,
+    exhausted: false
+  };
+  actor.runes = [rune];
+  const energy = { kind: "activateCard", cardId: rune.instanceId, abilityId: `${rune.instanceId}:basic-rune-energy` };
+  const power = { kind: "activateCard", cardId: rune.instanceId, abilityId: `${rune.instanceId}:basic-rune-power` };
+
+  assert.notDeepEqual(Array.from(encodeAction(game, actor.id, energy)), Array.from(encodeAction(game, actor.id, power)));
+  assert.equal(actionFeatures(game, actor.id, energy)["ability:basic-rune-energy"], 1);
+  assert.equal(actionFeatures(game, actor.id, power)["ability:basic-rune-power"], 1);
+
+  const generatedPowerAction = { kind: "togglePaymentPoolPower", powerId: "generated-body-power" };
+  const generatedPowerEncoding = encodeAction(game, actor.id, generatedPowerAction);
+  assert.equal(generatedPowerEncoding[67], 1, "generated Power payment has a checkpoint-compatible action-kind feature");
+  assert.equal(actionStage(generatedPowerAction), "payment");
+  actor.runePool = { energy: [], power: [{ id: "generated-body-power", domain: DOMAINS.BODY }] };
+  game.pendingPayment = {
+    playerId: actor.id,
+    energyCost: 0,
+    powerCost: [{ domain: DOMAINS.BODY, amount: 1 }],
+    energyRuneIds: [],
+    poolEnergyIds: [],
+    powerRuneIds: [],
+    poolPowerIds: ["generated-body-power"]
+  };
+  const generatedPowerFeatures = actionFeatures(game, actor.id, generatedPowerAction);
+  assert.equal(generatedPowerFeatures.paymentPowerProgress, 1);
+  assert.equal(generatedPowerFeatures.togglePoolPowerRemovesSelection, 1);
+});
+
+test("neural action encodings distinguish effect options, battlefields, and generated payment resources", () => {
+  const game = createGame({ decks: decks.slice(0, 2), interactive: true, manualActionChainPriority: true });
+  const actor = game.players[0];
+  game.pendingChoice = {
+    playerId: actor.id,
+    effect: "encoding-regression",
+    options: [{ id: "left", amount: 1 }, { id: "right", amount: 2 }]
+  };
+  assert.notDeepEqual(
+    Array.from(encodeAction(game, actor.id, { kind: "chooseEffectOption", optionId: "left" })),
+    Array.from(encodeAction(game, actor.id, { kind: "chooseEffectOption", optionId: "right" }))
+  );
+
+  const fields = game.players.flatMap((player) => player.availableBattlefields).slice(0, 2);
+  assert.equal(fields.length, 2);
+  assert.notDeepEqual(
+    Array.from(encodeAction(game, actor.id, { kind: "selectBattlefield", battlefieldId: fields[0].instanceId })),
+    Array.from(encodeAction(game, actor.id, { kind: "selectBattlefield", battlefieldId: fields[1].instanceId }))
+  );
+
+  actor.runePool = { energy: [{ id: "energy-body", domain: DOMAINS.BODY }, { id: "energy-mind", domain: DOMAINS.MIND }], power: [] };
+  assert.notDeepEqual(
+    Array.from(encodeAction(game, actor.id, { kind: "togglePaymentPoolEnergy", energyId: "energy-body" })),
+    Array.from(encodeAction(game, actor.id, { kind: "togglePaymentPoolEnergy", energyId: "energy-mind" }))
+  );
+
+  const legal = [
+    { kind: "chooseEffectOption", optionId: "left" },
+    { kind: "chooseEffectOption", optionId: "right" },
+    { kind: "declineEffectChoice" }
+  ];
+  const actionSet = encodeActionSet(game, actor.id, legal);
+  const signatures = Array.from({ length: actionSet.legalCount }, (_, index) =>
+    Array.from(actionSet.encoded.subarray(index * ACTION_DIM, (index + 1) * ACTION_DIM)).join(","));
+  assert.equal(new Set(signatures).size, legal.length, "every legal action reaches the model with a distinct vector");
+});
+
+test("relational state encoding preserves battlefield location and individual unit status", () => {
+  const game = createGame({ decks: decks.slice(0, 2), interactive: true, manualActionChainPriority: true });
+  const viewer = game.players[0];
+  const unit = { ...structuredClone(cards.annieFiery), instanceId: "relational-unit", ownerId: viewer.id, controllerId: viewer.id, exhausted: false, stunned: false, attachments: [] };
+  game.battlefields = [
+    { ...structuredClone(viewer.availableBattlefields[0]), instanceId: "field-a", controlledBy: null, units: [unit], hidden: [] },
+    { ...structuredClone(viewer.availableBattlefields[1]), instanceId: "field-b", controlledBy: null, units: [], hidden: [] }
+  ];
+  const atFirstField = Array.from(encodeState(game, viewer.id));
+  game.battlefields[0].units = [];
+  game.battlefields[1].units = [unit];
+  const atSecondField = Array.from(encodeState(game, viewer.id));
+  assert.notDeepEqual(atSecondField, atFirstField);
+  unit.stunned = true;
+  unit.damage = 2;
+  assert.notDeepEqual(Array.from(encodeState(game, viewer.id)), atSecondField);
+});
+
+test("incomplete games have no terminal reward and league evaluation keeps per-opponent evidence", () => {
+  const game = createGame({ decks: decks.slice(0, 2), interactive: true, manualActionChainPriority: true });
+  assert.equal(terminalRewards(game), null);
+  assert.equal(leagueGamesPerOpponent(9, { games: 20 }), 20);
+  assert.equal(leagueGamesPerOpponent(9, { gamesPerOpponent: 36 }), 36);
 });
 
 test("determinization preserves private slot identities while sampling only belief-compatible cards", () => {
@@ -157,10 +272,13 @@ test("human coaching decisions persist as sparse public training samples", () =>
   const actorId = activeActorId(game);
   const action = enumerateLegalActions(game, actorId)[0];
   const sample = encodeHumanDecisionSample(game, actorId, action, { best: { key: JSON.stringify(action), simulations: 16, confidenceInterval: [0.45, 0.6] }, confidence: "medium", regret: 0 });
-  const trajectories = hydrateHumanReplayTrajectories([{ id: "human-1", humanPlayerId: actorId, winnerId: actorId, decisions: [{ actorId, trainingSample: sample }] }]);
+  const trajectories = hydrateHumanReplayTrajectories([{ id: "human-1", humanPlayerId: actorId, winnerId: actorId, decisions: [{ actorId, trainingSample: sample }] }], { engineFingerprint: "sha256:test" });
   assert.equal(sample.state.length < STATE_DIM, true);
   assert.equal(trajectories.length, 1);
   assert.equal(trajectories[0].steps[0].state.length, STATE_DIM);
+  assert.equal(trajectories[0].completed, true);
+  assert.equal(trajectories[0].engineFingerprint, "sha256:test");
+  assert.equal(trajectories[0].steps[0].oldLogProbability, 0);
 });
 
 test("released card pools are cumulative and Origins excludes later packs", () => {

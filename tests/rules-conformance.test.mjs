@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { cards, DOMAINS, makeRune } from "../src/cards.mjs";
 import {
   ABILITY_ACTIVE_ZONES,
@@ -99,6 +100,20 @@ test("one card can carry independent ability structures without changing their c
   assert.deepEqual([...rocketClasses].sort(), ["instruction", "triggered"]);
 });
 
+test("passive continuous effects never acquire an implicit source-exhaust cost", () => {
+  const passiveStaticEffects = Object.values(cards).flatMap((card) =>
+    (card.effects || [])
+      .filter((effect) => effect.timing === "static" && effectDefinition(effect)?.abilityClass === "passive")
+      .map((effect) => ({ card, effect, definition: effectDefinition(effect) }))
+  );
+
+  assert.ok(passiveStaticEffects.length > 0);
+  for (const { card, effect, definition } of passiveStaticEffects) {
+    assert.equal(effect.exhaust, undefined, `${card.cardNumber} ${card.name} passive static payload`);
+    assert.equal(definition.triggerCost, null, `${card.cardNumber} ${card.name} passive static registry contract`);
+  }
+});
+
 test("activated ability costs apply shared increases, component discounts, and discount minima", () => {
   const makeAbilitySource = (playerId, id) => instance({
     ...cards.ravenbornTome,
@@ -108,7 +123,8 @@ test("activated ability costs apply shared increases, component discounts, and d
       timing: "activated",
       kind: "nextSpellBonusDamage",
       amount: 1,
-      costEnergy: 2
+      costEnergy: 2,
+      exhaust: true
     }]
   }, playerId, id);
   const makeModifier = (playerId, id, energy, minEnergy = 0) => instance({
@@ -348,6 +364,233 @@ test("semantic resolution oracle rejects undeclared damage recall", () => {
   );
 });
 
+test("semantic resolution oracle accepts damage that a declared prevention reduces to zero", () => {
+  const game = createGame({ interactive: true });
+  const player = game.players[0];
+  const opponent = game.players[1];
+  const target = instance(cards.lonelyPoro, opponent.id, "prevented-semantic-target");
+  const spell = instance(cards.incinerate, player.id, "prevented-semantic-source");
+  game.battlefields = [testBattlefield("prevented-semantic-field", [target], opponent.id)];
+  game.preventSpellAbilityDamageUntilTurnSequence = game.turnSequence || 0;
+  const contract = captureResolutionContract(game, {
+    effect: "damageUnit",
+    playerId: player.id,
+    card: spell,
+    data: { amount: 2 }
+  }, target.instanceId);
+
+  assert.doesNotThrow(() => validateResolutionContract(game, contract, { ok: true }));
+});
+
+test("semantic resolution oracle does not treat a trigger target declaration as its resolution", () => {
+  const game = createGame({ interactive: true });
+  const player = game.players[0];
+  const target = instance(cards.lonelyPoro, player.id, "declared-ready-target");
+  target.exhausted = true;
+  player.base.push(target);
+
+  const contract = captureResolutionContract(game, {
+    effect: "readyUnit",
+    playerId: player.id,
+    data: { declareTrigger: true }
+  }, target.instanceId);
+
+  assert.equal(contract, null);
+  assert.doesNotThrow(() => validateResolutionContract(game, contract, { ok: true }));
+  assert.equal(target.exhausted, true, "declaring the target must not resolve the ready effect");
+});
+
+test("semantic resolution oracle waits while Deflect payment defers the chosen effect", () => {
+  const game = createGame({ interactive: true });
+  const player = game.players[0];
+  const opponent = game.players[1];
+  const target = instance(cards.lonelyPoro, opponent.id, "deferred-deflect-target");
+  game.battlefields = [testBattlefield("deferred-deflect-field", [target], opponent.id)];
+  const contract = captureResolutionContract(game, { effect: "damageUnit", playerId: player.id }, target.instanceId);
+  game.pendingChoice = {
+    effect: "payDeflect",
+    data: {
+      targetId: target.instanceId,
+      originalChoice: { effect: "damageUnit" }
+    }
+  };
+
+  assert.doesNotThrow(() => validateResolutionContract(game, contract, { ok: true }));
+  assert.equal(target.damage, 0);
+});
+
+test("combat damage oracle excludes a unit that already has lethal damage assigned", () => {
+  const game = createGame({ interactive: true });
+  const attacker = game.players[0];
+  const defender = game.players[1];
+  const lethallyAssigned = instance({ ...cards.lonelyPoro, might: 2 }, defender.id, "already-lethal-target");
+  const remainingTarget = instance({ ...cards.lonelyPoro, might: 3 }, defender.id, "remaining-combat-target");
+  lethallyAssigned.combatRole = "defender";
+  remainingTarget.combatRole = "defender";
+  const field = testBattlefield("multi-assignment-field", [lethallyAssigned, remainingTarget], null);
+  game.battlefields = [field];
+  game.pendingChoice = {
+    effect: "combatDamage",
+    playerId: attacker.id,
+    options: [{ id: remainingTarget.instanceId, cardId: remainingTarget.instanceId, amount: 1 }],
+    data: {
+      battlefieldId: field.instanceId,
+      assigningPlayerId: attacker.id,
+      targetPlayerId: defender.id,
+      role: "attacker",
+      remaining: 1,
+      assignments: [{ targetId: lethallyAssigned.instanceId, amount: 2, assigningPlayerId: attacker.id, role: "attacker" }]
+    }
+  };
+
+  const combatPriorityViolations = evaluateRuleState(game).violations
+    .filter((violation) => violation.checkId === "combat-damage-assignment-priority");
+  assert.deepEqual(combatPriorityViolations, []);
+});
+
+test("combat damage oracle combines negative Might and Shield before applying the zero minimum", () => {
+  const game = createGame({ interactive: true });
+  const attacker = game.players[0];
+  const defender = game.players[1];
+  const reducedShen = instance(cards.shenKinkou, defender.id, "reduced-shen-target");
+  const remainingTank = instance(cards.settKingpin, defender.id, "remaining-tank-target");
+  reducedShen.mightModifier = -4;
+  reducedShen.combatRole = "defender";
+  remainingTank.combatRole = "defender";
+  const field = testBattlefield("layered-combat-might-field", [reducedShen, remainingTank], defender.id);
+  game.battlefields = [field];
+  game.pendingChoice = {
+    effect: "combatDamage",
+    playerId: attacker.id,
+    options: [{ id: remainingTank.instanceId, cardId: remainingTank.instanceId, amount: 2 }],
+    data: {
+      battlefieldId: field.instanceId,
+      assigningPlayerId: attacker.id,
+      targetPlayerId: defender.id,
+      role: "attacker",
+      remaining: 2,
+      assignments: [{ targetId: reducedShen.instanceId, amount: 1, assigningPlayerId: attacker.id, role: "attacker" }]
+    }
+  };
+
+  const violations = evaluateRuleState(game).violations
+    .filter((violation) => violation.checkId === "combat-damage-assignment-priority");
+  assert.deepEqual(violations, []);
+});
+
+test("combat damage oracle honors a stunned-enemy Might minimum", () => {
+  const game = createGame({ interactive: true });
+  const attacker = game.players[0];
+  const defender = game.players[1];
+  const stunned = instance(cards.pitRookie, defender.id, "minimum-might-stunned");
+  const ordinary = instance(cards.pitRookie, defender.id, "minimum-might-ordinary");
+  const leona = instance(cards.leonaZealot, attacker.id, "minimum-might-leona");
+  stunned.stunned = true;
+  stunned.combatRole = "attacker";
+  ordinary.combatRole = "attacker";
+  leona.combatRole = "defender";
+  const field = testBattlefield("minimum-might-field", [stunned, ordinary, leona], null);
+  game.battlefields = [field];
+  game.pendingChoice = {
+    effect: "combatDamage",
+    playerId: attacker.id,
+    options: [stunned, ordinary].map((unit) => ({ id: unit.instanceId, cardId: unit.instanceId, amount: unit === stunned ? 1 : 2 })),
+    data: {
+      battlefieldId: field.instanceId,
+      assigningPlayerId: attacker.id,
+      targetPlayerId: defender.id,
+      role: "defender",
+      remaining: 6,
+      assignments: []
+    }
+  };
+
+  const combatPriorityViolations = evaluateRuleState(game).violations
+    .filter((violation) => violation.checkId === "combat-damage-assignment-priority");
+  assert.deepEqual(combatPriorityViolations, []);
+});
+
+test("combat damage oracle requires one lethal damage on a zero-Might unit before other units", () => {
+  const game = createGame({ interactive: true });
+  const attacker = game.players[0];
+  const defender = game.players[1];
+  const ordinary = instance({ ...cards.firstMate, might: 3 }, defender.id, "mixed-might-ordinary");
+  const zeroMight = instance(cards.scuttleCrab, defender.id, "mixed-might-zero");
+  const field = testBattlefield("mixed-might-field", [ordinary, zeroMight], null);
+  game.battlefields = [field];
+  game.pendingChoice = {
+    effect: "combatDamage",
+    playerId: attacker.id,
+    options: [{ id: zeroMight.instanceId, cardId: zeroMight.instanceId, amount: 1 }],
+    data: {
+      battlefieldId: field.instanceId,
+      assigningPlayerId: attacker.id,
+      targetPlayerId: defender.id,
+      role: "attacker",
+      remaining: 2,
+      assignments: []
+    }
+  };
+
+  const combatPriorityViolations = evaluateRuleState(game).violations
+    .filter((violation) => violation.checkId === "combat-damage-assignment-priority");
+  assert.deepEqual(combatPriorityViolations, []);
+});
+
+test("combat damage oracle counts Shield gained dynamically while Mighty", () => {
+  const game = createGame({ interactive: true });
+  const attacker = game.players[0];
+  const defender = game.players[1];
+  const fiora = instance(cards.fioraVictorious, defender.id, "mighty-shield-fiora");
+  const ordinary = instance({ ...cards.firstMate, might: 5 }, defender.id, "mighty-shield-ordinary");
+  fiora.mightModifier = 1;
+  const field = testBattlefield("mighty-shield-field", [fiora, ordinary], defender.id);
+  game.battlefields = [field];
+  game.pendingChoice = {
+    effect: "combatDamage",
+    playerId: attacker.id,
+    options: [{ id: ordinary.instanceId, cardId: ordinary.instanceId }],
+    data: {
+      battlefieldId: field.instanceId,
+      assigningPlayerId: attacker.id,
+      targetPlayerId: defender.id,
+      role: "attacker",
+      remaining: 5,
+      assignments: []
+    }
+  };
+
+  const violations = evaluateRuleState(game).violations
+    .filter((violation) => violation.checkId === "combat-damage-assignment-priority");
+  assert.deepEqual(violations, []);
+});
+
+test("lethal-state oracle includes combat-role Might while a combat showdown is active", () => {
+  const game = createGame({ interactive: true });
+  const attacker = game.players[0];
+  const defender = game.players[1];
+  defender.legend = instance(cards.masterYiWujuBladesman, defender.id, "defend-alone-legend");
+  const attackingUnit = instance(cards.lonelyPoro, attacker.id, "combat-might-attacker");
+  const defendingUnit = instance({ ...cards.disarmingRake, might: 2 }, defender.id, "combat-might-defender");
+  attackingUnit.combatRole = "attacker";
+  defendingUnit.combatRole = "defender";
+  defendingUnit.damage = 3;
+  const field = testBattlefield("combat-might-field", [attackingUnit, defendingUnit], null);
+  game.battlefields = [field];
+  game.phase = "showdown";
+  game.showdown = {
+    battlefieldId: field.instanceId,
+    attackerId: attacker.id,
+    defenderId: defender.id,
+    combat: true,
+    chain: []
+  };
+
+  const lethalViolations = evaluateRuleState(game).violations
+    .filter((violation) => violation.checkId === "lethal-unit" && violation.details?.instanceId === defendingUnit.instanceId);
+  assert.deepEqual(lethalViolations, []);
+});
+
 test("prepared death recall replaces killing without Deathknell", () => {
   const game = createGame({ interactive: true });
   const player = game.players[0];
@@ -529,6 +772,16 @@ test("Chain oracle rejects stable Pending Items and incorrect newest-controller 
   game.actionChain.priorityPlayerId = player.id;
   assert.equal(evaluateRuleState(game).violations.some((violation) =>
     violation.checkId === "chain-state" && violation.details?.expectedPriorityPlayerId), false);
+
+  game.actionChain.priorityPlayerId = opponent.id;
+  game.pendingChoice = {
+    effect: "declareOptionalTrigger",
+    playerId: player.id,
+    options: [{ id: "use-optional-trigger" }]
+  };
+  assert.equal(evaluateRuleState(game).violations.some((violation) =>
+    violation.checkId === "chain-state" && violation.details?.expectedPriorityPlayerId), false,
+  "an unresolved choice suspends Priority while the current Chain Item is still resolving");
 });
 
 test("Chain finalization and post-resolution Priority follow the independent FEPR model", () => {
@@ -605,7 +858,7 @@ test("Chain finalization and post-resolution Priority follow the independent FEP
   "Cleanup may run only after the resolving Chain Item has completed in its entirety.");
 });
 
-test("Units and Gear resolve during Finalize without waiting for the Pass step", () => {
+test("Units and Gear remain finalized on the Chain until the Pass step resolves them", () => {
   const game = createGame();
   const player = game.players[0];
   const opponent = game.players[1];
@@ -635,19 +888,22 @@ test("Units and Gear resolve during Finalize without waiting for the Pass step",
     chain: []
   };
   const expected = resolveChainTransitionReference("finalize", {
-    items: [{ id: gear.instanceId, playerId: player.id, status: "pending", resolvesOnFinalize: true }],
+    items: [{ id: gear.instanceId, playerId: player.id, status: "pending", resolvesOnFinalize: false }],
     focusPlayerId: player.id,
     nextPlayerId: opponent.id
   });
 
   assert.equal(playCard(game, gear.instanceId, "base").ok, true);
-  assert.equal(player.base.some((card) => card.instanceId === gear.instanceId), true);
-  assert.deepEqual(game.showdown.chain, expected.items);
+  assert.equal(player.base.some((card) => card.instanceId === gear.instanceId), false);
+  assert.deepEqual(game.showdown.chain.map((item) => ({ id: item.card.instanceId, playerId: item.playerId, status: item.status, resolvesOnFinalize: false })), expected.items);
   assert.equal(game.showdown.focusPlayerId, expected.focusPlayerId);
   assert.equal(game.showdown.priorityPlayerId, expected.priorityPlayerId);
+  assert.equal(passShowdown(game, game.showdown.priorityPlayerId).ok, true);
+  assert.equal(passShowdown(game, game.showdown.priorityPlayerId).ok, true);
+  assert.equal(player.base.some((card) => card.instanceId === gear.instanceId), true);
 });
 
-test("Finalize repeats when an immediately played Unit creates a Pending trigger", () => {
+test("a Unit creates its play trigger only after its Chain item resolves", () => {
   const game = createGame({ interactive: true, manualActionChainPriority: true });
   const player = game.players[0];
   const opponent = game.players[1];
@@ -679,6 +935,10 @@ test("Finalize repeats when an immediately played Unit creates a Pending trigger
   };
 
   assert.equal(playCard(game, unit.instanceId, "base").ok, true);
+  assert.equal(player.base.some((card) => card.instanceId === unit.instanceId), false);
+  assert.equal(game.showdown.chain[0].status, "finalized");
+  assert.equal(passShowdown(game, game.showdown.priorityPlayerId).ok, true);
+  assert.equal(passShowdown(game, game.showdown.priorityPlayerId).ok, true);
   assert.equal(player.base.some((card) => card.instanceId === unit.instanceId), true);
   assert.equal(game.pendingChoice.effect, "declareOptionalTrigger");
   assert.equal(game.showdown.chain.length, 0);
@@ -706,10 +966,55 @@ test("only Rune Pool Add effects use the immediate-Finalize ability classificati
     "the official Gold token's universal Power is covered by the Add classification");
   assert.equal(addSpecs.every((spec) => effectDefinition(spec)?.resolvesOnFinalize), true);
 
-  const channelSpec = cards.malzaharFanatic.effects.find((spec) => spec.kind === "killFriendlyPermanentChannelRune");
-  assert.equal(effectDefinition(channelSpec)?.addsResources, false);
-  assert.equal(effectDefinition(channelSpec)?.resolvesOnFinalize, false,
-    "Channeling a Rune is not the Add action of putting resources into the Rune Pool");
+  const malzaharSpec = cards.malzaharFanatic.effects.find((spec) => spec.kind === "addPower");
+  assert.equal(malzaharSpec?.killFriendlyPermanentCost, true);
+  assert.equal(effectDefinition(malzaharSpec)?.addsResources, true);
+  assert.equal(effectDefinition(malzaharSpec)?.resolvesOnFinalize, true,
+    "Malzahar pays the Kill cost before finalization, then uses the shared Add Power resolver");
+});
+
+test("every official Add card distinguishes Energy from Power and preserves its restriction", () => {
+  const gallery = JSON.parse(readFileSync(
+    new URL("../spec/cards/official-gallery-2026-07-14.json", import.meta.url),
+    "utf8"
+  ));
+  const registeredByNumber = new Map(Object.values(cards).map((card) => [card.cardNumber, card]));
+  const domainByIcon = {
+    fury: DOMAINS.FURY,
+    calm: DOMAINS.CALM,
+    mind: DOMAINS.MIND,
+    body: DOMAINS.BODY,
+    chaos: DOMAINS.CHAOS,
+    order: DOMAINS.ORDER,
+    rainbow: DOMAINS.ANY
+  };
+  const officialAddCards = gallery.cards.filter((card) => card.rulesText?.includes("[Add]"));
+  assert.equal(officialAddCards.length, 14);
+
+  for (const official of officialAddCards) {
+    const implemented = registeredByNumber.get(official.cardNumber);
+    assert.ok(implemented, `${official.cardNumber} must be registered`);
+    const addSpecs = (implemented.effects || []).filter((effect) => ["addEnergy", "addPower"].includes(effect.kind));
+    assert.equal(addSpecs.length, 1, `${official.cardNumber} must have one shared Add resolver`);
+    const [spec] = addSpecs;
+    const energyMatch = official.rulesText.match(/:rb_energy_(\d+):/);
+    const runeIcons = [...official.rulesText.matchAll(/:rb_rune_([a-z]+):/g)];
+    if (energyMatch) {
+      assert.equal(spec.kind, "addEnergy", `${official.cardNumber} adds Energy`);
+      assert.equal(spec.amount, Number(energyMatch[1]));
+    } else {
+      assert.ok(runeIcons.length > 0, `${official.cardNumber} must print Energy or Power icons`);
+      assert.equal(spec.kind, "addPower", `${official.cardNumber} adds Power`);
+      assert.equal(spec.amount, runeIcons.length);
+      assert.equal(spec.domain, domainByIcon[runeIcons[0][1]]);
+    }
+    const expectedRestriction = official.rulesText.includes("Use only to play spells")
+      ? "spell"
+      : official.rulesText.includes("only during showdowns") ? "showdown" : null;
+    assert.equal(spec.restriction || null, expectedRestriction, `${official.cardNumber} Add restriction`);
+    assert.equal(Boolean(spec.requiresLegion), official.rulesText.includes("[Legion]"),
+      `${official.cardNumber} Legion condition`);
+  }
 });
 
 test("an Add Reaction finalizes during payment without passing Priority or Focus", () => {
@@ -1569,6 +1874,9 @@ test("cards, abilities, and their triggers join the one existing Chain", () => {
 
   assert.equal(playCard(game, reactionUnit.instanceId, "base").ok, true);
   assert.equal(game.actionChain, existingChain, "the Reaction Unit and its play trigger must reuse the existing Chain object");
+  while (!game.pendingChoice && game.actionChain) {
+    assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
+  }
   assert.equal(game.pendingChoice.effect, "declareOptionalTrigger");
   assert.equal(chooseEffectOption(game, "use-optional-trigger").ok, true);
   assert.equal(game.pendingChoice.effect, "declareTriggerCost");
@@ -1624,10 +1932,17 @@ test("a legally timed Reaction Chosen Champion follows normal Chain rules from t
   const reaction = makeShowdown(cards.rengarTrophyHunter, "reaction");
   assert.deepEqual(legalChampionPlayDestinations(reaction.game), [reaction.field.instanceId]);
   assert.equal(playChampion(reaction.game, reaction.field.instanceId).ok, true);
+  assert.equal(reaction.player.championPlayed, false);
+  assert.equal(reaction.champion.zone, "chain");
+  assert.equal(reaction.field.units.some((unit) => unit.instanceId === reaction.champion.instanceId), false);
+  assert.equal(reaction.game.showdown.chain.at(-1)?.status, "finalized");
+  while (!reaction.player.championPlayed && reaction.game.showdown) {
+    assert.equal(passShowdown(reaction.game, reaction.game.showdown.priorityPlayerId).ok, true);
+  }
   assert.equal(reaction.player.championPlayed, true);
   assert.equal(reaction.champion.zone, "played");
   assert.equal(reaction.field.units.some((unit) => unit.instanceId === reaction.champion.instanceId), true);
-  assert.equal(reaction.game.showdown.chain.length, 0, "the Unit resolves immediately during Finalize");
+  assert.equal(reaction.game.showdown.chain.length, 0, "the Unit resolves only after the response pass cycle");
   assert.equal(reaction.game.showdown.focusPlayerId, reaction.opponent.id,
     "an empty card-created Showdown Chain passes Focus after immediate Finalize");
 });
@@ -1666,8 +1981,14 @@ test("a Hidden card gains its conditional Reaction permission beginning on the n
   assert.deepEqual(legalCardPlayDestinations(game, hiddenGear.instanceId), [field.instanceId]);
   assert.equal(beginPlayCard(game, hiddenGear.instanceId, field.instanceId).ok, true);
   assert.equal(field.hidden.length, 0);
+  assert.equal(player.base.some((card) => card.instanceId === hiddenGear.instanceId), false);
+  assert.equal(game.showdown.chain.at(-1)?.card, hiddenGear);
+  assert.equal(game.showdown.chain.at(-1)?.status, "finalized");
+  while (!player.base.some((card) => card.instanceId === hiddenGear.instanceId) && game.showdown) {
+    assert.equal(passShowdown(game, game.showdown.priorityPlayerId).ok, true);
+  }
   assert.equal(player.base.some((card) => card.instanceId === hiddenGear.instanceId), true);
-  assert.equal(game.showdown.chain.length, 0, "Hidden Gear resolves immediately during Finalize");
+  assert.equal(game.showdown.chain.length, 0, "Hidden Gear resolves only after the response pass cycle");
   assert.equal(game.showdown.focusPlayerId, opponent.id);
 });
 
@@ -1701,6 +2022,43 @@ test("Check Legality rejects Ambush when its destination loses the friendly unit
   assert.equal(player.hand.some((card) => card.instanceId === ambusher.instanceId), true);
   assert.equal(field.units.some((card) => card.instanceId === ambusher.instanceId), false);
   assert.equal(game.showdown.chain.length, 0);
+});
+
+test("a finalized Ambush unit still resolves to its locked destination after the friendly entry condition changes", () => {
+  const game = createGame({ interactive: true, manualActionChainPriority: true });
+  const player = game.players[0];
+  const opponent = game.players[1];
+  const ally = instance(cards.lonelyPoro, player.id, "finalized-ambush-ally");
+  const enemy = instance(cards.lonelyPoro, opponent.id, "finalized-ambush-enemy");
+  const ambusher = instance({ ...cards.vilemaw, energy: 0, power: [], effects: [] }, player.id, "finalized-ambush-card");
+  const field = testBattlefield("finalized-ambush-field", [ally, enemy], opponent.id);
+  player.hand = [ambusher];
+  game.battlefields = [field];
+  game.phase = "showdown";
+  game.currentPlayerId = player.id;
+  game.showdown = {
+    battlefieldId: field.instanceId,
+    turnPlayerId: player.id,
+    attackerId: player.id,
+    defenderId: opponent.id,
+    focusPlayerId: player.id,
+    priorityPlayerId: player.id,
+    consecutivePasses: 0,
+    chainSequence: 0,
+    chain: []
+  };
+
+  assert.equal(beginPlayCard(game, ambusher.instanceId, field.instanceId).ok, true);
+  assert.equal(confirmPayment(game).ok, true);
+  assert.equal(game.showdown.chain[0].playOptions.destinationLegalityFinalized, true);
+
+  field.units = [enemy];
+  player.trash.push(ally);
+  assert.equal(passShowdown(game, game.showdown.priorityPlayerId).ok, true);
+  assert.equal(passShowdown(game, game.showdown.priorityPlayerId).ok, true);
+
+  assert.equal(field.units.some((card) => card.instanceId === ambusher.instanceId), true);
+  assert.equal(locate(game, ambusher.instanceId), "battlefield");
 });
 
 test("turn tasks cannot pause without an explicit continuation owner", () => {
@@ -1850,17 +2208,19 @@ test("Start and Ending Tasks survive Chain Pass, Resolve, and choice re-entry wi
   assert.equal(endTurn(endingGame).ok, true);
   assert.deepEqual(endingGame.endTurnProcess, { playerId: endingPlayer.id, step: "expiration" });
   assert.deepEqual(endingGame.actionChain?.continuation, { kind: "continueEndTurn", playerId: endingPlayer.id });
+  assert.deepEqual(endingGame.actionChain?.chain.map((item) => [item.trigger?.kind, item.status]), [["endTurnReadyRunes", "pending"]]);
+  assert.equal(endingGame.pendingChoice?.effect, "readyRune");
+  assert.deepEqual(endingPlayer.runes.map((rune) => rune.exhausted), [true, true]);
+
+  assert.equal(chooseEffectOption(endingGame, "hot-fepr-ending-rune-1").ok, true);
+  assert.equal(endingGame.pendingChoice?.effect, "readyRune");
+  assert.equal(chooseEffectOption(endingGame, "finish-ready-runes").ok, true);
   assert.deepEqual(endingGame.actionChain?.chain.map((item) => [item.trigger?.kind, item.status]), [["endTurnReadyRunes", "finalized"]]);
   assert.deepEqual(endingPlayer.runes.map((rune) => rune.exhausted), [true, true]);
 
   assert.equal(passShowdown(endingGame, endingGame.actionChain.priorityPlayerId).ok, true);
   assert.equal(endingGame.endTurnProcess.step, "expiration");
   assert.equal(passShowdown(endingGame, endingGame.actionChain.priorityPlayerId).ok, true);
-  assert.equal(endingGame.pendingChoice?.effect, "readyRunes");
-  assert.equal(endingGame.endTurnProcess.step, "expiration");
-  assert.equal(chooseEffectOption(endingGame, "hot-fepr-ending-rune-1").ok, true);
-  assert.equal(endingGame.pendingChoice?.effect, "readyRunes");
-  assert.equal(chooseEffectOption(endingGame, "done").ok, true);
 
   assert.equal(endingGame.actionChain, null);
   assert.equal(endingGame.endTurnProcess, undefined);
@@ -2415,7 +2775,7 @@ test("cards and tokens follow the independent complete play lifecycle", () => {
   assert.equal(spellPlayer.cardsPlayedThisTurn, spellExpected.cardOrdinalDelta);
   assert.equal(spellPlayer.trash.includes(spell), true);
 
-  const permanentGame = createGame({ interactive: true });
+  const permanentGame = createGame({ interactive: true, manualActionChainPriority: true });
   const permanentPlayer = currentPlayer(permanentGame);
   const unit = instance({
     ...cards.lonelyPoro,
@@ -2432,6 +2792,10 @@ test("cards and tokens follow the independent complete play lifecycle", () => {
 
   assert.equal(beginPlayCard(permanentGame, unit.instanceId, "base").ok, true);
   assert.equal(confirmPayment(permanentGame).ok, true);
+  assert.equal(permanentPlayer.base.includes(unit), false);
+  while (!permanentPlayer.base.includes(unit) && permanentGame.actionChain) {
+    assert.equal(passShowdown(permanentGame, permanentGame.actionChain.priorityPlayerId).ok, true);
+  }
   assert.equal(permanentPlayer.base.includes(unit), true);
   assert.equal(permanentPlayer.cardsPlayedThisTurn, permanentExpected.cardOrdinalDelta);
   assert.equal(permanentExpected.played, true);
@@ -2457,12 +2821,21 @@ test("playing a token is a Unit play but not a card play", () => {
   game.phase = "action";
   game.currentPlayerId = opponent.id;
   game.battlefields = [];
+  game.resolvingGameEffect = { kind: "token-play-lifecycle-test" };
 
   assert.equal(playUnitToken(game, player, cithria, {
     tokenCardNumber: "OGN-273/298",
     count: 1,
     destination: "base"
   }), true);
+
+  assert.equal(player.base.some((card) => card.cardNumber === "OGN-273/298"), false);
+  assert.equal(game.actionChain.chain.length, 1);
+  assert.equal(game.actionChain.chain[0].status, "pending");
+  assert.equal(game.actionChain.chain[0].playOptions.tokenPlay, true);
+  delete game.resolvingGameEffect;
+  assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
+  assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
 
   const recruits = player.base.filter((card) => card.cardNumber === "OGN-273/298");
   assert.equal(recruits.length, 1, "Viktor does not observe a token as a played card");
@@ -2959,6 +3332,11 @@ test("a target that visits a non-Board zone is a new object even after returning
   assert.equal(resolveEffect(game, owner, replay), true);
   assert.equal(game.pendingChoice?.effect, "banishFriendlyUnitPlayToBase");
   assert.equal(chooseEffectOption(game, target.instanceId).ok, true);
+  assert.equal(owner.base.some((card) => card.instanceId === target.instanceId), false);
+  assert.equal(game.actionChain.chain.some((item) => item.card === target), true);
+  for (let passes = 0; !owner.base.some((card) => card.instanceId === target.instanceId) && game.actionChain && passes < 8; passes += 1) {
+    assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
+  }
   assert.equal(owner.base.some((card) => card.instanceId === target.instanceId), true);
   assert.ok((target.zoneChangeCounter || 0) > 0);
 
@@ -3477,6 +3855,27 @@ test("activated abilities cannot be used from the non-board Champion Zone", () =
   assert.equal(activateCard(game, champion.instanceId).ok, true);
   assert.equal(champion.exhausted, true);
   assert.equal(player.runePool.energy.length, 2);
+});
+
+test("a killed played champion cannot activate from trash or retain its exhaust state", () => {
+  const game = createGame({ interactive: true });
+  const player = game.players[0];
+  const opponent = game.players[1];
+  const champion = instance(cards.luxCrownguard, player.id, "killed-champion-activation");
+  const killer = instance(cards.blastOfPower, opponent.id, "killed-champion-spell");
+  champion.zone = "played";
+  player.champion = champion;
+  player.championPlayed = true;
+  game.phase = "action";
+  game.currentPlayerId = opponent.id;
+  game.battlefields = [testBattlefield("killed-champion-field", [champion], player.id)];
+
+  assert.equal(resolveEffect(game, opponent, killer), true);
+  assert.equal(chooseEffectOption(game, champion.instanceId).ok, true);
+  assert.equal(player.trash.some((card) => card.instanceId === champion.instanceId), true);
+  assert.equal(champion.zone, "trash");
+  assert.equal(activateCard(game, champion.instanceId).ok, false);
+  assert.equal(champion.exhausted, false);
 });
 
 test("chain trigger source references do not place their source card in a second zone", () => {

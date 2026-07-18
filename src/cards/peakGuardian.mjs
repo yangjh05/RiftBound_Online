@@ -18,7 +18,7 @@ export default card({
   effects: [
   {
     "timing": "onPlay",
-    "kind": "modifySelfMight",
+    "kind": "buffSelfThenOtherFriendlyHere",
     "amount": 1,
     "buff": true
   }

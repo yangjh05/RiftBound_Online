@@ -440,6 +440,8 @@ export function resolvePlayLifecycleReference({
   if (outstandingTask) trace.push("wait-for-outstanding-task");
   trace.push("choices", "costs", "legality", "finalized");
   if (!resolved) return { trace: [...trace, "countered"], played: false, cardOrdinalDelta: 0, zone: "trash" };
+  if (isToken) trace.push("resolve-on-finalize");
+  else trace.push("execute", "pass", "resolve");
   if (objectKind === "spell") trace.push("execute-effect", "owner-trash", "played");
   else trace.push("enter-board", "played");
   return {

@@ -65,6 +65,9 @@ jobs:
           free -h
           df -h .
 
+      - name: Install E2E browser
+        run: npx playwright install --with-deps chromium
+
       - name: Run engine and AI preflight checks
         run: npm run check
 
@@ -76,7 +79,9 @@ jobs:
           --epochs "${{ inputs.epochs }}"
           --batch-size 8
           --max-actions "${{ inputs.max_actions }}"
+          --deck-ids "origins-sett,proving-grounds-annie,origins-kaisa,proving-grounds-master-yi,origins-leona"
           --validation-fraction 0.1
+          --test-fraction 0.1
           --meta-fraction 0.7
           --attempt-multiplier 3
           --collection-rounds 3

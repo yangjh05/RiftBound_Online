@@ -4,16 +4,23 @@ import {
   beginPlayCard,
   beginPlayChampion,
   cancelPayment,
+  chooseFirstPlayer,
   chooseEffectOption,
   confirmFirstPlayer,
   confirmMulligan,
   confirmPayment,
   declineEffectChoice,
   endTurn,
+  firstPlayerDecisionActorId,
   hideCard,
+  legalActivatedAbilityOptions,
+  legalCardPlayDestinations,
+  legalChampionPlayDestinations,
+  legalPaymentPoolEnergyOptions,
   moveUnit,
   moveUnits,
   passShowdown,
+  rollFirstPlayer,
   selectBattlefield,
   selectChampion,
   skipMulligan,
@@ -38,7 +45,7 @@ export function activeActorId(game) {
   if (game.phase === "mulligan") return game.mulligan?.playerId || null;
   if (game.actionChain?.priorityPlayerId) return game.actionChain.priorityPlayerId;
   if (game.phase === "showdown") return game.showdown?.priorityPlayerId || null;
-  if (game.phase === "first-player") return game.hostPlayerId || game.firstPlayerId || game.players[0]?.id;
+  if (game.phase === "first-player") return firstPlayerDecisionActorId(game);
   if (game.phase === "action") return game.currentPlayerId;
   return null;
 }
@@ -58,6 +65,91 @@ export function enumerateLegalActions(game, actorId = activeActorId(game)) {
     }
     return true;
   });
+}
+
+export function resolveLegalAction(game, command, actorId = activeActorId(game)) {
+  if (!command || !actorId) return null;
+  const normalized = Object.fromEntries(Object.entries(command)
+    .filter(([, value]) => value !== undefined && value !== null));
+  if (normalized.kind === "moveUnit") {
+    if (typeof normalized.unitId !== "string" || typeof normalized.destinationId !== "string") return null;
+    const explicitMove = {
+      kind: "moveUnit",
+      unitId: normalized.unitId,
+      destinationId: normalized.destinationId
+    };
+    const clone = cloneGame(game);
+    return applyAiAction(clone, explicitMove, actorId)?.ok ? explicitMove : null;
+  }
+  if (normalized.kind === "moveUnits") {
+    const unitIds = Array.isArray(normalized.unitIds) ? normalized.unitIds : [];
+    if (unitIds.length < 2 || new Set(unitIds).size !== unitIds.length || !normalized.destinationId) return null;
+    const explicitMove = { kind: "moveUnits", unitIds: [...unitIds], destinationId: normalized.destinationId };
+    const clone = cloneGame(game);
+    return applyAiAction(clone, explicitMove, actorId)?.ok ? explicitMove : null;
+  }
+  // Command authorization must evaluate only the command the player actually
+  // submitted. Enumerating every possible play/activation here made an
+  // unrelated broken card candidate capable of rejecting a valid multiplayer
+  // pass or end-turn command.
+  const candidates = candidateActions(game, actorId, normalized.kind);
+  const unique = new Map();
+  for (const action of candidates) unique.set(actionKey(action), action);
+  const declined = new Set(game.aiDeclinedIntents?.turnSequence === game.turnSequence ? game.aiDeclinedIntents.keys : []);
+  const legal = [...unique.values()].filter((action) => {
+    if (declined.has(actionKey(action))) return false;
+    const clone = cloneGame(game);
+    if (!applyAiAction(clone, action, actorId)?.ok) return false;
+    return true;
+  });
+  const exactKey = actionKey(normalized);
+  const exact = legal.find((action) => actionKey(action) === exactKey);
+  if (exact) return exact;
+  // Backward compatibility is intentionally limited to the old activation
+  // command shape. Never infer a target, payment, or effect choice on behalf
+  // of a player, even when only one option currently exists.
+  if (normalized.kind !== "activateCard" || normalized.abilityId != null) return null;
+  const compatible = legal.filter((action) => Object.entries(normalized)
+    .every(([key, value]) => sameActionValue(action[key], value)));
+  return compatible.length === 1 ? compatible[0] : null;
+}
+
+export function auditDecisionBoundary(game, actorId = activeActorId(game)) {
+  const violations = [...(game.decisionSafety?.violations || [])];
+  if (game.phase === "complete") return violations;
+  if (!actorId) {
+    violations.push({ kind: "missing-active-actor", phase: game.phase });
+    return violations;
+  }
+  if (game.pendingChoice) {
+    const choice = game.pendingChoice;
+    if (choice.playerId !== actorId) {
+      violations.push({ kind: "choice-actor-mismatch", expected: choice.playerId, actual: actorId, effect: choice.effect });
+    }
+    const enabled = (choice.options || []).filter((option) => !option?.disabled);
+    const optionIds = enabled.map((option) => option?.id ?? option?.value ?? option);
+    if (!enabled.length && !choice.optional) {
+      violations.push({ kind: "required-choice-without-options", effect: choice.effect, playerId: choice.playerId });
+    }
+    if (new Set(optionIds).size !== optionIds.length) {
+      violations.push({ kind: "duplicate-choice-option", effect: choice.effect, playerId: choice.playerId });
+    }
+    const legalKeys = new Set(enumerateLegalActions(game, actorId).map(actionKey));
+    for (const optionId of optionIds) {
+      const key = actionKey({ kind: "chooseEffectOption", optionId });
+      if (!legalKeys.has(key)) violations.push({ kind: "choice-option-not-actionable", effect: choice.effect, optionId });
+    }
+    const declineKey = actionKey({ kind: "declineEffectChoice" });
+    if (choice.optional !== legalKeys.has(declineKey)) {
+      violations.push({ kind: "choice-decline-parity", effect: choice.effect, optional: Boolean(choice.optional) });
+    }
+  }
+  if (game.pendingPayment?.playerId && game.pendingPayment.playerId !== actorId) {
+    violations.push({ kind: "payment-actor-mismatch", expected: game.pendingPayment.playerId, actual: actorId });
+  }
+  const legal = enumerateLegalActions(game, actorId);
+  if (!legal.length) violations.push({ kind: "no-legal-action", phase: game.phase, actorId });
+  return uniqueViolations(violations);
 }
 
 function canCompletePayment(game) {
@@ -85,9 +177,17 @@ function attemptPaymentPlan(source, order) {
   if (!payment || !player) return false;
   if (confirmPayment(cloneGame(game))?.ok) return [{ kind: "confirmPayment" }];
   const actions = [];
+  for (const action of paymentAddAbilityActions(game, player)) {
+    const branch = cloneGame(game);
+    if (!activateCard(branch, action.cardId, action.abilityId || null)?.ok) continue;
+    // Generated resource ids are assigned while the ability resolves, so only
+    // return the executable next step. The following payment decision replans
+    // against the authoritative ids now present in the real game state.
+    if (attemptPaymentPlan(branch, order)) return [action];
+  }
   const selectedPool = new Set(payment.poolEnergyIds || []);
-  for (const energy of payment.poolEnergyOptions || payment.poolEnergy || []) {
-    if (selectedPool.has(energy.id)) continue;
+  for (const energy of legalPaymentPoolEnergyOptions(game)) {
+    if (selectedPool.has(energy.id) || !energy.canToggle) continue;
     const action = { kind: "togglePaymentPoolEnergy", energyId: energy.id };
     if (!togglePaymentPoolEnergy(game, energy.id)?.ok) continue;
     actions.push(action);
@@ -117,31 +217,68 @@ function attemptPaymentPlan(source, order) {
   return null;
 }
 
-function candidateActions(game, actorId) {
+function paymentAddAbilityActions(game, player) {
+  const sources = [
+    player.legend,
+    player.champion?.zone === "played" ? player.champion : null,
+    ...player.base,
+    ...game.battlefields.flatMap((field) => field.units.filter((card) => card.controllerId === player.id))
+  ].filter(Boolean);
+  return sources.flatMap((card) => legalActivatedAbilityOptions(game, card.instanceId)
+    .filter((ability) => ability.kind === "addEnergy" || ability.kind === "addPower")
+    .map((ability) => ({
+      kind: "activateCard",
+      cardId: card.instanceId,
+      ...(ability.id ? { abilityId: ability.id } : {})
+    })));
+}
+
+function candidateActions(game, actorId, kindFilter = null) {
+  const wants = (kind) => !kindFilter || kindFilter === kind;
   const player = game.players.find((candidate) => candidate.id === actorId);
   if (!player) return [];
-  if (game.phase === "first-player") return [{ kind: "confirmFirstPlayer" }];
+  if (game.phase === "first-player") {
+    const decision = game.firstPlayerDecision;
+    if (decision?.method === "roll" && decision.status === "rolling") {
+      return wants("rollFirstPlayer") ? [{ kind: "rollFirstPlayer" }] : [];
+    }
+    if (decision?.method === "roll" && decision.status === "choosing") {
+      return wants("chooseFirstPlayer")
+        ? game.players.map((candidate) => ({ kind: "chooseFirstPlayer", playerId: candidate.id }))
+        : [];
+    }
+    return wants("confirmFirstPlayer") ? [{ kind: "confirmFirstPlayer" }] : [];
+  }
   if (game.phase === "champion-select") {
-    return player.availableChampions.map((card) => ({ kind: "selectChampion", cardId: card.instanceId }));
+    return wants("selectChampion")
+      ? player.availableChampions.map((card) => ({ kind: "selectChampion", cardId: card.instanceId }))
+      : [];
   }
   if (game.phase === "battlefield-select") {
-    return player.availableBattlefields.map((field) => ({ kind: "selectBattlefield", battlefieldId: field.instanceId }));
+    return wants("selectBattlefield")
+      ? player.availableBattlefields.map((field) => ({ kind: "selectBattlefield", battlefieldId: field.instanceId }))
+      : [];
   }
   if (game.phase === "mulligan") {
     const selected = new Set(game.mulligan?.selectedCardIds || []);
     return [
-      ...player.hand.map((card) => ({ kind: "toggleMulliganCard", cardId: card.instanceId })),
-      ...(selected.size ? [{ kind: "confirmMulligan" }] : []),
-      { kind: "skipMulligan" }
+      ...(wants("toggleMulliganCard") ? player.hand.map((card) => ({ kind: "toggleMulliganCard", cardId: card.instanceId })) : []),
+      ...(wants("confirmMulligan") && selected.size ? [{ kind: "confirmMulligan" }] : []),
+      ...(wants("skipMulligan") ? [{ kind: "skipMulligan" }] : [])
     ];
   }
   if (game.pendingChoice) {
     return [
-      ...(game.pendingChoice.options || []).filter((option) => !option.disabled).map((option) => ({
+      ...(wants("chooseEffectOption") ? (game.pendingChoice.options || []).filter((option) => !option.disabled).map((option) => ({
         kind: "chooseEffectOption",
-        optionId: option.id ?? option.value ?? option
-      })),
-      ...(game.pendingChoice.optional ? [{ kind: "declineEffectChoice" }] : [])
+        optionId: option.id ?? option.value ?? option,
+        ...(game.pendingChoice.effect === "triggerOrder" ? {
+          confirmTriggerOrder: Boolean(option.confirmTriggerOrder),
+          triggerOrderSelected: Boolean(option.selected),
+          triggerOrderOptional: Boolean(option.optionalTrigger)
+        } : {})
+      })) : []),
+      ...(wants("declineEffectChoice") && game.pendingChoice.optional ? [{ kind: "declineEffectChoice" }] : [])
     ];
   }
   if (game.pendingPayment) {
@@ -154,16 +291,18 @@ function candidateActions(game, actorId) {
       ...game.battlefields.flatMap((field) => field.units.filter((card) => card.controllerId === actorId))
     ].filter(Boolean);
     return [
-      ...addSources.map((card) => ({ kind: "activateCard", cardId: card.instanceId })),
-      ...player.runes.flatMap((rune) => [
+      ...(wants("activateCard") ? addSources.flatMap((card) => activatedAbilityActions(game, card)) : []),
+      ...(wants("togglePaymentRune") ? player.runes.flatMap((rune) => [
         { kind: "togglePaymentRune", runeId: rune.instanceId, mode: "energy" },
         { kind: "togglePaymentRune", runeId: rune.instanceId, mode: "power" }
-      ]),
-      ...(payment.poolEnergyOptions || payment.poolEnergy || []).map((energy) => ({ kind: "togglePaymentPoolEnergy", energyId: energy.id })),
-      ...(player.runePool?.power || []).filter((power) => power?.id).map((power) => ({ kind: "togglePaymentPoolPower", powerId: power.id })),
-      ...(payment.optionalPowerEffects || payment.optionalEffects || []).map((effect) => ({ kind: "toggleOptionalPaymentEffect", effectId: effect.id })),
-      { kind: "confirmPayment" },
-      { kind: "cancelPayment" }
+      ]) : []),
+      ...(wants("togglePaymentPoolEnergy") ? legalPaymentPoolEnergyOptions(game)
+        .filter((energy) => energy.canToggle)
+        .map((energy) => ({ kind: "togglePaymentPoolEnergy", energyId: energy.id })) : []),
+      ...(wants("togglePaymentPoolPower") ? (player.runePool?.power || []).filter((power) => power?.id).map((power) => ({ kind: "togglePaymentPoolPower", powerId: power.id })) : []),
+      ...(wants("toggleOptionalPaymentEffect") ? (payment.optionalPowerEffects || payment.optionalEffects || []).map((effect) => ({ kind: "toggleOptionalPaymentEffect", effectId: effect.id })) : []),
+      ...(wants("confirmPayment") ? [{ kind: "confirmPayment" }] : []),
+      ...(wants("cancelPayment") ? [{ kind: "cancelPayment" }] : [])
     ];
   }
 
@@ -178,22 +317,36 @@ function candidateActions(game, actorId) {
     ...player.runes,
     ...game.battlefields.flatMap((field) => field.units.filter((card) => card.controllerId === actorId))
   ].filter(Boolean);
-  const movable = [
+  const movable = wants("moveUnit") || wants("moveUnits") ? [
     ...player.base.filter((card) => card.type === "unit"),
     ...game.battlefields.flatMap((field) => field.units.filter((card) => card.type === "unit" && card.controllerId === actorId))
-  ];
+  ] : [];
   const actions = [
-    ...player.hand.flatMap((card) => destinations.map((destination) => ({ kind: "beginPlayCard", cardId: card.instanceId, destination }))),
-    ...hiddenCards.map(({ card, destination }) => ({ kind: "beginPlayCard", cardId: card.instanceId, destination })),
-    ...player.hand.flatMap((card) => game.battlefields.map((field) => ({ kind: "hideCard", cardId: card.instanceId, destination: field.instanceId }))),
-    ...movable.flatMap((unit) => destinations.map((destinationId) => ({ kind: "moveUnit", unitId: unit.instanceId, destinationId }))),
-    ...batchMoveCandidates(movable, destinations),
-    ...controlledCards.map((card) => ({ kind: "activateCard", cardId: card.instanceId })),
-    ...destinations.map((destination) => ({ kind: "beginPlayChampion", destination }))
+    ...(wants("beginPlayCard") ? player.hand.flatMap((card) => legalCardPlayDestinations(game, card.instanceId)
+      .map((destination) => ({ kind: "beginPlayCard", cardId: card.instanceId, destination }))) : []),
+    ...(wants("beginPlayCard") ? hiddenCards.map(({ card, destination }) => ({ kind: "beginPlayCard", cardId: card.instanceId, destination })) : []),
+    ...(wants("hideCard") ? player.hand.flatMap((card) => game.battlefields.map((field) => ({ kind: "hideCard", cardId: card.instanceId, destination: field.instanceId }))) : []),
+    ...(wants("moveUnit") ? movable.flatMap((unit) => destinations.map((destinationId) => ({ kind: "moveUnit", unitId: unit.instanceId, destinationId }))) : []),
+    ...(wants("moveUnits") ? batchMoveCandidates(movable, destinations) : []),
+    ...(wants("activateCard") ? controlledCards.flatMap((card) => activatedAbilityActions(game, card)) : []),
+    ...(wants("beginPlayChampion") ? legalChampionPlayDestinations(game)
+      .map((destination) => ({ kind: "beginPlayChampion", destination })) : [])
   ];
-  if (game.phase === "showdown" || game.actionChain) actions.push({ kind: "passShowdown" });
-  if (game.phase === "action" && !game.actionChain) actions.push({ kind: "endTurn" });
+  if (wants("passShowdown") && (game.phase === "showdown" || game.actionChain)) actions.push({ kind: "passShowdown" });
+  if (wants("endTurn") && game.phase === "action" && !game.actionChain) actions.push({ kind: "endTurn" });
   return actions;
+}
+
+export function enumerateCommandCandidates(game, actorId = activeActorId(game)) {
+  return actorId ? candidateActions(game, actorId) : [];
+}
+
+function activatedAbilityActions(game, card) {
+  return legalActivatedAbilityOptions(game, card.instanceId).map((ability) => ({
+    kind: "activateCard",
+    cardId: card.instanceId,
+    ...(ability.id ? { abilityId: ability.id } : {})
+  }));
 }
 
 function batchMoveCandidates(units, destinations) {
@@ -232,6 +385,8 @@ export function applyAiAction(game, action, actorId = activeActorId(game)) {
 
   function execute() {
     switch (action.kind) {
+    case "rollFirstPlayer": return rollFirstPlayer(game, actorId);
+    case "chooseFirstPlayer": return chooseFirstPlayer(game, actorId, action.playerId);
     case "confirmFirstPlayer": return confirmFirstPlayer(game);
     case "selectChampion": return selectChampion(game, actorId, action.cardId);
     case "selectBattlefield": return selectBattlefield(game, actorId, action.battlefieldId);
@@ -243,7 +398,7 @@ export function applyAiAction(game, action, actorId = activeActorId(game)) {
     case "hideCard": return hideCard(game, action.cardId, action.destination);
     case "moveUnit": return moveUnit(game, action.unitId, action.destinationId);
     case "moveUnits": return moveUnits(game, action.unitIds, action.destinationId);
-    case "activateCard": return activateCard(game, action.cardId);
+    case "activateCard": return activateCard(game, action.cardId, action.abilityId || null);
     case "togglePaymentRune": return togglePaymentRune(game, action.runeId, action.mode);
     case "togglePaymentPoolEnergy": return togglePaymentPoolEnergy(game, action.energyId);
     case "togglePaymentPoolPower": return togglePaymentPoolPower(game, action.powerId);
@@ -278,4 +433,17 @@ export function actionKey(action) {
 
 export function cloneGame(game) {
   return structuredClone(game);
+}
+
+function uniqueViolations(violations) {
+  const unique = new Map();
+  for (const violation of violations) unique.set(JSON.stringify(violation), violation);
+  return [...unique.values()];
+}
+
+function sameActionValue(left, right) {
+  if (left === right) return true;
+  if (left == null || right == null) return false;
+  if (typeof left !== "object" || typeof right !== "object") return false;
+  return JSON.stringify(left) === JSON.stringify(right);
 }

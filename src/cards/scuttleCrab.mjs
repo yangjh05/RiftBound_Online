@@ -29,11 +29,13 @@ export default card({
         },
         {
           "timing": "death",
-          "kind": "revealOpponentHand"
+          "kind": "revealOpponentHand",
+          "abilityId": "deathknell"
         },
         {
           "timing": "death",
           "kind": "gainXp",
+          "abilityId": "deathknell",
           "amount": 1
         }
       ]

@@ -1,17 +1,23 @@
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, createPrivateKey, createPublicKey, sign } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
 import { copyFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { createRequire } from "node:module";
+import { loadProjectEnv } from "./load-project-env.mjs";
 
 const root = process.cwd();
+loadProjectEnv(root);
+const require = createRequire(import.meta.url);
+const { manifestSignaturePayload } = require("../electron/updater.cjs");
 const distDir = path.join(root, "dist");
 const portableExe = path.join(distDir, "Riftbound Online.exe");
 const builderBin = process.platform === "win32"
   ? path.join(root, "node_modules", ".bin", "electron-builder.cmd")
   : path.join(root, "node_modules", ".bin", "electron-builder");
 
+const signingKey = await loadSigningKey();
 const buildInfo = await prepareBuildInfo();
 await cleanBuildArtifacts();
 let code = await runBuilder();
@@ -34,7 +40,8 @@ async function prepareBuildInfo() {
     buildId,
     version: packageJson.version,
     publishedAt,
-    updateBaseUrl: process.env.RIFTBOUND_UPDATE_URL || packageJson.riftboundUpdateBaseUrl || ""
+    updateBaseUrl: process.env.RIFTBOUND_UPDATE_URL || packageJson.riftboundUpdateBaseUrl || "",
+    multiplayerBaseUrl: process.env.RIFTBOUND_MULTIPLAYER_URL || packageJson.riftboundMultiplayerBaseUrl || ""
   };
   await writeFile(path.join(root, "build-info.json"), `${JSON.stringify(info, null, 2)}\n`, "utf8");
   return info;
@@ -48,18 +55,36 @@ async function publishUpdate(buildInfo) {
   await mkdir(publishedDir, { recursive: true });
   await copyFile(portableExe, publishedExe);
 
-  const manifest = {
+  const unsignedManifest = {
     ok: true,
     ...buildInfo,
     size: artifact.size,
     sha256,
     downloadUrl: `/api/update/download/${encodeURIComponent(buildInfo.buildId)}`
   };
+  const manifest = {
+    ...unsignedManifest,
+    signature: sign(null, manifestSignaturePayload(unsignedManifest), signingKey).toString("base64")
+  };
   const manifestPath = path.join(distDir, "update.json");
   const temporaryPath = `${manifestPath}.tmp`;
   await writeFile(temporaryPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
   await rename(temporaryPath, manifestPath);
   console.log(`Published update ${buildInfo.buildId} (${artifact.size} bytes).`);
+}
+
+async function loadSigningKey() {
+  const configured = process.env.RIFTBOUND_UPDATE_PRIVATE_KEY || path.join(root, ".secrets", "update-private-key.pem");
+  const pem = configured.includes("BEGIN PRIVATE KEY") ? configured : await readFile(path.resolve(configured), "utf8");
+  const privateKey = createPrivateKey(pem);
+  if (privateKey.asymmetricKeyType !== "ed25519") throw new Error("The update signing key must be an Ed25519 private key.");
+
+  const bundledPublicKey = await readFile(path.join(root, "electron", "update-public-key.pub"), "utf8");
+  const derivedPublicKey = createPublicKey(privateKey).export({ type: "spki", format: "pem" }).trim();
+  if (derivedPublicKey !== bundledPublicKey.trim()) {
+    throw new Error("The update private key does not match electron/update-public-key.pub.");
+  }
+  return privateKey;
 }
 
 async function sha256File(filePath) {

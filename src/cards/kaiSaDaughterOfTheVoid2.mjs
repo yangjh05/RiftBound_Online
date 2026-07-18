@@ -12,16 +12,14 @@ export default card({
   keywords: [],
   power: [],
   image: "https://cdn.piltoverarchive.com/cards/OGN-299.webp",
-  text: "Tap: REACTION - ADD Rune. Use only to play spells. (Abilities that add resources can't be reacted to.)",
+  text: "Tap: REACTION - ADD 1 Any Power. Use only to play spells. (Abilities that add resources can't be reacted to.)",
   effects: [
   {
     "timing": "activated",
-    "kind": "addEnergy",
+    "exhaust": true,
+    "kind": "addPower",
     "amount": 1,
-    "domains": [
-      "Fury",
-      "Mind"
-    ],
+    "domain": "Any",
     "restriction": "spell",
     "nonReactive": true,
     "abilityKeywords": ["Reaction"]

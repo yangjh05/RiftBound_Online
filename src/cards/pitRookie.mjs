@@ -19,7 +19,7 @@ export default card({
   {
     "timing": "onPlay",
     "kind": "buffUnit",
-    "target": "friendlyUnit",
+    "target": "anotherFriendlyUnit",
     "amount": 1,
     "optional": false
   }

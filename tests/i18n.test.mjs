@@ -46,8 +46,10 @@ test("Korean translations use authored card sentences for example champion cards
 
 test("Korean card tags and Any power render like localized card metadata", () => {
   const yasuo = byNumber("OGN-076/298");
+  const spellThief = byNumber("UNL-192/219");
   assert.deepEqual(translateCardTags(yasuo, "ko"), ["챔피언 유닛", "야스오", "아이오니아"]);
   assert.equal(translateCostDomain("Any", "ko", yasuo), "인내");
+  assert.equal(translateCostDomain("Any", "ko", spellThief), "인내/신체");
 });
 
 test("Korean translation bundle normalizes requested keyword terms", () => {
@@ -63,9 +65,13 @@ test("Korean translation bundle normalizes requested keyword terms", () => {
   assert.match(translateCardText(byNumber("UNL-113/219"), "ko"), /\[추적 2\]/u);
 });
 
-test("unconfirmed Korean keyword translations are marked", () => {
-  assert.equal(translateKeyword("Deathknell", "ko"), "유언 (미확정)");
-  assert.equal(translationMetadata().keywords.Deathknell.confirmed, false);
+test("official FAQ keyword translations are confirmed", () => {
+  assert.equal(translateKeyword("Deathknell", "ko"), "죽음의 종소리");
+  assert.equal(translateKeyword("Deflect", "ko"), "굴절");
+  assert.equal(translateKeyword("Vision", "ko"), "통찰");
+  assert.equal(translationMetadata().keywords.Deathknell.confirmed, true);
+  assert.equal(translationMetadata().keywords.Deflect.confirmed, true);
+  assert.equal(translationMetadata().keywords.Vision.confirmed, true);
   assert.equal(translationMetadata().keywords.Action.confirmed, true);
 });
 
@@ -86,11 +92,12 @@ test("every playable card has authored Korean metadata and text", () => {
     const translation = CARD_KO_TRANSLATIONS[card.cardNumber] || CARD_KO_TRANSLATIONS[card.collectorNumber];
     assert.ok(translation?.koName, `missing Korean metadata for ${card.cardNumber}`);
     if (card.text) {
-      assert.match(
-        translateCardText(card, "ko"),
-        /^공식 번역 미확인\n/u,
-        `missing Korean text for ${card.cardNumber}`
-      );
+      const translated = translateCardText(card, "ko");
+      if (translation.officialTextSource) {
+        assert.doesNotMatch(translated, /^공식 번역 미확인\n/u, `confirmed FAQ text still marked for ${card.cardNumber}`);
+      } else {
+        assert.match(translated, /^공식 번역 미확인\n/u, `missing Korean text for ${card.cardNumber}`);
+      }
     }
   }
 });
@@ -103,7 +110,8 @@ test("all Korean card translations follow the project terminology and style rule
   const allMetadata = translations.map((entry) => `${entry.koName}\n${entry.koHeader}\n${entry.koTypeLine}`).join("\n");
 
   assert.doesNotMatch(allText, /(?:^|[\s("])(?:내가|나와|나는|나를|나에게)(?=[\s,.)]|$)/u);
-  assert.doesNotMatch(allText, /소환|내려놓|휴지통|쓰레기통|얻습니다|사망/u);
+  assert.doesNotMatch(allText, /소환|내려놓|휴지통|쓰레기통|얻습니다/u);
+  assert.doesNotMatch(allText, /쇼다운|메인 덱|파워|장비|유언|예지|회수/u);
   assert.doesNotMatch(allText, /\[은신(?:\s|\])|\[방벽(?:\s|\])|\[사냥(?:\s|\])/u);
   assert.doesNotMatch(allText, /유닛\s*\d+장|유닛 토큰\s*\d+개|유닛 토큰\s*\d+명를/u);
   assert.doesNotMatch(allText, /공격하거나|방어하거나|정복하거나|점거하거나/u);
@@ -117,8 +125,57 @@ test("all Korean card translations follow the project terminology and style rule
 test("meaning-sensitive Korean corrections preserve card costs and conditions", () => {
   assert.match(
     translateCardText(byNumber("OGN-226/298"), "ko"),
-    /에너지 비용이 3 이하이고 파워 비용이 1 이하인 유닛 1명/u
+    /에너지 비용이 3 이하이고 힘 비용이 1 이하인 유닛 1명/u
   );
   assert.equal(translateCardName(byNumber("OGS-001/024"), "ko"), "애니, 불꽃");
   assert.match(translateCardText(byNumber("OGN-060/298"), "ko"), /공격하면 혹은 방어하면/u);
+});
+
+test("Korean card translations distinguish energy and power costs from rune cards", () => {
+  const allText = Object.values(CARD_KO_TRANSLATIONS).map((entry) => entry.koText || "").join("\n");
+
+  assert.doesNotMatch(allText, /룬으로 반응|룬(?:\s*\d+개)?를\s*지불|룬 대신|룬 힘|자원\s*\d+/u);
+  assert.match(translateCardText(byNumber("OGN-053/298"), "ko"), /힘으로 반응하여 에너지 0으로 사용/u);
+  assert.match(translateCardText(byNumber("OGN-041/298"), "ko"), /힘 2를 지불/u);
+  assert.match(translateCardText(byNumber("OGN-263/298"), "ko"), /힘 대신 에너지 1/u);
+  assert.match(translateCardText(byNumber("OGN-268/298"), "ko"), /힘을 원하는 만큼 지불/u);
+  assert.match(translateCardText(byNumber("OGN-269/298"), "ko"), /힘 1을 지불/u);
+  assert.match(translateCardText(byNumber("OGN-047/298"), "ko"), /룬 1개를 탈진 상태로 채널/u);
+});
+
+test("official Origins FAQ card text is applied without an unconfirmed marker", () => {
+  assert.equal(translateCardName(byNumber("OGN-108/298"), "ko"), "수렴 변이");
+  assert.equal(translateCardName(byNumber("OGN-102/298"), "ko"), "차원문 구출");
+  assert.match(translateCardText(byNumber("OGN-190/298"), "ko"), /^\[죽음의 종소리\]/u);
+  assert.match(translateCardText(byNumber("OGN-235/298"), "ko"), /^\[통찰\]/u);
+  assert.match(translateCardText(byNumber("OGN-258/298"), "ko"), /이후 다음을 수행:/u);
+  assert.match(translateCardText(byNumber("OGN-269/298"), "ko"), /사망하게 될 경우/u);
+});
+
+test("Korean card headers match card energy and power costs", () => {
+  const domainNames = {
+    Body: "신체",
+    Calm: "인내",
+    Chaos: "혼돈",
+    Fury: "격노",
+    Mind: "정신",
+    Order: "질서"
+  };
+
+  for (const card of Object.values(cards)) {
+    const translation = CARD_KO_TRANSLATIONS[card.cardNumber] || CARD_KO_TRANSLATIONS[card.collectorNumber];
+    if (card.energy > 0) {
+      assert.match(translation.koHeader, new RegExp(`${card.energy} 에너지`, "u"), `${card.cardNumber} energy header mismatch`);
+    }
+
+    for (const cost of card.power || []) {
+      const domains = cost.domain === "Any" ? card.domains : [cost.domain];
+      const label = domains.map((domain) => domainNames[domain]).join("/");
+      assert.match(
+        translation.koHeader,
+        new RegExp(`${cost.amount} ${label} 힘`, "u"),
+        `${card.cardNumber} power header mismatch`
+      );
+    }
+  }
 });

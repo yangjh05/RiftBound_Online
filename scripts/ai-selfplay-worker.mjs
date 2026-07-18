@@ -17,7 +17,8 @@ const result = collectSequential({
   shapingWeight: workerData.shapingWeight,
   seed: workerData.seed,
   maxActions: workerData.maxActions,
-  temperature: workerData.temperature
+  temperature: workerData.temperature,
+  engineFingerprint: workerData.engineFingerprint
 });
 
 parentPort.postMessage(result);

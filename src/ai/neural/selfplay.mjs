@@ -1,13 +1,14 @@
 import { Worker } from "node:worker_threads";
 import { createGame } from "../../engine.mjs";
-import { activeActorId, applyAiAction, enumerateLegalActions } from "../actions.mjs";
+import { activeActorId, applyAiAction, auditDecisionBoundary, enumerateLegalActions, actionKey } from "../actions.mjs";
 import { updateDeckLearning } from "../deckbuilding.mjs";
+import { DEFAULT_AI_MODEL, scoreActions } from "../policy.mjs";
 import { encodeOpponentDeckTarget } from "./encoding.mjs";
 import { createNeuralSession, deserializeNeuralModel, serializeNeuralModel } from "./model.mjs";
 
 export function playNeuralSelfPlayGame(options) {
   const { decks, model, maxActions = 600, random = Math.random, firstPlayerId = "p1" } = options;
-  const game = createGame({ decks, firstPlayerId, interactive: true, manualActionChainPriority: true });
+  const game = createGame({ decks, firstPlayerId, interactive: true, manualActionChainPriority: true, decisionSafety: "strict" });
   const models = options.models || [model, model];
   const sessions = models.map((seatModel) => createNeuralSession(seatModel));
   const trainableSeats = new Set(options.trainableSeats || [0, 1]);
@@ -15,6 +16,8 @@ export function playNeuralSelfPlayGame(options) {
   let actionCount = 0;
   while (game.phase !== "complete" && actionCount < maxActions) {
     const actorId = activeActorId(game);
+    const boundaryViolations = auditDecisionBoundary(game, actorId);
+    if (boundaryViolations.length) throw new Error(`Decision safety violation: ${boundaryViolations[0].kind}`);
     const seat = game.players.findIndex((player) => player.id === actorId);
     const legal = enumerateLegalActions(game, actorId);
     if (!actorId || !legal.length) break;
@@ -32,23 +35,37 @@ export function playNeuralSelfPlayGame(options) {
       value: decision.value,
       beliefTarget,
         initialMemory: decision.initialMemory,
+        selectedActionKey: actionKey(decision.action),
+        legalActionKeys: legal.map(actionKey),
+        originalLegalCount: legal.length,
         shapedReward: 0
       };
       trajectories.get(actorId).push(recordedStep);
     }
     const result = applyAiAction(game, decision.action, actorId);
     if (!result?.ok) throw new Error(`Neural policy selected illegal action: ${decision.action.kind}`);
+    const postActionViolations = auditDecisionBoundary(game);
+    if (postActionViolations.length) throw new Error(`Decision safety violation: ${postActionViolations[0].kind}`);
     if (recordedStep) recordedStep.shapedReward = (options.gamma || 0.997) * shapingPotential(game, actorId) - beforePotential;
     actionCount += 1;
   }
-  const rewards = terminalRewards(game);
+  const completed = game.phase === "complete" && Boolean(game.winnerId);
+  const rewards = completed ? terminalRewards(game) : null;
   const outputTrajectories = [];
   for (let seat = 0; seat < game.players.length; seat += 1) {
     const player = game.players[seat];
     if (!trainableSeats.has(seat)) continue;
     const steps = trajectories.get(player.id);
+    if (!completed) continue;
     applyGeneralizedAdvantageEstimation(steps, rewards[player.id], options.gamma || 0.997, options.gaeLambda || 0.95, options.shapingWeight || 0);
-    outputTrajectories.push({ playerId: player.id, steps });
+    outputTrajectories.push({
+      playerId: player.id,
+      completed: true,
+      engineFingerprint: options.engineFingerprint || null,
+      decisionSafetyVersion: game.decisionSafety?.version || null,
+      decisionSafetyViolations: structuredClone(game.decisionSafety?.violations || []),
+      steps
+    });
   }
   return {
     trajectories: outputTrajectories,
@@ -57,7 +74,8 @@ export function playNeuralSelfPlayGame(options) {
       completed: game.phase === "complete",
       actions: actionCount,
       scores: game.players.map((player) => player.score),
-      deckIds: decks.map((deck) => deck.id)
+      deckIds: decks.map((deck) => deck.id),
+      decisionSafetyViolations: structuredClone(game.decisionSafety?.violations || [])
     },
     game
   };
@@ -90,11 +108,7 @@ export function playNeuralBestOfThree(options) {
       matchSteps[seat].push(...trajectory.steps);
     }
     const actualWinnerSeat = played.game.winnerId === "p1" ? 0 : played.game.winnerId === "p2" ? 1 : -1;
-    const scoreDifference = played.game.players[0].score - played.game.players[1].score;
-    const winnerSeat = actualWinnerSeat >= 0
-      ? actualWinnerSeat
-      : options.adjudicateIncomplete === false || scoreDifference === 0 ? -1 : scoreDifference > 0 ? 0 : 1;
-    if (actualWinnerSeat < 0 && winnerSeat >= 0) games.at(-1).adjudicatedWinnerId = `p${winnerSeat + 1}`;
+    const winnerSeat = actualWinnerSeat;
     if (winnerSeat >= 0) wins[winnerSeat] += 1;
     if (Math.max(...wins) >= 2 || gameNumber === 3) break;
     if (winnerSeat < 0) continue;
@@ -133,7 +147,15 @@ export function playNeuralBestOfThree(options) {
     if (!trainableSeats.has(seat)) continue;
     const reward = winnerSeat < 0 ? 0 : winnerSeat === seat ? 1 : -1;
     applyGeneralizedAdvantageEstimation(matchSteps[seat], reward, options.gamma || 0.997, options.gaeLambda || 0.95, options.shapingWeight || 0);
-    trajectories.push({ playerId: `p${seat + 1}`, match: true, steps: matchSteps[seat] });
+    trajectories.push({
+      playerId: `p${seat + 1}`,
+      match: true,
+      completed: winnerSeat >= 0,
+      engineFingerprint: options.engineFingerprint || null,
+      decisionSafetyVersion: 1,
+      decisionSafetyViolations: games.flatMap((game) => game.decisionSafetyViolations || []),
+      steps: matchSteps[seat]
+    });
   }
   return {
     trajectories,
@@ -179,23 +201,31 @@ export function applyResolvedSideboardSwap(deck, action) {
 }
 
 export function evaluateNeuralModels(candidate, champion, decks, options = {}) {
-  const games = Math.max(2, options.games || 20);
+  const games = Math.max(4, Math.ceil((options.games || 20) / 4) * 4);
   const random = seededRandom(options.seed || Date.now());
   let candidateWins = 0;
   let completed = 0;
   const seatStats = [{ games: 0, completed: 0, wins: 0 }, { games: 0, completed: 0, wins: 0 }];
   const summaries = [];
+  let pair = null;
   for (let gameIndex = 0; gameIndex < games; gameIndex += 1) {
     const candidateSeat = gameIndex % 2;
-    const pair = pickDeckPair(decks, random);
-    const game = createGame({ decks: pair, firstPlayerId: gameIndex % 2 ? "p2" : "p1", interactive: true, manualActionChainPriority: true });
+    if (gameIndex % 4 === 0) pair = pickDeckPair(decks, random);
+    const firstPlayerId = Math.floor(gameIndex / 2) % 2 ? "p2" : "p1";
+    const gameSeed = ((options.seed || 1) + Math.floor(gameIndex / 4) * 104729) >>> 0;
+    const game = createGame({ decks: pair, firstPlayerId, interactive: true, manualActionChainPriority: true, decisionSafety: "strict", random: seededRandom(gameSeed), randomSeed: gameSeed });
     const sessions = [createNeuralSession(candidateSeat === 0 ? candidate : champion), createNeuralSession(candidateSeat === 1 ? candidate : champion)];
+    const decisionRandom = seededRandom(gameSeed ^ (gameIndex * 2654435761));
     for (let actionCount = 0; actionCount < (options.maxActions || 600) && game.phase !== "complete"; actionCount += 1) {
       const actorId = activeActorId(game);
+      const boundaryViolations = auditDecisionBoundary(game, actorId);
+      if (boundaryViolations.length) throw new Error(`Decision safety violation: ${boundaryViolations[0].kind}`);
       const seat = game.players.findIndex((player) => player.id === actorId);
       const legal = enumerateLegalActions(game, actorId);
-      const selected = sessions[seat].decide(game, actorId, legal, { temperature: options.temperature || 0.2, random });
+      const selected = sessions[seat].decide(game, actorId, legal, { temperature: options.temperature || 0.2, random: decisionRandom });
       if (!selected || !applyAiAction(game, selected.action, actorId)?.ok) break;
+      const postActionViolations = auditDecisionBoundary(game);
+      if (postActionViolations.length) throw new Error(`Decision safety violation: ${postActionViolations[0].kind}`);
     }
     const didComplete = game.phase === "complete";
     seatStats[candidateSeat].games += 1;
@@ -205,7 +235,7 @@ export function evaluateNeuralModels(candidate, champion, decks, options = {}) {
       if (game.winnerId === game.players[candidateSeat].id) candidateWins += 1;
       if (game.winnerId === game.players[candidateSeat].id) seatStats[candidateSeat].wins += 1;
     }
-    summaries.push({ completed: didComplete, winnerId: game.winnerId || null, candidateSeat, scores: game.players.map((player) => player.score) });
+    summaries.push({ completed: didComplete, winnerId: game.winnerId || null, candidateSeat, firstPlayerId, gameSeed, deckIds: pair.map((deck) => deck.id), scores: game.players.map((player) => player.score) });
   }
   const winRate = completed ? candidateWins / completed : 0;
   const wilsonLowerBound = wilsonLower(candidateWins, completed);
@@ -219,7 +249,7 @@ export function evaluateNeuralModels(candidate, champion, decks, options = {}) {
 
 export function evaluateNeuralLeague(candidate, opponents, decks, options = {}) {
   const pool = opponents.length ? opponents : [candidate];
-  const gamesPerOpponent = Math.max(2, Math.ceil((options.games || 20) / pool.length));
+  const gamesPerOpponent = leagueGamesPerOpponent(pool.length, options);
   const results = pool.map((opponent, index) => evaluateNeuralModels(candidate, opponent, decks, {
     ...options,
     games: gamesPerOpponent,
@@ -239,6 +269,61 @@ export function evaluateNeuralLeague(candidate, opponents, decks, options = {}) 
     maxSeatGap: Math.max(...results.map((result) => result.seatGap || 0)),
     results
   };
+}
+
+export function leagueGamesPerOpponent(opponentCount, options = {}) {
+  return Math.max(20, Math.ceil(options.gamesPerOpponent || (options.games || 20) / Math.max(1, opponentCount)));
+}
+
+export function evaluateNeuralAgainstHeuristic(candidate, decks, options = {}) {
+  const games = Math.max(4, Math.ceil((options.games || 40) / 4) * 4);
+  const pairRandom = seededRandom(options.seed || Date.now());
+  let candidateWins = 0;
+  let completed = 0;
+  const seatStats = [{ games: 0, completed: 0, wins: 0 }, { games: 0, completed: 0, wins: 0 }];
+  const summaries = [];
+  let pair = null;
+  for (let gameIndex = 0; gameIndex < games; gameIndex += 1) {
+    const candidateSeat = gameIndex % 2;
+    if (gameIndex % 4 === 0) pair = pickDeckPair(decks, pairRandom);
+    const firstPlayerId = Math.floor(gameIndex / 2) % 2 ? "p2" : "p1";
+    const gameSeed = ((options.seed || 1) + Math.floor(gameIndex / 4) * 130363) >>> 0;
+    const game = createGame({ decks: pair, firstPlayerId, interactive: true, manualActionChainPriority: true, decisionSafety: "strict", random: seededRandom(gameSeed), randomSeed: gameSeed });
+    const candidateSession = createNeuralSession(candidate);
+    const decisionRandom = seededRandom(gameSeed ^ (gameIndex * 2246822519));
+    for (let actionCount = 0; actionCount < (options.maxActions || 600) && game.phase !== "complete"; actionCount += 1) {
+      const actorId = activeActorId(game);
+      const boundaryViolations = auditDecisionBoundary(game, actorId);
+      if (boundaryViolations.length) throw new Error(`Decision safety violation: ${boundaryViolations[0].kind}`);
+      const seat = game.players.findIndex((player) => player.id === actorId);
+      const legal = enumerateLegalActions(game, actorId);
+      const action = seat === candidateSeat
+        ? candidateSession.decide(game, actorId, legal, { temperature: options.temperature || 0.2, random: decisionRandom })?.action
+        : scoreActions(game, actorId, legal, options.baseline || DEFAULT_AI_MODEL)[0]?.action;
+      if (!action || !applyAiAction(game, action, actorId)?.ok) break;
+      const postActionViolations = auditDecisionBoundary(game);
+      if (postActionViolations.length) throw new Error(`Decision safety violation: ${postActionViolations[0].kind}`);
+    }
+    const didComplete = game.phase === "complete";
+    seatStats[candidateSeat].games += 1;
+    if (didComplete) {
+      completed += 1;
+      seatStats[candidateSeat].completed += 1;
+      if (game.winnerId === game.players[candidateSeat].id) {
+        candidateWins += 1;
+        seatStats[candidateSeat].wins += 1;
+      }
+    }
+    summaries.push({ completed: didComplete, winnerId: game.winnerId || null, candidateSeat, firstPlayerId, gameSeed, deckIds: pair.map((deck) => deck.id), scores: game.players.map((player) => player.score) });
+  }
+  for (const stat of seatStats) {
+    stat.winRate = stat.completed ? stat.wins / stat.completed : 0;
+    stat.wilsonLowerBound = wilsonLower(stat.wins, stat.completed);
+  }
+  const winRate = completed ? candidateWins / completed : 0;
+  const wilsonLowerBound = wilsonLower(candidateWins, completed);
+  const seatGap = Math.abs(seatStats[0].winRate - seatStats[1].winRate);
+  return { games, completed, candidateWins, winRate, wilsonLowerBound, seatStats, seatGap, promoted: completed >= Math.ceil(games * 0.8) && wilsonLowerBound >= (options.wilsonThreshold ?? 0.4) && seatGap <= (options.maxSeatGap || 0.2), summaries };
 }
 
 export async function collectParallelSelfPlay(options) {
@@ -261,6 +346,7 @@ export async function collectParallelSelfPlay(options) {
         meta: options.meta || null,
         matchFraction: options.matchFraction ?? 0.25,
         shapingWeight: options.shapingWeight || 0,
+        engineFingerprint: options.engineFingerprint || null,
         deckIds: options.decks.map((deck) => deck.id)
       }
     });
@@ -360,7 +446,7 @@ export function seededRandom(seed) {
   return () => ((state = (state * 1664525 + 1013904223) >>> 0) / 0x100000000);
 }
 
-function applyGeneralizedAdvantageEstimation(steps, terminalReward, gamma, lambda, shapingWeight = 0) {
+export function applyGeneralizedAdvantageEstimation(steps, terminalReward, gamma, lambda, shapingWeight = 0) {
   let gae = 0;
   for (let index = steps.length - 1; index >= 0; index -= 1) {
     const terminal = index === steps.length - 1;
@@ -386,11 +472,9 @@ function shapingPotential(game, viewerId) {
   return Math.tanh(score * 1.5 + board * 0.35 + resources * 0.1);
 }
 
-function terminalRewards(game) {
-  if (game.phase === "complete" && game.winnerId) return Object.fromEntries(game.players.map((player) => [player.id, player.id === game.winnerId ? 1 : -1]));
-  const [first, second] = game.players;
-  const partial = Math.tanh(((first.score || 0) - (second.score || 0)) / Math.max(1, game.victoryScore));
-  return { [first.id]: partial, [second.id]: -partial };
+export function terminalRewards(game) {
+  if (game.phase !== "complete" || !game.winnerId) return null;
+  return Object.fromEntries(game.players.map((player) => [player.id, player.id === game.winnerId ? 1 : -1]));
 }
 
 function pickDeckPair(decks, random, meta = null) {

@@ -430,6 +430,7 @@
         {
           "timing": "static",
           "kind": "costModifier",
+          "appliesTo": "self",
           "energy": -2,
           "minEnergy": 0,
           "requiresLegion": true
@@ -578,9 +579,14 @@
       "traits": [],
       "effects": [
         {
+          "timing": "static",
+          "kind": "entersExhausted"
+        },
+        {
           "timing": "activated",
           "kind": "dealDamageUnit",
           "amount": 2,
+          "exhaust": true,
           "target": "battlefieldUnit"
         }
       ]
@@ -599,11 +605,10 @@
       "power": [],
       "might": 3,
       "isChampion": false,
-      "additionalCost": null,
-      "traits": [
-        "Hidden",
-        "Noxus",
-        "Trifarian"
+        "additionalCost": null,
+        "traits": [
+          "Noxus",
+          "Trifarian"
       ],
       "effects": [
         {
@@ -704,6 +709,7 @@
         {
           "timing": "activated",
           "kind": "nextUnitEnterReady",
+          "exhaust": true,
           "requiresLegion": true
         }
       ]
@@ -758,8 +764,9 @@
         {
           "timing": "activated",
           "kind": "saveFriendlyUnitThisTurn",
-          "costRecycleTrash": 1,
-          "domain": "Fury"
+          "costDiscard": 1,
+          "domain": "Fury",
+          "exhaust": true
         }
       ]
     },
@@ -983,6 +990,7 @@
           "allowRepeatedTargets": true,
           "amount": 3,
           "repeat": 2,
+          "selectRepeatedTargetsOnPlay": true,
           "target": "unit"
         }
       ]
@@ -1109,7 +1117,8 @@
         {
           "timing": "activated",
           "kind": "nextSpellBonusDamage",
-          "amount": 1
+          "amount": 1,
+          "exhaust": true
         }
       ]
     },
@@ -1326,7 +1335,7 @@
       "name": "Kai'Sa, Survivor",
       "set": "Origins",
       "rarity": "Epic",
-      "textSha256": "9abe90ad09a88879f58b01eb80e9a8f38e28672a42495e6888e5d3b3a12ce94f",
+      "textSha256": "7079aaa64f2569c4e672023913e9a829316f2cee23f092c0787939ef0a885974",
       "type": "unit",
       "domains": [
         "Fury"
@@ -1356,7 +1365,7 @@
       "name": "Kai'Sa, Survivor",
       "set": "Origins",
       "rarity": "Showcase",
-      "textSha256": "9abe90ad09a88879f58b01eb80e9a8f38e28672a42495e6888e5d3b3a12ce94f",
+      "textSha256": "7079aaa64f2569c4e672023913e9a829316f2cee23f092c0787939ef0a885974",
       "type": "unit",
       "domains": [
         "Fury"
@@ -1386,7 +1395,7 @@
       "name": "Seal of Rage",
       "set": "Origins",
       "rarity": "Epic",
-      "textSha256": "1771a06ca19c5094381932de093a903d3084374aa8a47099a4372f3f436db6f7",
+      "textSha256": "c42cc7fb04227a852ad8dcff67827b37a4107e0afb3dfe6df62d41550d544549",
       "type": "gear",
       "domains": [
         "Fury"
@@ -1405,14 +1414,13 @@
       "effects": [
         {
           "timing": "activated",
-          "kind": "addEnergy",
+          "kind": "addPower",
           "abilityKeywords": [
             "Reaction"
           ],
           "amount": 1,
-          "domains": [
-            "Fury"
-          ],
+          "domain": "Fury",
+          "exhaust": true,
           "nonReactive": true,
           "restriction": null
         }
@@ -2415,6 +2423,7 @@
           "timing": "activated",
           "kind": "dealDamageUnit",
           "amountFromSelfMight": true,
+          "exhaust": true,
           "sourceLocation": "battlefield",
           "target": "battlefieldUnit"
         }
@@ -2480,6 +2489,10 @@
         {
           "timing": "static",
           "kind": "opponentsUnitsOnlyToBase"
+        },
+        {
+          "timing": "static",
+          "kind": "opponentsCannotReadyByEffects"
         }
       ]
     },
@@ -2626,11 +2639,13 @@
         {
           "timing": "death",
           "kind": "channelRunes",
+          "abilityId": "deathknell",
           "amount": 2
         },
         {
           "timing": "death",
           "kind": "draw",
+          "abilityId": "deathknell",
           "amount": 1
         }
       ]
@@ -2759,6 +2774,7 @@
           "timing": "activated",
           "kind": "buffUnit",
           "amount": 1,
+          "exhaust": true,
           "maxBuffs": 999,
           "target": "self"
         }
@@ -2795,6 +2811,7 @@
           "timing": "activated",
           "kind": "buffUnit",
           "amount": 1,
+          "exhaust": true,
           "maxBuffs": 999,
           "target": "self"
         }
@@ -2913,7 +2930,7 @@
       "name": "Seal of Focus",
       "set": "Origins",
       "rarity": "Epic",
-      "textSha256": "976f8804dc6c5e038b66808377faf59a95b16e686cfa69659218de1acde93842",
+      "textSha256": "6ac529722efdb9ae180b69dab83b01222ec9c4ed3ea9696b26653523c8750e42",
       "type": "gear",
       "domains": [
         "Calm"
@@ -2932,14 +2949,13 @@
       "effects": [
         {
           "timing": "activated",
-          "kind": "addEnergy",
+          "kind": "addPower",
           "abilityKeywords": [
             "Reaction"
           ],
           "amount": 1,
-          "domains": [
-            "Calm"
-          ],
+          "domain": "Calm",
+          "exhaust": true,
           "nonReactive": true,
           "restriction": null
         }
@@ -3293,6 +3309,7 @@
           "timing": "activated",
           "kind": "modifyMight",
           "amount": -1,
+          "exhaust": true,
           "minMight": 1,
           "target": "unit",
           "temporary": true
@@ -3547,6 +3564,7 @@
             "Chaos",
             "Order"
           ],
+          "exhaust": true,
           "nonReactive": true,
           "restriction": null
         }
@@ -3574,7 +3592,8 @@
           "kind": "draw",
           "amount": 1,
           "costEnergy": 1,
-          "costRecycleTrash": 3
+          "costRecycleTrash": 3,
+          "exhaust": true
         }
       ]
     },
@@ -3779,8 +3798,7 @@
       "isChampion": false,
       "additionalCost": null,
       "traits": [
-        "Fae",
-        "Temporary"
+        "Fae"
       ],
       "effects": [
         {
@@ -4036,7 +4054,7 @@
       "name": "Malzahar, Fanatic",
       "set": "Origins",
       "rarity": "Rare",
-      "textSha256": "09165a01d5f869bcba0c3571e930c63d1730181718c5871bc0a9de8472b12889",
+      "textSha256": "aa3e63720a70ad88818d3d873e150238254ce2ad6e7b460aefcb4c6b57a141b8",
       "type": "unit",
       "domains": [
         "Mind"
@@ -4054,10 +4072,14 @@
       "effects": [
         {
           "timing": "activated",
-          "kind": "killFriendlyPermanentChannelRune",
+          "kind": "addPower",
           "abilityKeywords": [
             "Action"
-          ]
+          ],
+          "amount": 2,
+          "domain": "Any",
+          "exhaust": true,
+          "killFriendlyPermanentCost": true
         }
       ]
     },
@@ -4328,7 +4350,7 @@
       "name": "Seal of Insight",
       "set": "Origins",
       "rarity": "Epic",
-      "textSha256": "74b0a69ffceb313a09e835f102c106af2feba535dfec86710c3542e8f8a2b4a7",
+      "textSha256": "ddec76ccb10f4a4e5c9234d0292cb1a05a7f0e9eaebe03e535852d82aadc0f83",
       "type": "gear",
       "domains": [
         "Mind"
@@ -4347,14 +4369,13 @@
       "effects": [
         {
           "timing": "activated",
-          "kind": "addEnergy",
+          "kind": "addPower",
           "abilityKeywords": [
             "Reaction"
           ],
           "amount": 1,
-          "domains": [
-            "Mind"
-          ],
+          "domain": "Mind",
+          "exhaust": true,
           "nonReactive": true,
           "restriction": null
         }
@@ -4514,6 +4535,7 @@
           "timing": "activated",
           "kind": "buffUnit",
           "amount": 1,
+          "exhaust": true,
           "target": "exhaustedFriendlyUnit"
         }
       ]
@@ -4951,7 +4973,7 @@
           "kind": "buffUnit",
           "amount": 1,
           "optional": false,
-          "target": "friendlyUnit"
+          "target": "anotherFriendlyUnit"
         }
       ]
     },
@@ -5849,7 +5871,7 @@
       "name": "Seal of Strength",
       "set": "Origins",
       "rarity": "Epic",
-      "textSha256": "4167a226f35c197db66d3c0ff1d1cd5dcf10c12efc532857c9c43b4d965d0b4a",
+      "textSha256": "17f55017cf8b2b57c2d0e1cfe80473df79479d1212c1b69f55922e98eb575677",
       "type": "gear",
       "domains": [
         "Body"
@@ -5868,14 +5890,13 @@
       "effects": [
         {
           "timing": "activated",
-          "kind": "addEnergy",
+          "kind": "addPower",
           "abilityKeywords": [
             "Reaction"
           ],
           "amount": 1,
-          "domains": [
-            "Body"
-          ],
+          "domain": "Body",
+          "exhaust": true,
           "nonReactive": true,
           "restriction": null
         }
@@ -5923,6 +5944,7 @@
           "timing": "activated",
           "kind": "modifyMight",
           "amount": 4,
+          "exhaust": false,
           "spendBuff": true,
           "target": "self",
           "temporary": true
@@ -5971,6 +5993,7 @@
           "timing": "activated",
           "kind": "modifyMight",
           "amount": 4,
+          "exhaust": false,
           "spendBuff": true,
           "target": "self",
           "temporary": true
@@ -6155,10 +6178,9 @@
       "power": [],
       "might": 4,
       "isChampion": false,
-      "additionalCost": null,
-      "traits": [
-        "Bandle City",
-        "Hidden"
+        "additionalCost": null,
+        "traits": [
+          "Bandle City"
       ],
       "effects": [
         {
@@ -6357,6 +6379,10 @@
       ],
       "effects": [
         {
+          "timing": "static",
+          "kind": "canEnterOpenBattlefield"
+        },
+        {
           "timing": "keyword",
           "kind": "predict",
           "instance": 1,
@@ -6547,7 +6573,8 @@
       "effects": [
         {
           "timing": "activated",
-          "kind": "returnFriendlyPermanentOrHiddenToHand"
+          "kind": "returnFriendlyPermanentOrHiddenToHand",
+          "exhaust": true
         }
       ]
     },
@@ -6633,6 +6660,7 @@
           "timing": "activated",
           "kind": "returnUnitToBase",
           "costEnergy": 1,
+          "exhaust": true,
           "target": "friendlyBattlefield"
         }
       ]
@@ -6684,11 +6712,13 @@
         {
           "timing": "death",
           "kind": "draw",
+          "abilityId": "leaves-board",
           "amount": 1
         },
         {
           "timing": "death",
           "kind": "channelRunes",
+          "abilityId": "leaves-board",
           "amount": 1
         },
         {
@@ -6699,7 +6729,8 @@
               "domain": "Chaos",
               "amount": 1
             }
-          ]
+          ],
+          "exhaust": true
         }
       ]
     },
@@ -6713,10 +6744,10 @@
       "domains": [
         "Chaos"
       ],
-      "energy": 3,
+      "energy": 4,
       "power": [
         {
-          "domain": "Any",
+          "domain": "Chaos",
           "amount": 1
         }
       ],
@@ -7194,7 +7225,7 @@
       "name": "Tideturner",
       "set": "Origins",
       "rarity": "Rare",
-      "textSha256": "2ecac4c118bb1b96aa604ffaaadfb6d11b7c1dba529aeb1a71d4a6f7ff13839a",
+        "textSha256": "bd2d192ee033f2ffa83552f1b3defea335df56f7f2b8658a3ecc2299e00fb733",
       "type": "unit",
       "domains": [
         "Chaos"
@@ -7209,10 +7240,11 @@
         "Hidden"
       ],
       "effects": [
-        {
-          "timing": "onPlay",
-          "kind": "swapWithControlledUnit",
-          "optional": true
+          {
+            "timing": "onPlay",
+            "kind": "swapWithControlledUnit",
+            "differentLocation": true,
+            "optional": true
         }
       ]
     },
@@ -7376,7 +7408,7 @@
       "name": "Seal of Discord",
       "set": "Origins",
       "rarity": "Epic",
-      "textSha256": "ac339e154af8692ea3f88697d4b9d1dfd18270f39ca080d0e052543a8e340414",
+      "textSha256": "b980827f341809944f7ddabc194435b084b4cae675a6a8c861571a5e06bd3464",
       "type": "gear",
       "domains": [
         "Chaos"
@@ -7395,14 +7427,13 @@
       "effects": [
         {
           "timing": "activated",
-          "kind": "addEnergy",
+          "kind": "addPower",
           "abilityKeywords": [
             "Reaction"
           ],
           "amount": 1,
-          "domains": [
-            "Chaos"
-          ],
+          "domain": "Chaos",
+          "exhaust": true,
           "nonReactive": true,
           "restriction": null
         }
@@ -7661,6 +7692,13 @@
           "destination": "base",
           "ready": false,
           "tokenCardNumber": "OGN-273/298"
+        },
+        {
+          "timing": "activated",
+          "kind": "recycleCardsFromTrashes",
+          "amount": 4,
+          "exhaust": false,
+          "killSelfCost": true
         }
       ]
     },
@@ -8079,7 +8117,7 @@
       "effects": [
         {
           "timing": "onPlay",
-          "kind": "modifySelfMight",
+          "kind": "buffSelfThenOtherFriendlyHere",
           "amount": 1,
           "buff": true
         }
@@ -8743,7 +8781,8 @@
               "domain": "Order",
               "amount": 1
             }
-          ]
+          ],
+          "exhaust": true
         }
       ]
     },
@@ -8860,7 +8899,7 @@
       "name": "Seal of Unity",
       "set": "Origins",
       "rarity": "Epic",
-      "textSha256": "e5c237350c3fb8e0b67eb31c177fd36bf3e12ba65ee1d821c6e305072101e3ae",
+      "textSha256": "7a230ecfcb95f54ef922a2baac171bfde854bed8010f25ab93d0433e830bb24c",
       "type": "gear",
       "domains": [
         "Order"
@@ -8879,14 +8918,13 @@
       "effects": [
         {
           "timing": "activated",
-          "kind": "addEnergy",
+          "kind": "addPower",
           "abilityKeywords": [
             "Reaction"
           ],
           "amount": 1,
-          "domains": [
-            "Order"
-          ],
+          "domain": "Order",
+          "exhaust": true,
           "nonReactive": true,
           "restriction": null
         }
@@ -8967,7 +9005,7 @@
       "name": "Kai'Sa, Daughter of the Void",
       "set": "Origins",
       "rarity": "Rare",
-      "textSha256": "8b4e1d80dc75885a25cf79d1cf96d9158731d5855389cdd95a055216e47dff88",
+      "textSha256": "087fc778fd56fd609849f55cf0d3ceab2c31393c539bc49cc18136c8e83e4540",
       "type": "legend",
       "domains": [
         "Fury",
@@ -8985,15 +9023,13 @@
       "effects": [
         {
           "timing": "activated",
-          "kind": "addEnergy",
+          "kind": "addPower",
           "abilityKeywords": [
             "Reaction"
           ],
           "amount": 1,
-          "domains": [
-            "Fury",
-            "Mind"
-          ],
+          "domain": "Any",
+          "exhaust": true,
           "nonReactive": true,
           "restriction": "spell"
         }
@@ -9032,6 +9068,7 @@
           "allowRepeatedTargets": true,
           "amount": 2,
           "repeat": 6,
+          "selectRepeatedTargetsOnPlay": true,
           "target": "unit"
         }
       ]
@@ -9200,6 +9237,7 @@
             "Fury",
             "Order"
           ],
+          "exhaust": true,
           "nonReactive": true,
           "requiresLegion": true,
           "restriction": null
@@ -9327,6 +9365,7 @@
           "kind": "buffUnit",
           "amount": 1,
           "costEnergy": 1,
+          "exhaust": true,
           "target": "friendlyUnit"
         }
       ]
@@ -9388,7 +9427,8 @@
         {
           "timing": "activated",
           "kind": "moveFriendlyUnit",
-          "costEnergy": 2
+          "costEnergy": 2,
+          "exhaust": true
         }
       ]
     },
@@ -9509,9 +9549,14 @@
       ],
       "effects": [
         {
+          "timing": "static",
+          "kind": "hideWithEnergyInsteadOfPower"
+        },
+        {
           "timing": "activated",
           "kind": "returnOwnedTagUnitToHand",
           "costEnergy": 1,
+          "exhaust": true,
           "tag": "Teemo"
         }
       ]
@@ -9643,6 +9688,7 @@
         {
           "timing": "activated",
           "kind": "giveKeyword",
+          "exhaust": true,
           "keywords": [
             "Ganking"
           ],
@@ -10361,7 +10407,7 @@
       "name": "Kai'Sa, Daughter of the Void",
       "set": "Origins",
       "rarity": "Showcase",
-      "textSha256": "8b4e1d80dc75885a25cf79d1cf96d9158731d5855389cdd95a055216e47dff88",
+      "textSha256": "087fc778fd56fd609849f55cf0d3ceab2c31393c539bc49cc18136c8e83e4540",
       "type": "legend",
       "domains": [
         "Fury",
@@ -10378,15 +10424,13 @@
       "effects": [
         {
           "timing": "activated",
-          "kind": "addEnergy",
+          "kind": "addPower",
           "abilityKeywords": [
             "Reaction"
           ],
           "amount": 1,
-          "domains": [
-            "Fury",
-            "Mind"
-          ],
+          "domain": "Any",
+          "exhaust": true,
           "nonReactive": true,
           "restriction": "spell"
         }
@@ -10397,7 +10441,7 @@
       "name": "Kai'Sa, Daughter of the Void",
       "set": "Origins",
       "rarity": "Showcase",
-      "textSha256": "8b4e1d80dc75885a25cf79d1cf96d9158731d5855389cdd95a055216e47dff88",
+      "textSha256": "087fc778fd56fd609849f55cf0d3ceab2c31393c539bc49cc18136c8e83e4540",
       "type": "legend",
       "domains": [
         "Fury",
@@ -10414,15 +10458,13 @@
       "effects": [
         {
           "timing": "activated",
-          "kind": "addEnergy",
+          "kind": "addPower",
           "abilityKeywords": [
             "Reaction"
           ],
           "amount": 1,
-          "domains": [
-            "Fury",
-            "Mind"
-          ],
+          "domain": "Any",
+          "exhaust": true,
           "nonReactive": true,
           "restriction": "spell"
         }
@@ -10572,6 +10614,7 @@
             "Fury",
             "Order"
           ],
+          "exhaust": true,
           "nonReactive": true,
           "requiresLegion": true,
           "restriction": null
@@ -10610,6 +10653,7 @@
             "Fury",
             "Order"
           ],
+          "exhaust": true,
           "nonReactive": true,
           "requiresLegion": true,
           "restriction": null
@@ -10699,6 +10743,7 @@
           "kind": "buffUnit",
           "amount": 1,
           "costEnergy": 1,
+          "exhaust": true,
           "target": "friendlyUnit"
         }
       ]
@@ -10728,6 +10773,7 @@
           "kind": "buffUnit",
           "amount": 1,
           "costEnergy": 1,
+          "exhaust": true,
           "target": "friendlyUnit"
         }
       ]
@@ -10755,7 +10801,8 @@
         {
           "timing": "activated",
           "kind": "moveFriendlyUnit",
-          "costEnergy": 2
+          "costEnergy": 2,
+          "exhaust": true
         }
       ]
     },
@@ -10782,7 +10829,8 @@
         {
           "timing": "activated",
           "kind": "moveFriendlyUnit",
-          "costEnergy": 2
+          "costEnergy": 2,
+          "exhaust": true
         }
       ]
     },
@@ -10862,9 +10910,14 @@
       ],
       "effects": [
         {
+          "timing": "static",
+          "kind": "hideWithEnergyInsteadOfPower"
+        },
+        {
           "timing": "activated",
           "kind": "returnOwnedTagUnitToHand",
           "costEnergy": 1,
+          "exhaust": true,
           "tag": "Teemo"
         }
       ]
@@ -10891,9 +10944,14 @@
       ],
       "effects": [
         {
+          "timing": "static",
+          "kind": "hideWithEnergyInsteadOfPower"
+        },
+        {
           "timing": "activated",
           "kind": "returnOwnedTagUnitToHand",
           "costEnergy": 1,
+          "exhaust": true,
           "tag": "Teemo"
         }
       ]
@@ -10986,6 +11044,7 @@
         {
           "timing": "activated",
           "kind": "giveKeyword",
+          "exhaust": true,
           "keywords": [
             "Ganking"
           ],
@@ -11017,6 +11076,7 @@
         {
           "timing": "activated",
           "kind": "giveKeyword",
+          "exhaust": true,
           "keywords": [
             "Ganking"
           ],
@@ -11516,6 +11576,7 @@
             "Reaction"
           ],
           "amount": 2,
+          "exhaust": true,
           "exhaustSelf": true,
           "restriction": "spell"
         }
@@ -11906,7 +11967,8 @@
         {
           "timing": "activated",
           "kind": "equip",
-          "domain": "Calm"
+          "domain": "Calm",
+          "exhaust": false
         },
         {
           "timing": "static",
@@ -12037,7 +12099,8 @@
         {
           "timing": "activated",
           "kind": "equip",
-          "domain": "Body"
+          "domain": "Body",
+          "exhaust": false
         },
         {
           "timing": "static",
@@ -12245,11 +12308,13 @@
         },
         {
           "timing": "death",
-          "kind": "revealOpponentHand"
+          "kind": "revealOpponentHand",
+          "abilityId": "deathknell"
         },
         {
           "timing": "death",
           "kind": "gainXp",
+          "abilityId": "deathknell",
           "amount": 1
         }
       ]
@@ -12694,6 +12759,7 @@
             "Reaction"
           ],
           "amount": 1,
+          "exhaust": true,
           "restriction": "showdown"
         }
       ]

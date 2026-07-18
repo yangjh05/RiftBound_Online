@@ -3,6 +3,7 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { classifyBootstrapTermination } from "./bootstrap-run-state.mjs";
 
 const userArgs = process.argv.slice(2);
 const runId = `bootstrap-${timestamp()}`;
@@ -35,10 +36,12 @@ const heartbeat = setInterval(() => {
   log.write(`${JSON.stringify(event)}\n`);
 }, 60000);
 heartbeat.unref();
+let interruptionSignal = null;
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.once(signal, () => {
+    if (interruptionSignal) return;
+    interruptionSignal = signal;
     child.kill(signal);
-    void writeStatus("interrupted", { signal });
   });
 }
 const result = await new Promise((resolve, reject) => {
@@ -47,13 +50,18 @@ const result = await new Promise((resolve, reject) => {
 });
 clearInterval(heartbeat);
 await new Promise((resolve) => log.end(resolve));
-if (result.exitCode !== 0) {
-  await writeStatus("failed", result);
-  console.error(`모방 초기화가 실패했습니다. 로그: ${logPath}`);
-  process.exitCode = result.exitCode;
-} else {
+const termination = classifyBootstrapTermination(result, interruptionSignal);
+if (termination.state === "complete") {
   await writeStatus("complete", result);
   console.log(JSON.stringify({ event: "logged-bootstrap-complete", runDir, report, output, log: logPath }));
+} else if (termination.state === "interrupted") {
+  await writeStatus("interrupted", { ...result, requestedSignal: interruptionSignal });
+  console.error(`모방 초기화가 중단되었습니다. 로그: ${logPath}`);
+  process.exitCode = termination.exitCode;
+} else {
+  await writeStatus("failed", result);
+  console.error(`모방 초기화가 실패했습니다. 로그: ${logPath}`);
+  process.exitCode = termination.exitCode;
 }
 
 function argumentValue(values, name) {

@@ -34,7 +34,7 @@
       "status": "verified",
       "disposition": "executable",
       "ruleIds": ["328.1", "328.2", "330.1", "330.2"],
-      "evidenceTests": ["cards, abilities, and their triggers join the one existing Chain", "Finalize repeats when an immediately played Unit creates a Pending trigger", "showdown start choices resume remaining battlefield defend triggers", "Core Rules runtime oracle rejects illegal zone, player, chain, attachment, and numeric states"],
+      "evidenceTests": ["cards, abilities, and their triggers join the one existing Chain", "a Unit creates its play trigger only after its Chain item resolves", "showdown start choices resume remaining battlefield defend triggers", "Core Rules runtime oracle rejects illegal zone, player, chain, attachment, and numeric states"],
       "remaining": "None; cards, activated abilities, and triggers have transition evidence for reusing the existing Chain, standard actions cannot open a Showdown while that Chain keeps the turn Closed, and the runtime oracle rejects simultaneous Chain representations."
     },
     {
@@ -58,8 +58,8 @@
       "status": "verified",
       "disposition": "executable",
       "ruleIds": ["337.1.c.1.a", "337.1.c.2"],
-      "evidenceTests": ["Units and Gear resolve during Finalize without waiting for the Pass step", "Finalize repeats when an immediately played Unit creates a Pending trigger", "only Rune Pool Add effects use the immediate-Finalize ability classification", "an Add Reaction finalizes during payment without passing Priority or Focus", "malzahar fanatic uses the normal Chain before killing a permanent and channeling"],
-      "remaining": "None; Unit and Gear immediate Finalize, Add-resource classification and transient Chain placement, no Priority/Focus pass for Add, exclusion of Channel from Add, and Finalize repetition after a newly produced Pending trigger all have focused evidence."
+      "evidenceTests": ["Units and Gear remain finalized on the Chain until the Pass step resolves them", "a Unit creates its play trigger only after its Chain item resolves", "playing a token is a Unit play but not a card play", "only Rune Pool Add effects use the immediate-Finalize ability classification", "an Add Reaction finalizes during payment without passing Priority or Focus", "malzahar fanatic pays its Kill cost and immediately finalizes the non-reactive Add ability"],
+      "remaining": "None; played-token immediate Finalize, ordinary permanent Execute/Pass/Resolve, Add-resource classification and transient Chain placement, no Priority/Focus pass for Add, exclusion of Channel from Add, and post-resolution play-trigger placement all have focused evidence."
     },
     {
       "id": "execute-reactions-abilities-and-pass",
@@ -130,8 +130,8 @@
       "status": "verified",
       "disposition": "executable",
       "ruleIds": ["359.1", "359.2.a", "359.2.b", "359.2.c", "359.2.d", "359.3.a", "359.3.b", "359.3.c", "359.3.d", "359.3.e.1", "359.3.e.2", "359.3.e.3", "359.3.e.4", "359.3.e.5", "359.3.e.6", "359.3.e.7", "359.3.e.8", "359.3.e.9", "359.3.e.10", "359.3.e.11", "359.3.e.12.a", "359.3.e.13", "359.3.e.14.a", "359.3.e.14.b", "359.3.e.15", "359.3.f.1", "359.3.f.2", "359.3.f.3.a", "359.3.f.4"],
-      "evidenceTests": ["Units and Gear resolve during Finalize without waiting for the Pass step", "controlled spells enter their owners trash or corresponding deck after resolution", "a target that visits a non-Board zone is a new object even after returning to the Board", "a target that moves only between Board locations remains the same object", "a mistargeted instruction is ignored while later instructions still resolve", "a spell that leaves the Chain during resolution stops its remaining instructions", "Disintegrate draws only when its own damage event kills the unit", "chain trigger source references do not place their source card in a second zone"],
-      "remaining": "None for the two-player card pool; permanent Finalize, spell response/completion, board versus non-Board identity, partial mistargets, later instructions, look-back damage events, linked continuations, leaving the Chain, and source snapshots have focused evidence."
+      "evidenceTests": ["Units and Gear remain finalized on the Chain until the Pass step resolves them", "controlled spells enter their owners trash or corresponding deck after resolution", "a target that visits a non-Board zone is a new object even after returning to the Board", "a target that moves only between Board locations remains the same object", "a mistargeted instruction is ignored while later instructions still resolve", "a spell that leaves the Chain during resolution stops its remaining instructions", "Disintegrate draws only when its own damage event kills the unit", "chain trigger source references do not place their source card in a second zone"],
+      "remaining": "None for the two-player card pool; permanent response and resolution after Pass, spell response/completion, board versus non-Board identity, partial mistargets, later instructions, look-back damage events, linked continuations, leaving the Chain, and source snapshots have focused evidence."
     },
     {
       "id": "ability-and-passive-ability-foundations",

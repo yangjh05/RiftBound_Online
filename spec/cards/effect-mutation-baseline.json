@@ -38,11 +38,6 @@
       "harness": "focused-tests"
     },
     {
-      "effectKey": "activated:killFriendlyPermanentChannelRune",
-      "status": "killed",
-      "harness": "focused-tests"
-    },
-    {
       "effectKey": "activated:killSelf",
       "status": "killed",
       "harness": "focused-tests"

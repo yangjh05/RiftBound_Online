@@ -16,7 +16,12 @@ export default card({
   text: "This enters exhausted.\nTAP: Deal 2 to a unit at a battlefield.",
   effects: [
       {
+          "timing": "static",
+          "kind": "entersExhausted"
+      },
+      {
           "timing": "activated",
+          "exhaust": true,
           "kind": "dealDamageUnit",
           "target": "battlefieldUnit",
           "amount": 2

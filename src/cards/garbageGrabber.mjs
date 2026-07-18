@@ -17,6 +17,7 @@ export default card({
   effects: [
     {
       timing: "activated",
+      exhaust: true,
       kind: "draw",
       amount: 1,
       costEnergy: 1,

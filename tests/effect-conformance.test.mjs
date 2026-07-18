@@ -125,7 +125,7 @@ function ruleGame({ interactive = true } = {}) {
     player.runes = [];
     player.trash = [];
     player.banished = [];
-    player.turnScoredBattlefields = new Set();
+    player.turnScoredBattlefields = [];
     player.cardsPlayedThisTurn = 0;
     player.drawCountThisTurn = 0;
     player.discardedCardsThisTurn = 0;
@@ -170,6 +170,7 @@ test("Tasty Faefolk Deathknell draws after lethal spell damage", () => {
   assert.equal(player.trash.some((card) => card.instanceId === tasty.instanceId), true);
   assert.equal(player.hand.some((card) => card.instanceId === drawn.instanceId), true);
   assert.equal(player.runes.length, 2);
+  assert.equal(game.log.filter((entry) => entry === "Tasty Faefolk trigger finalized.").length, 1);
 });
 
 test("Deathknell remains controlled by the permanent's last controller after it enters its owner's trash", () => {
@@ -281,6 +282,13 @@ test("Sprite Mother plays one ready Temporary Sprite at her battlefield", () => 
   assert.equal(sprites.length, 1);
   assert.equal(sprites[0].exhausted, false);
   assert.equal(sprites[0].keywords.includes("Temporary"), true);
+  assert.equal(mother.keywords.includes("Temporary"), false, "Sprite Mother herself is not Temporary");
+
+  startTurn(game);
+  assert.equal(field.units.some((card) => card.instanceId === mother.instanceId), true,
+    "killing the Temporary Sprite must not also kill Sprite Mother");
+  assert.equal(field.units.some((card) => card.instanceId === sprites[0].instanceId), false,
+    "the generated Sprite is killed at the start of its controller's turn");
 });
 
 test("Brynhir Thundersong prevents an opponent from playing cards for the turn", () => {
@@ -343,14 +351,26 @@ test("Defy counters an eligible opposing spell on the chain", () => {
     turnPlayerId: opponent.id,
     priorityPlayerId: player.id,
     consecutivePasses: 0,
-    chain: [{ card: opposingSpell, playerId: opponent.id, destination: "base", status: "pending" }]
+    chain: [
+      null,
+      {
+        id: "cardless-trigger",
+        itemType: "trigger",
+        card: null,
+        playerId: opponent.id,
+        trigger: { kind: "effectSpecs" },
+        status: "finalized"
+      },
+      { card: opposingSpell, playerId: opponent.id, destination: "base", status: "pending" }
+    ]
   };
 
   assert.equal(resolveEffect(game, player, defy), true);
   assert.equal(game.pendingChoice?.effect, "counterChainCard");
   assert.deepEqual(game.pendingChoice.options.map((option) => option.cardId), [opposingSpell.instanceId]);
   assert.equal(chooseEffectOption(game, opposingSpell.instanceId).ok, true);
-  assert.equal(game.showdown.chain.length, 0);
+  assert.equal(game.showdown.chain.length, 1);
+  assert.equal(game.showdown.chain[0]?.id, "cardless-trigger");
   assert.equal(opponent.trash.some((card) => card.instanceId === opposingSpell.instanceId), true);
 });
 
@@ -509,19 +529,27 @@ test("Kayn, Unleashed prevents damage after his second move in a turn", () => {
   assert.equal(kayn.damage, 0);
 });
 
-test("Ahri, Nine-Tailed Fox reduces enemies attacking a controlled battlefield", () => {
-  const game = ruleGame({ interactive: false });
+test("Ahri, Nine-Tailed Fox uses the showdown chain and keeps its Might reduction above the minimum", () => {
+  const game = ruleGame({ interactive: true });
   const player = game.players[0];
   const opponent = game.players[1];
-  const attacker = plainUnit(player.id, "ahri-attacker", 2);
+  const attacker = plainUnit(player.id, "ahri-attacker", 1);
+  attacker.keywords = ["Assault"];
   const defender = plainUnit(opponent.id, "ahri-defender", 8);
   opponent.legend = instance(cards.ahriNineTailedFox, opponent.id, "ahri-legend");
   player.base = [attacker];
   game.battlefields = [battlefield("ahri-controlled-field", [defender], opponent.id)];
 
   assert.equal(moveUnits(game, [attacker.instanceId], "ahri-controlled-field").ok, true);
+  assert.equal(attacker.temporaryMight, undefined, "the trigger must not resolve as part of attack designation");
+  assert.equal(game.showdown?.chain.some((item) =>
+    item.trigger?.kind === "attackOrDefendModifyUnit" && item.trigger.sourceCardId === "ahri-legend"), true);
+
+  assert.equal(advanceUntil(game, () => attacker.temporaryMight === -1), true);
   assert.equal(currentMight(game, attacker), 1);
   assert.equal(attacker.temporaryMight, -1);
+  delete attacker.combatRole;
+  assert.equal(currentMight(game, attacker), 1, "losing Assault must not let Ahri's effect reduce Might below 1");
 });
 
 test("Symbol of the Solari recalls every unit after an attacking combat tie", () => {
@@ -574,6 +602,7 @@ test("Commander Ledros and Kraken Hunter derive optional cost declarations from 
     const sacrifice = plainUnit(player.id, "ledros-sacrifice");
     player.hand = [ledros];
     player.base = [sacrifice];
+    player.runes = Array.from({ length: 6 }, (_, index) => rune(DOMAINS.ORDER, player.id, `ledros-cost-${index}`));
     assert.equal(beginPlayCard(game, ledros.instanceId, "base").ok, true);
     assert.equal(game.pendingChoice?.data?.targetEffect, "killFriendlyUnitsAdditionalCost");
     assert.equal(game.pendingChoice?.options.some((option) => option.cardId === sacrifice.instanceId), true);
@@ -587,6 +616,7 @@ test("Commander Ledros and Kraken Hunter derive optional cost declarations from 
     buffed.buffs = 1;
     player.hand = [hunter];
     player.base = [buffed];
+    player.runes = Array.from({ length: 3 }, (_, index) => rune(DOMAINS.BODY, player.id, `hunter-cost-${index}`));
     assert.equal(beginPlayCard(game, hunter.instanceId, "base").ok, true);
     assert.equal(game.pendingChoice?.data?.targetEffect, "spendFriendlyBuffsAdditionalCost");
     assert.equal(game.pendingChoice?.options.some((option) => option.cardId === buffed.instanceId), true);
@@ -603,6 +633,8 @@ test("static entry permissions and restrictions follow their declared shared eff
     game.battlefields = [open];
     assert.equal(playCard(game, deckhand.instanceId, open.instanceId).ok, true);
     assert.equal(open.units.some((unit) => unit.instanceId === deckhand.instanceId), true);
+    assert.equal(open.controlledBy, player.id);
+    assert.equal(player.score, 1, "playing to an open battlefield conquers it");
   }
 
   {
@@ -978,11 +1010,13 @@ test("activated shared resolvers buff, grant keywords, kill, move, ready entry, 
     const player = game.players[0];
     const armory = instance(cards.unlicensedArmory, player.id, "activated-armory");
     const saved = plainUnit(player.id, "armory-saved-unit");
+    const discarded = plainSpell(player.id, "armory-discard-cost");
     player.base = [saved, armory];
-    player.trash = [plainSpell(player.id, "armory-recycle-cost")];
+    player.hand = [discarded];
     assert.equal(activateCard(game, armory.instanceId).ok, true);
     assert.equal(saved.saveWithRuneUntilTurnSequence, game.turnSequence);
     assert.equal(saved.saveWithRuneDomain, DOMAINS.FURY);
+    assert.equal(player.trash.some((card) => card.instanceId === discarded.instanceId), true);
   }
 });
 

@@ -87,6 +87,7 @@
       "resolvePlayTrashSpellChoice|.trash.splice(": 1,
       "resolvePlayTrashUnitChoice|.trash.splice(": 1,
       "resolvePredictChoice|.mainDeck.shift(": 1,
+      "resolveRecycleCardsFromTrashesChoice|.trash =": 1,
       "resolveRecycleRunesChoice|.runeDeck.push(": 1,
       "resolveRecycleRunesChoice|.runes.splice(": 1,
       "resolveRecycleTopDeckChoice|.mainDeck =": 1,
@@ -116,16 +117,11 @@
       "trashFacedownCard|.trash.push(": 1
     },
     "resource": {
-      "awardPoint|.score +=": 1,
       "clearRunePool|.runePool =": 1,
       "ensureRunePool|.runePool.energy =": 1,
       "ensureRunePool|.runePool.power =": 1,
-      "gainXp|.xp +=": 1,
-      "onPlaySpecShouldTrigger|.score +=": 1,
-      "performBurnOut|.score +=": 1,
-      "resolveFirstBeginningGainPointTrigger|.score +=": 1,
-      "resolveHoldGainPointTrigger|.score +=": 1,
-      "resolveOnMoveScoreNth|.score +=": 1
+      "gainScore|.score +=": 1,
+      "gainXp|.xp +=": 1
     },
     "choice": {
       "activateCard|game.pendingChoice =": 4,
@@ -134,6 +130,7 @@
       "beginCardPlayProcess|game.pendingPayment =": 1,
       "beginEffectEnergyPayment|game.pendingPayment =": 1,
       "beginEffectPlayPayment|game.pendingPayment =": 2,
+      "beginHidePayment|game.pendingPayment =": 1,
       "cancelPayment|game.pendingPayment =": 1,
       "chooseDiscardCards|game.pendingChoice =": 1,
       "chooseEachTokenDestination|game.pendingChoice =": 1,
@@ -144,7 +141,6 @@
       "continueDivineJudgmentChoice|game.pendingChoice =": 1,
       "continueTriggerOrderChoice|game.pendingChoice =": 1,
       "declineEffectChoice|game.pendingChoice =": 1,
-      "hideCard|game.pendingPayment =": 1,
       "offerDeflectPayment|game.pendingChoice =": 1,
       "offerPredictChoice|game.pendingChoice =": 1,
       "offerReadyRunesChoice|game.pendingChoice =": 1,

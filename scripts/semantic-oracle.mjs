@@ -35,10 +35,15 @@ export function validateSemanticChoice(game, choice) {
 }
 
 export function captureResolutionContract(game, choice, optionId) {
+  // Declaring a triggered ability's target only records the identity that the
+  // eventual Chain resolution must use. It does not resolve the effect yet.
+  if (choice.data?.declareTrigger) return null;
   const target = findCard(game, optionId);
   if (!target) return null;
   return {
     effect: choice.effect,
+    sourceName: choice.card?.name || null,
+    choiceData: structuredClone(choice.data || {}),
     playerId: choice.playerId,
     targetId: target.instanceId,
     before: {
@@ -46,16 +51,25 @@ export function captureResolutionContract(game, choice, optionId) {
       stunned: Boolean(target.stunned),
       exhausted: Boolean(target.exhausted),
       zone: locateCard(game, target.instanceId),
-      deathRecallAllowed: hasDeathRecallReplacement(game, target)
+      deathRecallAllowed: hasDeathRecallReplacement(game, target),
+      damageMayBePrevented: choice.effect === "damageUnit" && damageCanBePrevented(game, choice, target),
+      movesThisTurn: target.movesThisTurn || 0,
+      damagePreventions: structuredClone(target.damagePreventions || []),
+      globalDamagePreventionTurn: game.preventSpellAbilityDamageUntilTurnSequence ?? null,
+      turnSequence: game.turnSequence || 0
     }
   };
 }
 
 export function validateResolutionContract(game, contract, result) {
   if (!contract || result?.ok === false) return;
+  const deferredByDeflect = game.pendingChoice?.effect === "payDeflect"
+    && game.pendingChoice.data?.targetId === contract.targetId
+    && game.pendingChoice.data?.originalChoice?.effect === contract.effect;
+  if (deferredByDeflect) return;
   const target = findCard(game, contract.targetId);
   const afterZone = locateCard(game, contract.targetId);
-  const fail = (message) => { throw new Error(`Semantic resolution violation for ${contract.effect}: ${message}`); };
+  const fail = (message) => { throw new Error(`Semantic resolution violation for ${contract.sourceName || "unknown source"} ${contract.effect}: ${message}; data=${JSON.stringify(contract.choiceData || {})}`); };
   if (contract.effect === "returnTrashUnitToHand" && afterZone !== `hand:${contract.playerId}`) fail("chosen trash card did not move to hand");
   if (contract.effect === "playTrashUnit" && afterZone?.startsWith("trash:")) fail("chosen unit remained in trash");
   if (["returnUnitToHand"].includes(contract.effect) && !afterZone?.startsWith("hand:")) fail("chosen unit did not move to hand");
@@ -71,11 +85,36 @@ export function validateResolutionContract(game, contract, result) {
   if (["stunUnit"].includes(contract.effect) && target && !target.stunned) fail("chosen unit was not stunned");
   if (["readyUnit", "readyUnitAny"].includes(contract.effect) && target?.exhausted) fail("chosen unit was not readied");
   if (contract.effect === "damageUnit") {
-    if (target && afterZone === contract.before.zone && (target.damage || 0) <= contract.before.damage) fail("chosen unit took no damage");
+    const deathReplacementApplied = contract.before.deathRecallAllowed
+      && afterZone?.startsWith("base:")
+      && target
+      && (target.damage || 0) === 0;
+    if (!contract.before.damageMayBePrevented && !deathReplacementApplied
+      && target && afterZone === contract.before.zone && (target.damage || 0) <= contract.before.damage) {
+      fail(`chosen unit took no damage (target ${contract.targetId}, damage ${contract.before.damage} -> ${target.damage || 0}, zone ${contract.before.zone} -> ${afterZone}, before=${JSON.stringify(contract.before)})`);
+    }
     if (contract.before.zone?.startsWith("battlefield:") && afterZone?.startsWith("base:") && !contract.before.deathRecallAllowed) {
       fail("damage moved a unit from a battlefield to base without a declared death-replacement effect");
     }
   }
+}
+
+function damageCanBePrevented(game, choice, target) {
+  const origin = choice.card?.type === "spell" ? "spell" : "ability";
+  if ((game.preventSpellAbilityDamageUntilTurnSequence ?? -1) >= (game.turnSequence || 0)) return true;
+  if (hasEffect(target, "static", "preventDamageAfterSecondMove") && (target.movesThisTurn || 0) >= 2) return true;
+  const currentTurn = game.turnSequence || 0;
+  return (target.damagePreventions || []).some((prevention) => {
+    if ((prevention.expiresAtTurnSequence ?? currentTurn) < currentTurn) return false;
+    if (!(prevention.remaining === "all" || prevention.remaining > 0)) return false;
+    if (!prevention.source || prevention.source === "any") return true;
+    if (prevention.source === "spellOrAbility") return origin === "spell" || origin === "ability";
+    return prevention.source === origin;
+  });
+}
+
+function hasEffect(card, timing, kind) {
+  return (card?.effects || []).some((effect) => effect.timing === timing && effect.kind === kind);
 }
 
 export function semanticCoverageKey(choice) {
@@ -133,7 +172,16 @@ export function validateStableGameState(game) {
 function pendingInteractionOwnsChainItem(game, itemId) {
   return game.pendingPayment?.playProcess?.chainItemId === itemId
     || game.pendingChoice?.data?.completion?.chainItemId === itemId
-    || game.pendingChoice?.completion?.chainItemId === itemId;
+    || game.pendingChoice?.completion?.chainItemId === itemId
+    || containsChainItemId(game.pendingChoice?.data, itemId)
+    || containsChainItemId(game.pendingPayment, itemId);
+}
+
+function containsChainItemId(value, itemId, seen = new Set()) {
+  if (!value || typeof value !== "object" || seen.has(value)) return false;
+  seen.add(value);
+  if (value.chainItemId === itemId) return true;
+  return Object.values(value).some((entry) => containsChainItemId(entry, itemId, seen));
 }
 
 export function captureInteractionState(game) {

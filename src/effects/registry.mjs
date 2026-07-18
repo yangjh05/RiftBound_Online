@@ -61,7 +61,8 @@ export const TARGET_PROVIDERS = Object.freeze({
   FRIENDLY_AND_ENEMY_UNITS: "friendlyAndEnemyUnits",
   MOONFALL: "moonfall",
   BATTLEFIELDS: "battlefields",
-  OPPONENTS: "opponents"
+  OPPONENTS: "opponents",
+  RUNES: "runes"
 });
 
 export const SPELL_TARGET_DECLARATIONS = Object.freeze({
@@ -331,8 +332,8 @@ const effectDefinitions = [
   effect("activated", "returnUnitToBase", { sourceTypes: ["legend", "unit", "gear"], targetProvider: TARGET_PROVIDERS.BATTLEFIELD_UNITS }),
   effect("activated", "returnFriendlyPermanentOrHiddenToHand", { sourceTypes: ["gear"], targetProvider: TARGET_PROVIDERS.ALL_UNITS }),
   effect("activated", "baitedHook", { sourceTypes: ["gear"], targetProvider: TARGET_PROVIDERS.ALL_UNITS }),
-  effect("activated", "killFriendlyPermanentChannelRune", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.ALL_UNITS }),
   effect("activated", "killSelf", { sourceTypes: ["unit", "gear"], targetless: true }),
+  effect("activated", "recycleCardsFromTrashes", { sourceTypes: ["gear"], targetless: true }),
   effect("activated", "nextUnitEnterReady", { sourceTypes: ["gear", "unit", "legend"], targetless: true }),
   effect("activated", "nextSpellBonusDamage", { sourceTypes: ["gear"], targetless: true }),
   effect("activated", "moveFriendlyUnit", { sourceTypes: ["legend"], targetProvider: TARGET_PROVIDERS.ALL_UNITS }),
@@ -383,8 +384,8 @@ const effectDefinitions = [
   effect("death", "drawOnFirstOtherFriendlyUnitDeath", { sourceTypes: ["unit"], targetless: true }),
   effect("death", "playRecruitOnOtherFriendlyNonRecruitDeath", { sourceTypes: ["unit"], targetless: true }),
   effect("death", "buffAnotherFriendlyOnBuffedUnitDeath", { sourceTypes: ["gear"], targetProvider: TARGET_PROVIDERS.ALL_UNITS }),
-  effect("endTurn", "readyRunesIfAtBattlefield", { sourceTypes: ["unit"], targetless: true }),
-  effect("endTurn", "readyRunes", { sourceTypes: ["legend"], targetless: true }),
+  effect("endTurn", "readyRunesIfAtBattlefield", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.RUNES }),
+  effect("endTurn", "readyRunes", { sourceTypes: ["legend"], targetProvider: TARGET_PROVIDERS.RUNES }),
   effect("endTurn", "playTopDeckUnitIgnoreCost", { sourceTypes: ["gear"], targetless: true }),
   effect("discard", "readySelfMight", { sourceTypes: ["unit"], targetless: true }),
   effect("discarded", "draw", { sourceTypes: ["unit", "gear", "spell"], targetless: true, activeZones: ["trash"] }),
@@ -441,6 +442,7 @@ const effectDefinitions = [
   effect("onPlay", "stunUnit", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.TARGETABLE_UNITS }),
   effect("onPlay", "stunOrKillEnemy", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.TARGETABLE_UNITS }),
   effect("onPlay", "modifySelfMight", { sourceTypes: ["unit"], targetless: true }),
+  effect("onPlay", "buffSelfThenOtherFriendlyHere", { sourceTypes: ["unit"], targetless: true }),
   effect("onPlay", "spendFriendlyBuffBuffSelfReady", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.ALL_UNITS, optionalTrigger: true, triggerCost: { kind: "spendFriendlyBuff" } }),
   effect("onPlay", "spendBuffsChannelRunes", { sourceTypes: ["unit"], targetless: true }),
   effect("onPlay", "preventOpponentsPlayCardsThisTurn", { sourceTypes: ["unit"], targetless: true }),
@@ -562,6 +564,8 @@ const effectDefinitions = [
   effect("static", "playSelfFromTrashWhenSpellKillsUnit", { sourceTypes: ["unit"], targetless: true, optionalTrigger: true, triggerCost: { kind: "power" }, abilityClass: "triggered", activeZones: ["trash"] }),
   effect("static", "defendAloneMight", { sourceTypes: ["legend"], targetless: true }),
   effect("static", "entersReady", { sourceTypes: ["unit"], targetless: true }),
+  effect("static", "entersExhausted", { sourceTypes: ["gear"], targetless: true }),
+  effect("static", "hideWithEnergyInsteadOfPower", { sourceTypes: ["legend"], targetless: true }),
   effect("static", "enterReadyIfOpponentControlsBattlefield", { sourceTypes: ["unit"], targetless: true }),
   effect("static", "enterReadyIfOpponentNearVictory", { sourceTypes: ["unit"], targetless: true }),
   effect("static", "gainKeywordsWhileBuffed", { sourceTypes: ["unit"], targetless: true }),
@@ -581,6 +585,7 @@ const effectDefinitions = [
   effect("static", "friendlyBuffedUnitsGainKeywords", { sourceTypes: ["gear", "unit", "legend"], targetless: true }),
   effect("static", "opponentsHiddenCantRevealHere", { sourceTypes: ["unit"], targetless: true }),
   effect("static", "opponentsUnitsOnlyToBase", { sourceTypes: ["unit"], targetless: true }),
+  effect("static", "opponentsCannotReadyByEffects", { sourceTypes: ["unit"], targetless: true }),
   effect("static", "otherFriendlyUnitsEnterReady", { sourceTypes: ["unit"], targetless: true }),
   effect("static", "selfMightWhileAloneCombat", { sourceTypes: ["unit"], targetless: true }),
   effect("static", "stunnedEnemyHereMight", { sourceTypes: ["unit"], targetless: true }),
@@ -597,7 +602,8 @@ const effectDefinitions = [
   effect("conquer", "scoreIfExcessDamage", { sourceTypes: ["unit"], targetless: true }),
   effect("conquer", "payEnergyReturnSelfToHand", { sourceTypes: ["unit"], targetless: true, flow: "choice", continuation: "triggerQueue", optionalTrigger: true, triggerCost: { kind: "energy" } }),
   effect("activated", "saveFriendlyUnitThisTurn", { sourceTypes: ["gear"], targetProvider: TARGET_PROVIDERS.ALL_UNITS }),
-  effect("activated", "udyrChooseMode", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.ALL_UNITS })
+  effect("activated", "udyrChooseMode", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.ALL_UNITS }),
+  effect("activated", "forgeAttachEquipment", { sourceTypes: ["legend"], targetless: true, flow: "choice", continuation: "effectSequence" })
 ];
 
 export const EFFECT_DEFINITIONS = Object.freeze(Object.fromEntries(
@@ -615,7 +621,17 @@ export function effectDefinition(effect) {
 }
 
 export function spellTargetDeclaration(effect) {
-  return SPELL_TARGET_DECLARATIONS[effect?.kind] || null;
+  const declaration = SPELL_TARGET_DECLARATIONS[effect?.kind] || null;
+  if (!declaration || !effect?.selectRepeatedTargetsOnPlay || (effect.repeat || 1) < 2) return declaration;
+  // Errata'd multi-instruction spells choose every target before the Chain
+  // response window opens, while still using the shared target declaration.
+  return {
+    ...declaration,
+    multi: true,
+    minTargets: effect.repeat,
+    maxTargets: effect.repeat,
+    allowRepeatedTargets: Boolean(effect.allowRepeatedTargets)
+  };
 }
 
 export function effectNeedsPlayDeclaration(effect) {

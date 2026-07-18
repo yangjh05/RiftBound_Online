@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { cards } from "../src/cards.mjs";
-import { createGame, currentMight } from "../src/engine.mjs";
+import { createGame, currentMight, effectiveMight } from "../src/engine.mjs";
 import {
   evaluateLayeredCharacteristics,
   orderLayerEffects,
@@ -73,4 +73,16 @@ test("production Might calculation does not clamp decreases before later increas
   game.battlefields = [battlefield];
 
   assert.equal(currentMight(game, unit), 0);
+});
+
+test("production Might preserves a negative current value", () => {
+  const game = createGame();
+  const player = game.players[0];
+  const unit = instance(cards.lonelyPoro, player.id, "negative-production-unit");
+  unit.might = 3;
+  unit.mightModifier = -4;
+  player.base = [unit];
+
+  assert.equal(effectiveMight(unit), -1);
+  assert.equal(currentMight(game, unit), -1);
 });

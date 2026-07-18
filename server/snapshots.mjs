@@ -1,4 +1,5 @@
 import { hiddenCardControllerId } from "../src/rules/zones.mjs";
+import { firstPlayerDecisionActorId } from "../src/engine.mjs";
 
 export function publicRoom(room) {
   return {
@@ -42,6 +43,7 @@ export function snapshotForPlayer(room, playerId) {
 
 function redactGame(game, viewerId) {
   const snapshot = clonePlain(game);
+  snapshot.authoritativeActorId = activeActorId(game);
   delete snapshot.setupBattlefieldSelections;
   snapshot.players = game.players.map((player) => redactPlayer(game, player, viewerId));
   snapshot.battlefields = game.battlefields.map((field) => redactBattlefield(game, field, viewerId));
@@ -56,6 +58,19 @@ function redactGame(game, viewerId) {
     snapshot.selectedCardId = viewer?.champion?.instanceId || viewer?.legend?.instanceId || null;
   }
   return snapshot;
+}
+
+function activeActorId(game) {
+  if (game.phase === "first-player") return firstPlayerDecisionActorId(game);
+  if (game.pendingChoice?.playerId) return game.pendingChoice.playerId;
+  if (game.pendingPayment?.playerId) return game.pendingPayment.playerId;
+  if (game.phase === "champion-select") return game.championSelectPlayerId || null;
+  if (game.phase === "battlefield-select") return game.setupPlayerId || null;
+  if (game.phase === "mulligan") return game.mulligan?.playerId || null;
+  if (game.actionChain?.priorityPlayerId) return game.actionChain.priorityPlayerId;
+  if (game.phase === "showdown") return game.showdown?.priorityPlayerId || null;
+  if (game.phase === "action") return game.currentPlayerId || null;
+  return null;
 }
 
 function redactPlayer(game, player, viewerId) {
@@ -88,8 +103,14 @@ function redactPlayer(game, player, viewerId) {
   if (!ownsSeat && !battlefieldChoicesPublic && player.selectedBattlefieldId) {
     copy.selectedBattlefieldId = "hidden-battlefield-selection";
   }
-  copy.turnScoredBattlefields = Array.from(player.turnScoredBattlefields || []);
+  copy.turnScoredBattlefields = plainScoredBattlefieldIds(player.turnScoredBattlefields);
   return copy;
+}
+
+function plainScoredBattlefieldIds(value) {
+  if (Array.isArray(value)) return [...value];
+  if (value instanceof Set) return [...value];
+  return [];
 }
 
 function redactBattlefield(game, field, viewerId) {

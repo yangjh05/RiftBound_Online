@@ -21,6 +21,7 @@ export function observeGame(game, viewerId) {
     battlefields: game.battlefields.map((field) => ({
       id: field.instanceId,
       name: field.name,
+      cardNumber: field.cardNumber || "",
       controlledBy: field.controlledBy,
       units: field.units.map(publicCard),
       hidden: (field.hidden || []).map((item) => hiddenCardControllerId(item) === viewerId || intel
@@ -72,6 +73,8 @@ function publicCard(card) {
     buffs: card.buffs || 0,
     mightModifier: card.mightModifier || 0,
     exhausted: Boolean(card.exhausted),
+    stunned: Boolean(card.stunned),
+    attachments: (card.attachments || []).map(publicCard),
     tags: [...(card.tags || [])],
     keywords: [...(card.keywords || [])]
   };

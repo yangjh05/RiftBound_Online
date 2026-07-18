@@ -3,9 +3,49 @@ import assert from "node:assert/strict";
 
 import {
   advancePresentation,
+  chainCardInstanceIds,
   createPresentationState,
-  rankPresentationHighlights
+  rankPresentationHighlights,
+  snapshotPresentationGame
 } from "../src/presentation.mjs";
+
+test("cardless showdown triggers and transient null chain entries are safe to present", () => {
+  const game = {
+    players: [],
+    battlefields: [],
+    showdown: {
+      battlefieldId: "field",
+      chain: [
+        null,
+        { id: "cardless-trigger", itemType: "trigger", playerId: "p1", card: null, trigger: { kind: "effectSpecs" } },
+        { id: "card-item", itemType: "card", playerId: "p1", card: { instanceId: "chain-card", name: "Chain Card" } }
+      ]
+    },
+    actionChain: null
+  };
+
+  assert.deepEqual(chainCardInstanceIds(game), ["chain-card"]);
+  assert.doesNotThrow(() => snapshotPresentationGame(game));
+  assert.deepEqual(snapshotPresentationGame(game).chain.map((item) => item.id), ["cardless-trigger", "card-item"]);
+});
+
+test("permanent play procedures are not presented as Chain cards", () => {
+  const game = {
+    players: [],
+    battlefields: [],
+    showdown: null,
+    actionChain: {
+      chain: [{
+        id: "shen-play-procedure",
+        itemType: "card",
+        card: { instanceId: "shen", name: "Shen, Kinkou", type: "unit" }
+      }]
+    }
+  };
+
+  assert.deepEqual(chainCardInstanceIds(game), []);
+  assert.deepEqual(snapshotPresentationGame(game).chain, []);
+});
 
 test("a score that erases a two-point deficit is presented as a comeback", () => {
   const state = createPresentationState();
@@ -34,6 +74,29 @@ test("multiple disposed units in one transition create a battlefield sweep highl
   assert.ok(result.cues.some((cue) => cue.kind === "multi-kill"));
 });
 
+test("a point gained by a card effect is not presented as a battlefield score", () => {
+  const state = createPresentationState();
+  advancePresentation(state, snapshot({ scores: [2, 2], turnSequence: 5, scoreEvents: [] }), "p1");
+  const result = advancePresentation(state, snapshot({
+    scores: [3, 2],
+    turnSequence: 6,
+    scoreEvents: [{
+      id: "score-event-1",
+      playerId: "p1",
+      amount: 1,
+      kind: "effect",
+      reason: "moveCountEffect",
+      sourceName: "Arena's Greatest"
+    }]
+  }), "p1");
+
+  assert.equal(result.highlights[0].scoreSource, "effect");
+  assert.match(result.highlights[0].titleKo, /효과 득점/);
+  assert.doesNotMatch(result.highlights[0].titleKo, /전장/);
+  assert.match(result.highlights[0].detailKo, /효과로 얻은 점수/);
+  assert.equal(result.cues.find((cue) => cue.kind === "score")?.calloutKo, "효과로 득점합니다");
+});
+
 test("match completion emits a viewer-relative victory cue and ranks the finisher first", () => {
   const state = createPresentationState();
   advancePresentation(state, snapshot({ scores: [7, 6], turnSequence: 9 }), "p1");
@@ -42,7 +105,9 @@ test("match completion emits a viewer-relative victory cue and ranks the finishe
   assert.equal(result.impact.kind, "victory");
   assert.ok(result.cues.some((cue) => cue.kind === "victory"));
   const ranked = rankPresentationHighlights(state.highlights);
-  assert.equal(ranked[0].kind, "victory");
+  assert.equal(ranked[0].kind, "finisher");
+  assert.equal(ranked.filter((highlight) => ["victory", "finisher"].includes(highlight.kind)).length, 1,
+    "the same winning score is summarized once");
   assert.equal(ranked[0].playerId, "p1");
 });
 
@@ -52,6 +117,7 @@ function snapshot({
   winnerId = null,
   units = [],
   trash = {},
+  scoreEvents = [],
   turnSequence = 1
 } = {}) {
   return {
@@ -69,6 +135,7 @@ function snapshot({
     units,
     chain: [],
     showdownId: null,
+    scoreEvents,
     effectStamp: 0,
     effectMessage: "",
     logHead: winnerId ? `Alpha wins at ${scores[0]} points.` : "",

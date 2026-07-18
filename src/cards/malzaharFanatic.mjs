@@ -15,11 +15,15 @@ export default card({
   might: 3,
   isChampion: true,
   image: "https://cdn.piltoverarchive.com/cards/OGN-113.webp",
-  text: "Kill a friendly unit or gear, tap: action - add rune rune. (Use on your turn or in showdowns. Abilities that add resources can't be reacted to.)",
+  text: "Kill a friendly unit or gear, tap: ACTION - ADD 2 Any Power. (Use on your turn or in showdowns. Abilities that add resources can't be reacted to.)",
   effects: [
     {
       timing: "activated",
-      kind: "killFriendlyPermanentChannelRune",
+      exhaust: true,
+      kind: "addPower",
+      amount: 2,
+      domain: DOMAINS.ANY,
+      killFriendlyPermanentCost: true,
       abilityKeywords: ["Action"]
     }
   ]

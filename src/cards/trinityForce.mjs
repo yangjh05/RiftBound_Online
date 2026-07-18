@@ -24,6 +24,7 @@ export default card({
       "effects": [
         {
           "timing": "activated",
+          "exhaust": false,
           "kind": "equip",
           "domain": "Body"
         },

@@ -148,6 +148,14 @@ for (const [key, card] of Object.entries(cards)) {
     expect(["rules", "effect", "mightBonus"].includes(effect.textSection || "rules"), `${label}: effects[${index}].textSection must be rules, effect, or mightBonus.`);
     if (effect.textSection === "mightBonus") expect(effect.kind === "attachedMight", `${label}: only attachedMight may use the mightBonus text section.`);
     if (effect.temporary !== undefined) expect(typeof effect.temporary === "boolean", `${label}: effects[${index}].temporary must be boolean.`);
+    if (effect.timing === "activated") {
+      expect(typeof effect.exhaust === "boolean",
+        `${label}: effects[${index}] activated abilities must explicitly declare exhaust: true|false.`);
+    }
+    if (effect.timing === "static" && definition?.abilityClass === "passive") {
+      expect(effect.exhaust === undefined,
+        `${label}: effects[${index}] passive static effects cannot exhaust their source as an implicit cost.`);
+    }
     if (definition?.sourceTypes?.length) {
       expect(definition.sourceTypes.includes(card.type), `${label}: effects[${index}] '${pair}' is only valid on ${definition.sourceTypes.join(", ")} cards, not ${card.type}.`);
     }
@@ -211,8 +219,8 @@ console.log(`Validated ${Object.keys(cards).length} cards, ${registeredImportFil
 
 function validateEffectPayload(label, index, effect, definition, sourceType = null) {
   if (effect.kind === "costModifier") {
-    expect([undefined, "card", "activatedAbility"].includes(effect.appliesTo),
-      `${label}: effects[${index}].appliesTo must be card or activatedAbility.`);
+    expect([undefined, "card", "self", "activatedAbility"].includes(effect.appliesTo),
+      `${label}: effects[${index}].appliesTo must be card, self, or activatedAbility.`);
     if (effect.abilityKind !== undefined) {
       expect(effect.appliesTo === "activatedAbility",
         `${label}: effects[${index}].abilityKind is only valid for an activatedAbility cost modifier.`);
@@ -240,8 +248,12 @@ function validateEffectPayload(label, index, effect, definition, sourceType = nu
       `${label}: effects[${index}].abilityKeywords must not contain duplicates.`);
   }
   if (effect.killSelfCost !== undefined) {
-    expect(effect.killSelfCost === true && effect.timing === "activated" && effect.kind === "addPower",
-      `${label}: effects[${index}].killSelfCost is only supported by the shared activated Add Power cost contract.`);
+    expect(effect.killSelfCost === true && effect.timing === "activated" && sourceType === "gear",
+      `${label}: effects[${index}].killSelfCost is only supported by activated gear abilities.`);
+  }
+  if (effect.killFriendlyPermanentCost !== undefined) {
+    expect(effect.killFriendlyPermanentCost === true && effect.timing === "activated" && effect.kind === "addPower",
+      `${label}: effects[${index}].killFriendlyPermanentCost is only supported by the shared activated Add Power cost contract.`);
   }
   if (effect.recycleSelfCost !== undefined) {
     expect(effect.recycleSelfCost === true && effect.timing === "activated" && effect.kind === "addPower" && sourceType === "rune",

@@ -42,15 +42,21 @@ export function actionFeatures(game, actorId, action) {
   const paymentEnergySelected = new Set(payment?.energyRuneIds || []);
   const paymentPowerSelected = new Set(payment?.powerRuneIds || []);
   const paymentPoolSelected = new Set(payment?.poolEnergyIds || []);
+  const paymentPoolPowerSelected = new Set(payment?.poolPowerIds || []);
   const optionalPaymentEffect = (payment?.optionalPowerEffects || payment?.optionalEffects || []).find((effect) => effect.id === action.effectId);
   const selectedEnergy = (payment?.energyRuneIds?.length || 0) + (payment?.poolEnergyIds?.length || 0);
   const energyCost = payment?.energyCost || 0;
-  const selectedPower = payment?.powerRuneIds?.length || 0;
+  const selectedPower = (payment?.powerRuneIds?.length || 0) + (payment?.poolPowerIds?.length || 0);
   const powerCost = (payment?.powerCost || []).reduce((sum, item) => sum + (item.amount || 0), 0);
+  const abilityId = String(action.abilityId || "").split(":").at(-1) || "";
   return {
     [`kind:${action.kind}`]: 1,
     [`phase:${game.phase}`]: 1,
     [`kindPhase:${action.kind}:${game.phase}`]: 1,
+    ...(abilityId ? {
+      [`ability:${abilityId}`]: 1,
+      [`kindAbility:${action.kind}:${abilityId}`]: 1
+    } : {}),
     ...(opponent?.legend?.cardNumber ? { [`versusLegend:${opponent.legend.cardNumber}:${action.kind}`]: 1 } : {}),
     ...(card?.type ? { [`cardType:${card.type}:${action.kind}`]: 1 } : {}),
     ...(card?.tags || []).reduce((output, tag) => ({ ...output, [`tag:${tag}:${action.kind}`]: 1 }), {}),
@@ -65,6 +71,7 @@ export function actionFeatures(game, actorId, action) {
     confirmReady: action.kind === "confirmPayment" ? 1 : 0,
     toggleRemovesSelection: action.kind === "togglePaymentRune" && (paymentEnergySelected.has(action.runeId) || paymentPowerSelected.has(action.runeId)) ? 1 : 0,
     togglePoolRemovesSelection: action.kind === "togglePaymentPoolEnergy" && paymentPoolSelected.has(action.energyId) ? 1 : 0,
+    togglePoolPowerRemovesSelection: action.kind === "togglePaymentPoolPower" && paymentPoolPowerSelected.has(action.powerId) ? 1 : 0,
     toggleOptionalRemovesSelection: action.kind === "toggleOptionalPaymentEffect" && optionalPaymentEffect?.selected ? 1 : 0,
     mulliganRemovesSelection: action.kind === "toggleMulliganCard" && mulliganSelected.has(action.cardId) ? 1 : 0,
     mulliganCardEnergy: action.kind === "toggleMulliganCard" ? (card?.energy || 0) / 10 : 0,
@@ -118,6 +125,7 @@ function bootstrapActionScore(game, actorId, action, features) {
   if (action.kind === "togglePaymentRune") score += 1.2 - features.paymentEnergyProgress * 0.25 - features.paymentPowerProgress * 0.25;
   if (features.toggleRemovesSelection) score -= 4;
   if (action.kind === "togglePaymentPoolEnergy") score += features.togglePoolRemovesSelection ? -4 : 1.5;
+  if (action.kind === "togglePaymentPoolPower") score += features.togglePoolPowerRemovesSelection ? -4 : 1.5;
   if (action.kind === "toggleOptionalPaymentEffect") score += features.toggleOptionalRemovesSelection ? -4 : -0.25;
   if (action.kind === "skipMulligan") score += 0.15;
   if (action.kind === "confirmMulligan") score += 0.4;
@@ -128,6 +136,9 @@ function bootstrapActionScore(game, actorId, action, features) {
   if (action.kind === "passShowdown") score += 0.1;
   if (action.kind === "declineEffectChoice") score -= 0.15;
   if (action.kind === "chooseEffectOption") score += 0.1;
+  if (action.confirmTriggerOrder) score += 4;
+  if (action.kind === "chooseEffectOption" && action.triggerOrderSelected) score -= 4;
+  if (action.kind === "chooseEffectOption" && action.triggerOrderOptional && !action.triggerOrderSelected) score -= 0.1;
   if (game.currentPlayerId !== actorId && action.kind === "endTurn") score -= 5;
   return score;
 }
@@ -163,7 +174,7 @@ function dot(weights = {}, features = {}) {
 function findVisibleCard(game, cardId) {
   if (!cardId) return null;
   for (const player of game.players) {
-    const found = [player.legend, player.champion, ...player.hand, ...player.base, ...player.trash, ...(player.banished || [])]
+    const found = [player.legend, player.champion, ...player.availableChampions, ...player.availableBattlefields, ...player.hand, ...player.base, ...player.runes, ...player.trash, ...(player.banished || [])]
       .filter(Boolean).find((card) => card.instanceId === cardId);
     if (found) return found;
   }

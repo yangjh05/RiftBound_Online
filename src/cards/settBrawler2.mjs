@@ -19,6 +19,6 @@ export default card({
   effects: [
     { timing: "onPlay", kind: "modifySelfMight", amount: 1, buff: true },
     { timing: "score", kind: "buffSelf", reason: "conquer", amount: 1 },
-    { timing: "activated", kind: "modifyMight", target: "self", amount: 4, spendBuff: true, temporary: true }
+    { timing: "activated", kind: "modifyMight", target: "self", amount: 4, spendBuff: true, temporary: true, exhaust: false }
   ]
 });

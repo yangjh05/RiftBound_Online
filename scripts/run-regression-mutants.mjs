@@ -31,6 +31,12 @@ const engineMutants = [
     testName: "Incinerate sends a unit with lethal damage to its owner's trash"
   },
   {
+    id: "death-trigger-order-drops-additional-cost-continuation",
+    search: "  queueDeathTriggers(game, [...deathknellTriggers, ...postDeathTriggers], explicitDeathContinuation);",
+    replacement: "  queueDeathTriggers(game, [...deathknellTriggers, ...postDeathTriggers]);",
+    testName: "a death-trigger ordering choice owns and resumes an interrupted additional-cost payment"
+  },
+  {
     id: "automatic-activated-power-not-recycled",
     search: "  if (!payChosenPowerRunes(game, player, powerSources.powerRuneIds, powerSources.powerRuneIds.length)) return false;",
     replacement: "  // Mutant: incorrectly skip recycling Power paid for an activated ability.",
@@ -59,6 +65,13 @@ const engineMutants = [
     search: "  if (specs.some((spec) => spec.recycleSelfCost)) {",
     replacement: "  if (false) {",
     testName: "Basic Runes bank Energy by exhausting and matching Power by recycling, including while exhausted"
+  },
+  {
+    id: "recycled-rune-remains-selected-for-energy",
+    search: `  payment.energyRuneIds = [...new Set(payment.energyRuneIds || [])]
+    .filter((runeId) => runes.has(runeId) && !runes.get(runeId).exhausted);`,
+    replacement: "  payment.energyRuneIds = [...new Set(payment.energyRuneIds || [])];",
+    testName: "recycling a Rune selected for Energy clears the stale selection and adds Power"
   },
   {
     id: "exhausted-channel-enters-ready",
@@ -493,14 +506,14 @@ const engineMutants = [
   {
     id: "effect-rune-recycle-auto-selects",
     search: "  chooseRecycleRunes(game, player, source, trigger.data?.amount || 1);",
-    replacement: "  chooseRecycleRunes(game, player, source, trigger.data?.amount || 1);\n  if (game.pendingChoice?.effect === \"recycleRunes\") applyChoiceEffect(game, game.pendingChoice, game.pendingChoice.options[0]);",
+    replacement: "  chooseRecycleRunes(game, player, source, trigger.data?.amount || 1);\n  if (game.pendingChoice?.effect === \"recycleRunes\") { const choice = game.pendingChoice; game.pendingChoice = null; applyChoiceEffect(game, choice, choice.options[0], \"explicit\"); }",
     testName: "Recycle instructions let the responsible player choose the Rune and preserve its owner destination",
     testFile: "tests/effect-conformance.test.mjs"
   },
   {
     id: "beginning-trash-recycle-auto-selects",
     search: "  chooseRecycleTrashCards(game, player, source, amount);",
-    replacement: "  chooseRecycleTrashCards(game, player, source, amount);\n  if (game.pendingChoice?.effect === \"recycleTrashCards\") applyChoiceEffect(game, game.pendingChoice, game.pendingChoice.options[0]);",
+    replacement: "  chooseRecycleTrashCards(game, player, source, amount);\n  if (game.pendingChoice?.effect === \"recycleTrashCards\") { const choice = game.pendingChoice; game.pendingChoice = null; applyChoiceEffect(game, choice, choice.options[0], \"explicit\"); }",
     testName: "Beginning recycle effects explicitly choose every card instead of using trash order",
     testFile: "tests/effect-conformance.test.mjs"
   },
@@ -563,6 +576,30 @@ const engineMutants = [
     testFile: "tests/effect-conformance.test.mjs"
   },
   {
+    id: "activated-start-allows-missing-target",
+    search: "  if (requiredTargetSpec && !activatedTargetDeclaration(game, player, card, specs, { requirePayableCosts: true })) {",
+    replacement: "  if (false && requiredTargetSpec) {",
+    testName: "activated ability UI and engine both reject every external-target kind when no legal target exists"
+  },
+  {
+    id: "activated-start-allows-unpayable-cost",
+    search: "  if (!activatedAbilityCostsArePayable(game, player, card, specs)) {",
+    replacement: "  if (false) {",
+    testName: "activated ability availability enforces resource, non-resource, state, and Forge prerequisites"
+  },
+  {
+    id: "activated-kill-cost-delayed-until-resolution",
+    search: "  const targetCost = payActivatedDeclaredTargetCosts(game, player, card, specs);",
+    replacement: "  const targetCost = { ok: true };",
+    testName: "malzahar fanatic pays its Kill cost and immediately finalizes the non-reactive Add ability"
+  },
+  {
+    id: "activated-buff-cost-not-paid-before-response",
+    search: "  if (specs.some((spec) => spec.spendBuff) && !card.activationProcess?.spendBuffPaid) {",
+    replacement: "  if (false && specs.some((spec) => spec.spendBuff)) {",
+    testName: "Sett spends his buff during activation finalization before the Might effect resolves"
+  },
+  {
     id: "optional-trigger-prompts-twice-before-cost",
     search: "if (spec.optional && !effectDefinition(spec)?.optionalTrigger) {",
     replacement: "if (spec.optional) {",
@@ -576,8 +613,8 @@ const engineMutants = [
   },
   {
     id: "equip-incorrectly-exhausts",
-    search: "return specs.some((spec) => spec.exhaust === true || (spec.exhaust !== false && spec.kind !== \"equip\"));",
-    replacement: "return specs.some((spec) => spec.exhaust !== false);",
+    search: "return specs.some((spec) => spec.exhaust === true);",
+    replacement: "return specs.length > 0;",
     testName: "activated equipment attaches only after explicit activation"
   },
   {
@@ -585,12 +622,6 @@ const engineMutants = [
     search: "else if (game.phase === \"action\" && game.interactive) chainState = ensureActionChain(game, player.id);",
     replacement: "else if (game.phase === \"action\" && false) chainState = ensureActionChain(game, player.id);",
     testName: "ordinary activated abilities use the action Chain before resolving"
-  },
-  {
-    id: "channel-misclassified-as-add",
-    search: "return specs.length > 0 && specs.every((spec) => effectDefinition(spec)?.addsResources);",
-    replacement: "return specs.length > 0 && specs.every((spec) => effectDefinition(spec)?.addsResources || spec.kind === \"killFriendlyPermanentChannelRune\");",
-    testName: "malzahar fanatic uses the normal Chain before killing a permanent and channeling"
   },
   {
     id: "add-ability-loses-chain-item-classification",
@@ -619,8 +650,8 @@ const engineMutants = [
   },
   {
     id: "ordinary-legend-activation-blocked",
-    search: "return game.phase === \"action\" && game.currentPlayerId === player.id;",
-    replacement: "return game.phase === \"action\" && game.currentPlayerId === player.id && card.type !== \"legend\";",
+    search: "return game.phase === \"action\" && turnPlayerId(game) === player.id;",
+    replacement: "return game.phase === \"action\" && turnPlayerId(game) === player.id && card.type !== \"legend\";",
     testName: "ordinary Legend activated abilities use their controller's neutral open action timing"
   },
   {
@@ -778,8 +809,10 @@ const engineMutants = [
   {
     id: "execute-card-passes-priority",
     search: `function addPendingChainItem(game, showdown, card, playerId, destination, playOptions = {}) {
+  showdown.chain ||= [];
   if (!showdown.chain.length && !showdown.chainOpenedBy) showdown.chainOpenedBy = "card";`,
     replacement: `function addPendingChainItem(game, showdown, card, playerId, destination, playOptions = {}) {
+  showdown.chain ||= [];
   if (!showdown.chain.length && !showdown.chainOpenedBy) showdown.chainOpenedBy = "card";
   showdown.priorityPlayerId = (showdown.playerIds || [showdown.attackerId, showdown.defenderId]).find((id) => id && id !== playerId);`,
     testName: "a Pending card keeps Priority with its controller before Finalize",
@@ -838,10 +871,10 @@ const engineMutants = [
     testName: "interactive showdown spells can enter manual payment and join the chain"
   },
   {
-    id: "permanent-waits-for-execute",
-    search: `if (item.itemType === "card") return ["unit", "gear"].includes(item.card?.type);`,
-    replacement: `if (item.itemType === "card") return false;`,
-    testName: "Units and Gear resolve during Finalize without waiting for the Pass step",
+    id: "permanent-resolves-during-finalize",
+    search: `if (item.itemType === "card") return isTokenCard(item.card);`,
+    replacement: `if (item.itemType === "card") return isTokenCard(item.card) || ["unit", "gear"].includes(item.card?.type);`,
+    testName: "Units and Gear remain finalized on the Chain until the Pass step resolves them",
     testFile: "tests/rules-conformance.test.mjs"
   },
   {
@@ -856,6 +889,7 @@ const engineMutants = [
     search: `  addPendingChainItem(game, chainState, played, player.id, destination, {
     ...options,
     effectPlay: true,
+    effectPlayOrigin,
     playProcess: { kind: "cardPlay" },
     declarationsComplete: false
   });`,
@@ -866,6 +900,7 @@ const engineMutants = [
   addPendingChainItem(game, chainState, played, player.id, destination, {
     ...options,
     effectPlay: true,
+    effectPlayOrigin,
     playProcess: { kind: "cardPlay" },
     declarationsComplete: false
   });`,
@@ -875,9 +910,11 @@ const engineMutants = [
   {
     id: "effect-played-target-skips-declaration",
     search: `    effectPlay: true,
+    effectPlayOrigin,
     playProcess: { kind: "cardPlay" },
     declarationsComplete: false`,
     replacement: `    effectPlay: true,
+    effectPlayOrigin,
     playProcess: { kind: "cardPlay" },
     declarationsComplete: true`,
     testName: "an effect-played targeted card declares its target while Pending and before Finalize",
@@ -975,6 +1012,12 @@ const engineMutants = [
     replacement: "    focusPlayerId: defenderId,",
     testName: "standard and effect movement give Showdown Focus to the player who applied Contested",
     testFile: "tests/rules-conformance.test.mjs"
+  },
+  {
+    id: "off-turn-showdown-attacker-steals-turn",
+    search: "  const turnPlayerId = options.turnPlayerId || game.turnPlayerId || game.currentPlayerId;",
+    replacement: "  const turnPlayerId = attackerId;",
+    testName: "ride the wind stages the moved defender's empty-battlefield showdown until the original combat finishes"
   },
   {
     id: "showdown-settles-before-exit-cleanup",
@@ -1122,7 +1165,11 @@ const engineMutants = [
     id: "delayed-trigger-requires-live-source",
     search: `function resolveQueuedTrigger(game, trigger) {
   const player = game.players.find((candidate) => candidate.id === trigger.playerId);
-  const source = findCard(game, trigger.sourceCardId) || trigger.sourceCardSnapshot;`,
+  const liveSource = findCard(game, trigger.sourceCardId);
+  const source = liveSource && (trigger.sourceZoneChangeCounter == null
+    || (liveSource.zoneChangeCounter || 0) === trigger.sourceZoneChangeCounter)
+    ? liveSource
+    : trigger.sourceCardSnapshot;`,
     replacement: `function resolveQueuedTrigger(game, trigger) {
   const player = game.players.find((candidate) => candidate.id === trigger.playerId);
   const source = findCard(game, trigger.sourceCardId);`,

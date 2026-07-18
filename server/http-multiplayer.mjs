@@ -17,7 +17,7 @@ export async function handleMultiplayerRequest(req, res) {
   if (req.method === "OPTIONS") {
     res.writeHead(204, corsHeaders({
       "access-control-allow-methods": "GET, POST, OPTIONS",
-      "access-control-allow-headers": "content-type, ngrok-skip-browser-warning",
+      "access-control-allow-headers": "content-type",
       "access-control-max-age": "86400"
     }));
     res.end();

@@ -5,11 +5,17 @@ dist/
 release/
 tmp/
 artifacts/
+playwright-report/
+test-results/
 build-info.json
 tmp_card_data.json
 tmp_card_summary.txt
 .env
 .env.*
+!.env.example
 *.log
 *.pem
 *.key
+src/.mutant-*.mjs
+src/**/.mutant-*.mjs
+tests/.mutant-*.test.mjs

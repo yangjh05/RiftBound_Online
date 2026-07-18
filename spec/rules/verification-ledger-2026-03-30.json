@@ -19,7 +19,8 @@
     "requirements": [
       "Every duel-applicable family is verified, not merely assigned to a family.",
       "Every focused contract, runtime oracle, regression mutant, effect mutant, interaction scenario, fixed-seed fuzz run, and generated scenario passes.",
-      "The 40 other-mode leaves are either implemented or explicitly accepted as non-applicable to the two-player product scope."
+      "The 40 other-mode leaves are either implemented or explicitly accepted as non-applicable to the two-player product scope.",
+      "Interactive choices, UI/server/AI legal actions, trajectory manifests, and the engine fingerprint pass the training-safety gate before any learning process starts."
     ]
   },
   "verifiedMilestones": [
@@ -120,7 +121,7 @@
       "summary": "Cards, activated abilities, and triggers reuse the one existing Chain; a Closed turn cannot create a sibling Showdown Chain, and simultaneous Chain representations are rejected by the runtime oracle.",
       "evidenceTests": [
         "cards, abilities, and their triggers join the one existing Chain",
-        "Finalize repeats when an immediately played Unit creates a Pending trigger",
+        "a Unit creates its play trigger only after its Chain item resolves",
         "showdown start choices resume remaining battlefield defend triggers",
         "Core Rules runtime oracle rejects illegal zone, player, chain, attachment, and numeric states"
       ],
@@ -129,13 +130,14 @@
     {
       "id": "finalize-immediate-items-and-add",
       "ruleIds": ["337.1.c.1.a", "337.1.c.2", "429.1", "429.2.a", "429.3.a"],
-      "summary": "Units and Gear resolve during Finalize, newly created Pending triggers repeat Finalize, and only actual Rune Pool Add abilities use the shared immediate-Finalize path without passing Priority or Focus; Channel abilities remain ordinary Chain items.",
+      "summary": "Played tokens resolve immediately when finalized, ordinary Units and Gear wait for the Execute and Pass response window before resolving, and only actual Rune Pool Add abilities use the shared immediate-Finalize path without passing Priority or Focus; Channel abilities remain ordinary Chain items.",
       "evidenceTests": [
-        "Units and Gear resolve during Finalize without waiting for the Pass step",
-        "Finalize repeats when an immediately played Unit creates a Pending trigger",
+        "Units and Gear remain finalized on the Chain until the Pass step resolves them",
+        "a Unit creates its play trigger only after its Chain item resolves",
+        "playing a token is a Unit play but not a card play",
         "only Rune Pool Add effects use the immediate-Finalize ability classification",
         "an Add Reaction finalizes during payment without passing Priority or Focus",
-        "malzahar fanatic uses the normal Chain before killing a permanent and channeling"
+        "malzahar fanatic pays its Kill cost and immediately finalizes the non-reactive Add ability"
       ],
       "anchors": ["src/engine.mjs#finalizeAndResolveAddAbility", "src/engine.mjs#resolveFinalizedImmediateItems", "src/effects/registry.mjs#addsResources"]
     },

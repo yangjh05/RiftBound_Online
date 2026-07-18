@@ -19,6 +19,7 @@ export default card({
       {
           "timing": "static",
           "kind": "costModifier",
+          "appliesTo": "self",
           "energy": -2,
           "requiresLegion": true,
           "minEnergy": 0

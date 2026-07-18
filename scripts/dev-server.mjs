@@ -27,7 +27,7 @@ function resolveRequest(url) {
   return filePath;
 }
 
-const server = http.createServer(async (req, res) => {
+async function handleRequest(req, res) {
   if (await handleUpdateRequest(req, res, { root })) return;
   if (await handleMultiplayerRequest(req, res)) return;
 
@@ -46,6 +46,18 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
     res.end("Not found");
   }
+}
+
+const server = http.createServer((req, res) => {
+  void handleRequest(req, res).catch((error) => {
+    console.error("Request failed:", error);
+    if (res.headersSent || res.writableEnded || res.destroyed) {
+      if (!res.writableEnded && !res.destroyed) res.destroy();
+      return;
+    }
+    res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
+    res.end("Internal server error");
+  });
 });
 
 server.listen(port, host, () => {
