@@ -1,0 +1,11 @@
+{
+  "appId": "com.riftbound.online",
+  "appName": "Riftbound Online",
+  "webDir": "mobile-dist",
+  "backgroundColor": "#030814",
+  "android": {
+    "allowMixedContent": false,
+    "captureInput": true,
+    "backgroundColor": "#030814"
+  }
+}

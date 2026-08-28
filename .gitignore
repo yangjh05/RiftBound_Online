@@ -1,10 +1,15 @@
 node_modules/
+data/
 .desktop_runtime/
-data/ai/
 dist/
+mobile-dist/
 release/
 tmp/
 artifacts/
+.tmp-*/
+android/.gradle/
+android/app/build/
+android/build/
 playwright-report/
 test-results/
 build-info.json
