@@ -8,7 +8,14 @@ import {
   submitDeck,
   subscribe
 } from "./rooms.mjs";
-import { readAiStatus, storeAiReplay } from "./ai-data.mjs";
+import {
+  listAiGenerations,
+  listAiSpectatorReplays,
+  readAiGenerationCheckpoint,
+  readAiSpectatorReplay,
+  readAiStatus,
+  storeAiReplay
+} from "./ai-data.mjs";
 
 export async function handleMultiplayerRequest(req, res) {
   const url = new URL(req.url || "/", "http://127.0.0.1");
@@ -31,6 +38,35 @@ export async function handleMultiplayerRequest(req, res) {
 
     if (req.method === "GET" && url.pathname === "/api/ai/status") {
       return json(res, 200, { ok: true, status: await readAiStatus() });
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/ai/generations") {
+      return json(res, 200, { ok: true, generations: await listAiGenerations() });
+    }
+
+    const generationModelMatch = url.pathname.match(/^\/api\/ai\/generations\/(\d+)\/model$/u);
+    if (req.method === "GET" && generationModelMatch) {
+      const checkpoint = await readAiGenerationCheckpoint(generationModelMatch[1]);
+      if (!checkpoint) return json(res, 404, { ok: false, message: "AI generation was not found." });
+      res.writeHead(200, corsHeaders({
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "content-length": checkpoint.contents.length
+      }));
+      res.end(checkpoint.contents);
+      return true;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/ai/selfplay-replays") {
+      return json(res, 200, { ok: true, replays: await listAiSpectatorReplays({ limit: url.searchParams.get("limit") }) });
+    }
+
+    const spectatorReplayMatch = url.pathname.match(/^\/api\/ai\/selfplay-replays\/([^/]+)$/);
+    if (req.method === "GET" && spectatorReplayMatch) {
+      const replay = await readAiSpectatorReplay(decodeURIComponent(spectatorReplayMatch[1]));
+      return replay
+        ? json(res, 200, { ok: true, replay })
+        : json(res, 404, { ok: false, message: "AI spectator replay was not found." });
     }
 
     if (req.method === "POST" && url.pathname === "/api/ai/replays") {

@@ -1,4 +1,9 @@
 import { hiddenCardControllerId } from "../src/rules/zones.mjs";
+import {
+  chainItemVisibleToViewer,
+  gameLogVisibleToViewer,
+  pendingHandChainItems
+} from "../src/rules/visibility.mjs";
 import { firstPlayerDecisionActorId } from "../src/engine.mjs";
 
 export function publicRoom(room) {
@@ -47,6 +52,9 @@ function redactGame(game, viewerId) {
   delete snapshot.setupBattlefieldSelections;
   snapshot.players = game.players.map((player) => redactPlayer(game, player, viewerId));
   snapshot.battlefields = game.battlefields.map((field) => redactBattlefield(game, field, viewerId));
+  snapshot.actionChain = redactChainState(game.actionChain, viewerId);
+  snapshot.showdown = redactChainState(game.showdown, viewerId);
+  snapshot.log = clonePlain(gameLogVisibleToViewer(game, viewerId));
   snapshot.pendingChoice = game.pendingChoice?.playerId === viewerId ? clonePlain(game.pendingChoice) : null;
   snapshot.pendingPayment = game.pendingPayment?.playerId === viewerId ? clonePlain(game.pendingPayment) : null;
   snapshot.triggerQueue = clonePlain(game.triggerQueue || []);
@@ -87,9 +95,18 @@ function redactPlayer(game, player, viewerId) {
   copy.hand = showPrivate
     ? clonePlain(player.hand)
     : player.hand.map((card, index) => redactedCard(card, `hand-${player.id}-${index}`));
+  if (!ownsSeat) {
+    for (const [index] of pendingHandChainItems(game, player.id).entries()) {
+      copy.hand.push(redactedCard(
+        { ownerId: player.id, controllerId: player.id },
+        `pending-hand-${player.id}-${index}`
+      ));
+    }
+  }
   copy.mainDeck = showPrivate
     ? clonePlain(player.mainDeck)
     : player.mainDeck.map((card, index) => redactedCard(card, `main-${player.id}-${index}`));
+  copy.mulliganBottomKnowledge = ownsSeat ? clonePlain(player.mulliganBottomKnowledge || []) : [];
   copy.runeDeck = showPrivate
     ? clonePlain(player.runeDeck)
     : player.runeDeck.map((card, index) => redactedCard(card, `rune-${player.id}-${index}`));
@@ -104,6 +121,15 @@ function redactPlayer(game, player, viewerId) {
     copy.selectedBattlefieldId = "hidden-battlefield-selection";
   }
   copy.turnScoredBattlefields = plainScoredBattlefieldIds(player.turnScoredBattlefields);
+  return copy;
+}
+
+function redactChainState(chainState, viewerId) {
+  if (!chainState) return null;
+  const copy = clonePlain(chainState);
+  copy.chain = (chainState.chain || [])
+    .filter((item) => chainItemVisibleToViewer(item, viewerId))
+    .map(clonePlain);
   return copy;
 }
 

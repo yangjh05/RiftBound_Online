@@ -58,6 +58,30 @@ export async function fetchAiTrainingStatus() {
   return readResponse(response);
 }
 
+export async function fetchAiGenerations() {
+  const response = await fetch(apiUrl("/api/ai/generations"));
+  return readResponse(response);
+}
+
+export async function fetchAiGenerationCheckpoint(generation) {
+  const response = await fetch(apiUrl(`/api/ai/generations/${encodeURIComponent(generation)}/model`), { cache: "no-store" });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.message || `AI generation request failed with ${response.status}.`);
+  }
+  return response.json();
+}
+
+export async function fetchAiSpectatorReplays(limit = 40) {
+  const response = await fetch(apiUrl(`/api/ai/selfplay-replays?limit=${encodeURIComponent(limit)}`));
+  return readResponse(response);
+}
+
+export async function fetchAiSpectatorReplay(id) {
+  const response = await fetch(apiUrl(`/api/ai/selfplay-replays/${encodeURIComponent(id)}`));
+  return readResponse(response);
+}
+
 export function openRoomEvents(roomId, playerToken, handlers = {}) {
   if (apiBaseUrl) return openRemoteRoomEvents(roomId, playerToken, handlers);
   const source = new EventSource(apiUrl(`/api/rooms/${encodeURIComponent(roomId)}/events?token=${encodeURIComponent(playerToken)}`));

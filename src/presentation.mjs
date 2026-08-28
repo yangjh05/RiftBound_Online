@@ -1,3 +1,9 @@
+import {
+  chainItemVisibleToViewer,
+  gameLogVisibleToViewer,
+  handCountVisibleToViewer
+} from "./rules/visibility.mjs";
+
 export function createPresentationState() {
   return {
     gameKey: "",
@@ -17,21 +23,22 @@ export function resetPresentationState(state) {
   return state;
 }
 
-export function chainCardInstanceIds(game) {
+export function chainCardInstanceIds(game, viewerId = null) {
   return [
     ...(game?.showdown?.chain || []),
     ...(game?.actionChain?.chain || [])
   ]
-    .filter(chainItemVisibleInPresentation)
+    .filter((item) => chainItemVisibleInPresentation(item, viewerId))
     .map((item) => item?.card?.instanceId)
     .filter(Boolean);
 }
 
-function chainItemVisibleInPresentation(item) {
-  return Boolean(item) && !(item.itemType === "card" && ["unit", "gear"].includes(item.card?.type));
+function chainItemVisibleInPresentation(item, viewerId = null) {
+  return chainItemVisibleToViewer(item, viewerId)
+    && !(item.itemType === "card" && ["unit", "gear"].includes(item.card?.type));
 }
 
-export function snapshotPresentationGame(game, mightOf = defaultMight) {
+export function snapshotPresentationGame(game, mightOf = defaultMight, viewerId = null) {
   const units = [];
   for (const player of game.players || []) {
     for (const unit of player.base || []) {
@@ -50,7 +57,7 @@ export function snapshotPresentationGame(game, mightOf = defaultMight) {
     name: player.name,
     score: player.score || 0,
     xp: player.xp || 0,
-    handCount: player.hand?.length || 0,
+    handCount: handCountVisibleToViewer(game, player, viewerId),
     trashIds: (player.trash || []).map((card) => card.instanceId),
     banishedIds: (player.banished || []).map((card) => card.instanceId)
   }));
@@ -65,7 +72,7 @@ export function snapshotPresentationGame(game, mightOf = defaultMight) {
     victoryScore: game.victoryScore || 8,
     players,
     units,
-    chain: chain.filter(chainItemVisibleInPresentation).map((item, index) => ({
+    chain: chain.filter((item) => chainItemVisibleInPresentation(item, viewerId)).map((item, index) => ({
       id: item.id || item.card?.instanceId || `chain-${index}`,
       playerId: item.playerId,
       name: item.card?.name || item.trigger?.kind || "Effect",
@@ -77,7 +84,7 @@ export function snapshotPresentationGame(game, mightOf = defaultMight) {
     scoreEvents: (game.scoreEvents || []).map((event) => ({ ...event })),
     effectStamp: game.effectFlash?.stamp || 0,
     effectMessage: game.effectFlash?.message || "",
-    logHead: game.log?.[0] || "",
+    logHead: gameLogVisibleToViewer(game, viewerId)[0] || "",
     surrenderedPlayerId: game.surrenderedPlayerId || null
   };
 }

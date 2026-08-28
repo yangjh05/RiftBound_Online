@@ -2,7 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { handleMultiplayerRequest } from "../server/http-multiplayer.mjs";
-import { configureOnlineServer, configuredMultiplayerServer, fetchRooms, openRoomEvents } from "../src/net/client.mjs";
+import {
+  configureOnlineServer,
+  configuredMultiplayerServer,
+  fetchAiGenerationCheckpoint,
+  fetchAiGenerations,
+  fetchRooms,
+  openRoomEvents
+} from "../src/net/client.mjs";
 import { createRoom, getRoom, joinRoom, runCommand, setReady, submitDeck, subscribe } from "../server/rooms.mjs";
 import { rawDecklists } from "../src/cards.mjs";
 
@@ -36,6 +43,30 @@ test("desktop build metadata prefers its dedicated multiplayer server", () => {
   assert.equal(configuredMultiplayerServer({
     updateBaseUrl: "https://legacy-combined.example.com/"
   }), "https://legacy-combined.example.com");
+});
+
+test("AI generation client reads the catalog and selected checkpoint from the configured server", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url) => {
+    requests.push(String(url));
+    if (String(url).endsWith("/api/ai/generations")) {
+      return new Response(JSON.stringify({ ok: true, generations: [{ generation: 6 }] }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ generation: 6, gamesTrained: 643 }), { status: 200 });
+  };
+  try {
+    configureOnlineServer("https://play.example.com");
+    assert.deepEqual((await fetchAiGenerations()).generations, [{ generation: 6 }]);
+    assert.equal((await fetchAiGenerationCheckpoint(6)).generation, 6);
+    assert.deepEqual(requests, [
+      "https://play.example.com/api/ai/generations",
+      "https://play.example.com/api/ai/generations/6/model"
+    ]);
+  } finally {
+    configureOnlineServer("");
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("multiplayer API preflight enables cross-origin app clients", async () => {
