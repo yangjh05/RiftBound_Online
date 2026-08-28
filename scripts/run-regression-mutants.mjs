@@ -792,17 +792,23 @@ const engineMutants = [
     .filter((item) => item.status === "pending" && pendingCardReadyForFinalize(item));
   if (!pending.length) return;
   for (const item of pending) {
+    if (item.playOptions?.playProcess) delete item.playOptions.playProcess.privateLogSnapshot;
     item.status = "finalized";
     requestCleanup(game, "pending-item-finalized", { itemId: item.id, itemType: item.itemType });
-  }`,
+  }
+  log(game, \`${"${pending.length}"} chain item${"${pending.length === 1 ? \"\" : \"s\"}"} finalized.\`);
+}`,
     replacement: `function finalizePendingActionChainItems(game) {
   const pending = normalizeActionChainItems(game.actionChain)
     .filter((item) => item.status === "pending" && pendingCardReadyForFinalize(item));
   if (!pending.length) return;
   for (const item of pending) {
+    if (item.playOptions?.playProcess) delete item.playOptions.playProcess.privateLogSnapshot;
     item.status = "pending";
     requestCleanup(game, "pending-item-finalized", { itemId: item.id, itemType: item.itemType });
-  }`,
+  }
+  log(game, \`${"${pending.length}"} chain item${"${pending.length === 1 ? \"\" : \"s\"}"} finalized.\`);
+}`,
     testName: "cards and abilities use every first and later two-player Execute window through Finalize",
     testFile: "tests/rules-conformance.test.mjs"
   },
@@ -857,24 +863,30 @@ const engineMutants = [
     .filter((item) => item.status === "pending" && pendingCardReadyForFinalize(item));
   if (!pending.length) return;
   for (const item of pending) {
+    if (item.playOptions?.playProcess) delete item.playOptions.playProcess.privateLogSnapshot;
     item.status = "finalized";
     requestCleanup(game, "pending-item-finalized", { itemId: item.id, itemType: item.itemType });
-  }`,
+  }
+  log(game, \`${"${pending.length}"} chain item${"${pending.length === 1 ? \"\" : \"s\"}"} finalized.\`);
+}`,
     replacement: `function finalizePendingChainItems(game) {
   const pending = normalizeChainItems(game.showdown)
     .filter((item) => item.status === "pending" && pendingCardReadyForFinalize(item));
   if (!pending.length) return;
   for (const item of pending) {
+    if (item.playOptions?.playProcess) delete item.playOptions.playProcess.privateLogSnapshot;
     item.status = "pending";
     requestCleanup(game, "pending-item-finalized", { itemId: item.id, itemType: item.itemType });
-  }`,
+  }
+  log(game, \`${"${pending.length}"} chain item${"${pending.length === 1 ? \"\" : \"s\"}"} finalized.\`);
+}`,
     testName: "interactive showdown spells can enter manual payment and join the chain"
   },
   {
-    id: "permanent-resolves-during-finalize",
-    search: `if (item.itemType === "card") return isTokenCard(item.card);`,
-    replacement: `if (item.itemType === "card") return isTokenCard(item.card) || ["unit", "gear"].includes(item.card?.type);`,
-    testName: "Units and Gear remain finalized on the Chain until the Pass step resolves them",
+    id: "permanent-waits-for-pass-after-finalize",
+    search: `if (item.itemType === "card") return isTokenCard(item.card) || ["unit", "gear"].includes(item.card?.type);`,
+    replacement: `if (item.itemType === "card") return isTokenCard(item.card);`,
+    testName: "Units and Gear resolve immediately on Finalize without a response window",
     testFile: "tests/rules-conformance.test.mjs"
   },
   {

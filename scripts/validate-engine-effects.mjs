@@ -18,6 +18,8 @@ const effectResolverKeys = parseMapKeys("EFFECT_RESOLVERS", "resolveEffect");
 const choiceResolverKeys = parseMapKeys("CHOICE_RESOLVERS", "DEFLECTABLE_CHOICE_EFFECTS");
 const triggerResolverKeys = parseMapKeys("TRIGGER_RESOLVERS", "resolveQueuedTrigger");
 const onMoveResolverKeys = parseMapKeys("ON_MOVE_EFFECT_RESOLVERS", "function triggerMoveEffects");
+const targetedEffectKinds = parseSetKeys("TARGETED_EFFECT_KINDS");
+const targetedTriggerKinds = parseSetKeys("TARGETED_TRIGGER_KINDS");
 const usedEffectKeys = new Set(Object.values(cards).flatMap((card) => [
   ...(card.effects || []),
   ...keywordBehaviorEffectSpecs(card)
@@ -31,6 +33,28 @@ const reviewedNonTargetSpellResolutionChoices = new Map([
   ["chooseTopDeck", "the Main Deck is secret and the choice occurs on resolution"],
   ["eachOtherPlayerKillUncontrolledUnit", "the affected other player chooses on resolution"],
   ["eachPlayerReturnUnitToHand", "each affected player chooses on resolution"]
+]);
+const reviewedTriggeredResolutionSelections = new Map([
+  ["onPlay:spendFriendlyBuffBuffSelfReady", "the selected friendly buff is a trigger cost paid before finalization"]
+]);
+const specializedTargetTriggerKinds = new Map([
+  ["death:revealOpponentHand", "deathRevealOpponentHand"],
+  ["death:buffAnotherFriendlyOnBuffedUnitDeath", "deathBuffAnotherFriendlyOnBuffedUnitDeath"],
+  ["endTurn:readyRunesIfAtBattlefield", "endTurnReadyRunes"],
+  ["endTurn:readyRunes", "endTurnReadyRunes"],
+  ["recycle:buffFriendlyUnit", "recycleBuffFriendlyUnit"],
+  ["defendHere:giveShieldHere", "defendHereGiveShield"],
+  ["defendHere:returnFriendlyUnitHereToBase", "defendHereReturnFriendlyUnitToBase"],
+  ["hold:buffUnitHere", "holdBuffUnitHere"],
+  ["score:killGearThenBuffSelf", "scoreKillGearThenBuffSelf"],
+  ["secondDrawEachTurn:modifyMight", "secondDrawBuff"],
+  ["spellPlayed:battlefieldBuffUnitHere", "battlefieldSpellBuff"],
+  ["stun:buffFriendlyUnit", "stunBuffFriendlyUnit"],
+  ["attackOrDefend:dealDamageEnemyHere", "attackOrDefendDamageEnemyHere"],
+  ["attackOrDefend:splitDamageEnemyHere", "attackOrDefendSplitDamageEnemyHere"],
+  ["attackOrDefend:modifyEnemyHere", "attackOrDefendModifyEnemyHere"],
+  ["attackOrDefend:stunEnemyHere", "attackOrDefendStunEnemyHere"],
+  ["attackOrDefend:damageEnemyByHiddenTopDeck", "attackOrDefendDamageEnemyByHiddenTopDeck"]
 ]);
 if (JSON.stringify(CARD_REACTION_PERMISSION_KINDS) !== JSON.stringify(reviewedReactionPermissionKinds)) {
   errors.push("Card Reaction timing permissions changed; add a Core Rules 338.1.a.3 boundary test and review the shared timing contract.");
@@ -52,6 +76,21 @@ for (const [key, definition] of Object.entries(EFFECT_DEFINITIONS)) {
   if (definition.timing === "spell" && definition.declaration
     && reviewedNonTargetSpellResolutionChoices.has(definition.kind)) {
     errors.push(`${key} cannot be both a play-time target declaration and a reviewed non-target resolution choice.`);
+  }
+  if (definition.targetProvider
+    && ["onPlay", "keyword", "conquer"].includes(definition.timing)
+    && !reviewedTriggeredResolutionSelections.has(key)
+    && !targetedEffectKinds.has(definition.kind)) {
+    errors.push(`${key} has a target provider but is missing from TARGETED_EFFECT_KINDS, so it would choose its target during resolution.`);
+  }
+  if (definition.targetProvider && specializedTargetTriggerKinds.has(key)
+    && !targetedTriggerKinds.has(specializedTargetTriggerKinds.get(key))) {
+    errors.push(`${key} is missing its ${specializedTargetTriggerKinds.get(key)} declaration route in TARGETED_TRIGGER_KINDS.`);
+  }
+  if (definition.timing === "activated" && definition.targetProvider
+    && definition.kind !== "udyrChooseMode"
+    && !activatedChoiceKindIsRegistered(definition.kind)) {
+    errors.push(`${key} has a target provider but activatedChoiceEffect() does not declare it before activation.`);
   }
   if (usedEffectKeys.has(key)
     && !effectResolverKeys.has(key)
@@ -164,4 +203,20 @@ function parseMapKeys(startMarker, endMarker) {
   if (start < 0 || end < 0) return new Set();
   const block = engineSource.slice(start, end);
   return new Set([...block.matchAll(/\["([^"]+)"/g)].map((match) => match[1]));
+}
+
+function parseSetKeys(setName) {
+  const start = engineSource.indexOf(`const ${setName} = new Set([`);
+  const end = engineSource.indexOf("]);", start);
+  if (start < 0 || end < 0) return new Set();
+  const block = engineSource.slice(start, end);
+  return new Set([...block.matchAll(/"([^"]+)"/g)].map((match) => match[1]));
+}
+
+function activatedChoiceKindIsRegistered(kind) {
+  const start = engineSource.indexOf("function activatedChoiceEffect(");
+  const end = engineSource.indexOf("\n}", start);
+  if (start < 0 || end < 0) return false;
+  const block = engineSource.slice(start, end);
+  return new RegExp(`\\b${kind}:\\s*"`).test(block);
 }

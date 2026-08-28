@@ -96,7 +96,7 @@
         "card categories follow the independent Neutral/Showdown Open/Closed permission matrix",
         "activated abilities follow the same independent state permission matrix as cards",
         "direct and interactive card entry points share the Closed-state Reaction gate",
-        "a legally timed Reaction Chosen Champion follows normal Chain rules from the Champion Zone",
+        "a legally timed Reaction Chosen Champion resolves immediately from the Champion Zone",
         "a Hidden card gains its conditional Reaction permission beginning on the next turn",
         "Check Legality rejects Ambush when its destination loses the friendly unit before Finalize"
       ],
@@ -121,7 +121,7 @@
       "summary": "Cards, activated abilities, and triggers reuse the one existing Chain; a Closed turn cannot create a sibling Showdown Chain, and simultaneous Chain representations are rejected by the runtime oracle.",
       "evidenceTests": [
         "cards, abilities, and their triggers join the one existing Chain",
-        "a Unit creates its play trigger only after its Chain item resolves",
+        "a Unit resolves on Finalize before its separate play trigger opens a response window",
         "showdown start choices resume remaining battlefield defend triggers",
         "Core Rules runtime oracle rejects illegal zone, player, chain, attachment, and numeric states"
       ],
@@ -130,10 +130,10 @@
     {
       "id": "finalize-immediate-items-and-add",
       "ruleIds": ["337.1.c.1.a", "337.1.c.2", "429.1", "429.2.a", "429.3.a"],
-      "summary": "Played tokens resolve immediately when finalized, ordinary Units and Gear wait for the Execute and Pass response window before resolving, and only actual Rune Pool Add abilities use the shared immediate-Finalize path without passing Priority or Focus; Channel abilities remain ordinary Chain items.",
+      "summary": "Units, Gear, played tokens, and actual Rune Pool Add abilities resolve immediately when finalized without an intervening Execute or Pass response window; Unit Play Effects are then placed on the Chain as separate Pending triggers, while Channel abilities remain ordinary Chain items.",
       "evidenceTests": [
-        "Units and Gear remain finalized on the Chain until the Pass step resolves them",
-        "a Unit creates its play trigger only after its Chain item resolves",
+        "Units and Gear resolve immediately on Finalize without a response window",
+        "a Unit resolves on Finalize before its separate play trigger opens a response window",
         "playing a token is a Unit play but not a card play",
         "only Rune Pool Add effects use the immediate-Finalize ability classification",
         "an Add Reaction finalizes during payment without passing Priority or Focus",

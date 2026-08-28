@@ -4,6 +4,8 @@ Source: [official Core Rules PDF](https://cmsassets.rgpub.io/sanity/files/dsfx76
 
 This project treats the official 2026-03-30 Core Rules as the primary authority when adding cards or rule-engine behavior. Card text still wins over general rules where the official rules say it does.
 
+Timing override: the [2026-07-16 Core Rules](https://cmsassets.rgpub.io/sanity/files/dsfx7636/news_live/e9ac8e3d33e0f78cef296f5945aba7bc1313b086.pdf) supersede the earlier permanent Finalize timing. Under rules 337.1.a and 337.2, Finalize does not pass Priority and a Unit, Gear, or Add resource ability resolves immediately after Finalize. Under rule 383.4.a.2, a Permanent's Play Effect is put on the Chain as a separate Pending Item only after the Permanent finalizes and enters the Board.
+
 ## Verification Record and Completion Gate
 
 The machine-validated source of truth for progress is [`spec/rules/verification-ledger-2026-03-30.json`](../spec/rules/verification-ledger-2026-03-30.json). `npm run validate:rules` rejects stale rule IDs, missing evidence tests, stale implementation anchors, missing or duplicate workstream assignments, stale inventory counts, and an AI-training gate opened while work remains.
@@ -54,7 +56,8 @@ Priority-1 work covers core zone/movement actions and every keyword boundary; pr
 - Combat designations: units now explicitly gain temporary `attacker` or `defender` combat roles when a combat showdown opens or an active non-combat showdown becomes combat, and those roles are cleared when combat ends or the unit leaves the board.
 - Standard move batching: a player can now move multiple ready units to the same destination as one Standard Move. The shared destination is checked against each unit's legal movement, all moved units exhaust, and only one resulting non-combat showdown or combat showdown opens.
 - Staged event ordering: staged showdowns and combats now use an engine-level staged event queue. If more than one staged event is waiting, the turn player receives a UI choice for which battlefield to resolve first.
-- Chain item states: cards and abilities enter as `pending`, complete choices/costs/legality through outstanding Tasks, then become `finalized` before the Execute/Pass windows. Finalization itself does not pass Priority; the newest finalized Item's controller receives Priority.
+- Chain item states: cards and abilities enter as `pending`, complete choices/costs/legality through outstanding Tasks, then become `finalized`. Finalization itself does not pass Priority. Units, Gear, and Add resource abilities resolve immediately after Finalize without an Execute/Pass response window; other finalized Items proceed to that window.
+- Permanent Play Effect timing: after a Unit or Gear enters the Board through its immediate resolution, each Play Effect is put on the Chain as a separate Pending trigger. Reactions can respond to that trigger, but not between the Permanent's Finalize and entry.
 - Trigger item states: triggered abilities in the shared trigger queue now also enter as `pending` items and become `finalized` immediately before resolving. This gives triggers the same state vocabulary as played showdown chain cards.
 - Initial Chain triggers: attack/defend triggers, showdown-begins triggers, and defend-here battlefield triggers now enter the active showdown chain as trigger items. They require the same all-player pass window before resolving, so Reaction cards can respond before those triggered abilities resolve.
 - Non-combat showdowns: a standard move to an empty non-controlled battlefield now opens a stand-alone non-combat showdown before conquest; if an opposing unit enters during that showdown, it becomes a combat showdown.
