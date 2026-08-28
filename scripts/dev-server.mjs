@@ -2,10 +2,14 @@ import http from "node:http";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { handleMultiplayerRequest } from "../server/http-multiplayer.mjs";
-import { handleUpdateRequest } from "../server/updates.mjs";
+import { loadProjectEnv } from "./load-project-env.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+loadProjectEnv(root);
+const [{ handleMultiplayerRequest }, { handleUpdateRequest }] = await Promise.all([
+  import("../server/http-multiplayer.mjs"),
+  import("../server/updates.mjs")
+]);
 const port = Number(process.env.PORT || 4173);
 const host = process.env.HOST || "127.0.0.1";
 

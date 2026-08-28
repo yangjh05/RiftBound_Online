@@ -52,13 +52,19 @@
     "ai:train": "node scripts/train-ai.mjs",
     "ai:train:quick": "node scripts/train-ai.mjs --games 10 --evaluation-games 4 --max-actions 240",
     "ai:neural:train": "node scripts/train-neural-ai.mjs",
+    "ai:progress": "node scripts/watch-ai-progress.mjs",
+    "ai:progress:telegram": "node --env-file=.env scripts/watch-ai-progress.mjs --telegram true --skip-initial-telegram true",
     "ai:neural:smoke": "node scripts/train-neural-ai.mjs --games 2 --evaluation-games 2 --workers 1 --epochs 1 --max-actions 120",
+    "ai:failure:verify": "node scripts/verify-ai-failure.mjs",
+    "ai:payment:verify": "node --test --test-name-pattern=\"AI payment planner\" tests/engine.test.mjs",
     "ai:continuous": "node scripts/train-neural-ai.mjs --continuous true --games 64 --evaluation-games 40 --workers 4",
     "ai:meta:import": "node scripts/import-ai-meta.mjs",
     "ai:bootstrap": "node scripts/bootstrap-neural-ai.mjs",
     "ai:bootstrap:logged": "node scripts/run-bootstrap-ai.mjs",
     "ai:bootstrap:apply": "node scripts/apply-ai-bootstrap-artifact.mjs",
-    "ai:collect:shard": "node scripts/collect-ai-shard.mjs"
+    "ai:collect:shard": "node scripts/collect-ai-shard.mjs",
+    "ai:audit:deploy:lightsail": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/deploy-lightsail-action-audit-worker.ps1",
+    "ai:audit:verify:lightsail": "node scripts/verify-lightsail-action-audit-worker.mjs"
   },
   "build": {
     "appId": "com.riftbound.online",
