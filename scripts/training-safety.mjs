@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ACTION_DIM, MAX_ACTIONS, STATE_DIM } from "../src/ai/neural/encoding.mjs";
+import { TEACHER_LABEL_VERSION } from "../src/ai/neural/teacher-contract.mjs";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SAFETY_VERSION = 1;
@@ -14,9 +16,18 @@ const FINGERPRINT_ROOTS = [
   "src/effects",
   "src/rules",
   "src/ai/actions.mjs",
+  "src/ai/action-tactics.mjs",
+  "src/ai/belief.mjs",
+  "src/ai/deck-memory.mjs",
   "src/ai/observation.mjs",
   "src/ai/human-data.mjs",
+  "src/ai/hand-opportunity.mjs",
+  "src/ai/mulligan.mjs",
+  "src/ai/payment-planner.mjs",
   "src/ai/policy.mjs",
+  "src/ai/resource-reservation.mjs",
+  "src/ai/resource-strategy.mjs",
+  "src/ai/rollout.mjs",
   "src/ai/training-decks.mjs",
   "src/ai/neural"
 ];
@@ -82,6 +93,18 @@ export function validateTrainingTrajectories(trajectories, engineFingerprint) {
     if (!trajectory.steps?.length) failures.push(`${key}: 학습 단계가 없습니다.`);
     for (let stepIndex = 0; stepIndex < (trajectory.steps || []).length; stepIndex += 1) {
       const step = trajectory.steps[stepIndex];
+      if (Number(trajectory.learningTargetVersion) >= 3) {
+        if (!Number.isFinite(step.behaviorTemperature) || step.behaviorTemperature < 0.05) {
+          failures.push(`${key}:${stepIndex}: behavior temperature is missing or invalid.`);
+        }
+        if (![1, -1].includes(Number(step.terminalOutcome))) {
+          failures.push(`${key}:${stepIndex}: terminal outcome is missing or invalid.`);
+        }
+      }
+      if (Number(trajectory.learningTargetVersion) >= 7
+        && !/^info-v1-[0-9a-f]{8}$/.test(String(step.informationSetHash || ""))) {
+        failures.push(`${key}:${stepIndex}: public information-set hash is missing or invalid.`);
+      }
       if (step.decisionType === "sideboard") continue;
       if (!step.selectedActionKey || !step.legalActionKeys?.includes(step.selectedActionKey)) {
         failures.push(`${key}:${stepIndex}: 선택 행동을 당시 합법 행동 목록에서 확인할 수 없습니다.`);
@@ -93,6 +116,93 @@ export function validateTrainingTrajectories(trajectories, engineFingerprint) {
     }
   }
   return failures;
+}
+
+export function migrateCompatibleTrainingTrajectory(trajectory, engineFingerprint, options = {}) {
+  if (!trajectory || trajectory.completed !== true || !trajectory.engineFingerprint) return null;
+  if (!(trajectory.steps || []).every((step) => step.state?.length === STATE_DIM
+    && step.actions?.length === MAX_ACTIONS * ACTION_DIM
+    && Number.isInteger(step.selectedIndex)
+    && step.selectedIndex >= 0
+    && step.selectedIndex < Math.max(1, step.legalCount || 0))) return null;
+  const migrated = structuredClone(trajectory);
+  const fromEngineFingerprint = migrated.engineFingerprint;
+  let strippedTeacherSteps = 0;
+  for (const step of migrated.steps || []) {
+    step.behaviorTemperature = Math.max(0.05,
+      Number(step.behaviorTemperature)
+      || Number(options.behaviorTemperature)
+      || 1);
+    if (step.imitation === true || step.teacherLabelVersion === TEACHER_LABEL_VERSION) continue;
+    if (stripStaleTeacherSupervision(step)) strippedTeacherSteps += 1;
+  }
+  if (Number.isFinite(Number(options.learningTargetVersion))) {
+    migrated.learningTargetVersion = Number(options.learningTargetVersion);
+  }
+  const terminalOutcome = migrated.won === true ? 1 : migrated.won === false ? -1
+    : Number(migrated.terminalOutcome);
+  if (Number.isFinite(terminalOutcome) && terminalOutcome !== 0) {
+    migrated.terminalOutcome = terminalOutcome;
+    recomputePureOutcomeTargets(migrated.steps, terminalOutcome, options);
+  }
+  migrated.engineFingerprint = engineFingerprint;
+  migrated.replayCompatibility = {
+    version: 2,
+    fromEngineFingerprint,
+    toEngineFingerprint: engineFingerprint,
+    reason: "State/action dimensions and decision-safety contract are unchanged; behavior temperature and pure terminal targets were restored."
+  };
+  migrated.teacherSupervisionCompatibility = {
+    version: 1,
+    requiredLabelVersion: TEACHER_LABEL_VERSION,
+    strippedTeacherSteps,
+    policyReturnsPreserved: false,
+    reason: strippedTeacherSteps
+      ? "Stale simulation-teacher labels were removed while actual PPO actions and returns were preserved."
+      : "No stale simulation-teacher supervision was present."
+  };
+  return validateTrainingTrajectories([migrated], engineFingerprint).length ? null : migrated;
+}
+
+function recomputePureOutcomeTargets(steps, terminalOutcome, options = {}) {
+  const gamma = Math.max(0, Math.min(1, Number(options.gamma) || 0.997));
+  const lambda = Math.max(0, Math.min(1, Number(options.gaeLambda) || 0.95));
+  const longLambda = Math.max(lambda,
+    Math.min(1, Number(options.longHorizonLambda) || lambda));
+  const longWeight = Math.max(0,
+    Math.min(1, Number(options.longHorizonWeight) || 0));
+  let shortGae = 0;
+  let longGae = 0;
+  for (let index = steps.length - 1; index >= 0; index -= 1) {
+    const terminal = index === steps.length - 1;
+    const reward = terminal ? terminalOutcome : 0;
+    const nextValue = terminal ? 0 : Number(steps[index + 1].value) || 0;
+    const value = Number(steps[index].value) || 0;
+    const delta = reward + gamma * nextValue - value;
+    shortGae = delta + gamma * lambda * (terminal ? 0 : shortGae);
+    longGae = delta + gamma * longLambda * (terminal ? 0 : longGae);
+    const mixedAdvantage = shortGae * (1 - longWeight) + longGae * longWeight;
+    steps[index].shortHorizonReturn = shortGae + value;
+    steps[index].longHorizonReturn = longGae + value;
+    steps[index].advantage = mixedAdvantage;
+    steps[index].return = mixedAdvantage + value;
+    steps[index].terminalOutcome = terminalOutcome;
+  }
+}
+
+export function stripStaleTeacherSupervision(step) {
+  if (!step || step.imitation === true || step.teacherLabelVersion === TEACHER_LABEL_VERSION) return false;
+  let changed = false;
+  for (const key of Object.keys(step)) {
+    if (!key.startsWith("teacher")) continue;
+    delete step[key];
+    changed = true;
+  }
+  if (String(step.turningPoint || "").startsWith("teacher-")) {
+    step.turningPoint = null;
+    changed = true;
+  }
+  return changed;
 }
 
 export function assertTrainingTrajectories(trajectories, engineFingerprint) {

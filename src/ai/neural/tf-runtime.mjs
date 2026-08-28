@@ -2,7 +2,7 @@ const browser = typeof window !== "undefined";
 let runtime;
 let backend = "webgl";
 if (browser) {
-  runtime = await import("../../../node_modules/@tensorflow/tfjs/dist/tf.fesm.min.js");
+  runtime = await import("../../../assets/vendor/tensorflow/tf.fesm.min.js");
 } else {
   const requestedBackend = process.env.RIFTBOUND_TF_BACKEND || "tensorflow";
   try {

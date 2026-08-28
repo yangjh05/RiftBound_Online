@@ -1,6 +1,7 @@
 import { createGame } from "../../engine.mjs";
-import { activeActorId, applyAiAction, auditDecisionBoundary, enumerateLegalActions, actionKey, planPaymentActions } from "../actions.mjs";
+import { activeActorId, applyAiAction, auditDecisionBoundary, auditRecordedDecisionSafety, enumerateAiPolicyActions, actionKey } from "../actions.mjs";
 import { DEFAULT_AI_MODEL, evaluateState, scoreActions } from "../policy.mjs";
+import { resolvePlannedPayment } from "../payment-planner.mjs";
 import { ACTION_DIM, encodeActionSet, encodeOpponentDeckTarget, encodeState } from "./encoding.mjs";
 import { NEURAL_HIDDEN_SIZE } from "./model.mjs";
 
@@ -29,12 +30,15 @@ export function collectBaselineImitation(options) {
     let failure = null;
     let intentTurnSequence = game.turnSequence;
     const attemptedIntents = new Set();
-    let paymentPlan = [];
     for (; actionCount < (options.maxActions || 640) && game.phase !== "complete"; actionCount += 1) {
+      if (game.pendingPayment) {
+        if (!resolvePlannedPayment(game, { model: options.baseline || DEFAULT_AI_MODEL })?.ok) { failure = "payment-plan-failed"; break; }
+        continue;
+      }
       const actorId = activeActorId(game);
-      const boundaryViolations = auditDecisionBoundary(game, actorId);
+      const legal = actorId ? enumerateAiPolicyActions(game, actorId) : [];
+      const boundaryViolations = auditDecisionBoundary(game, actorId, legal);
       if (boundaryViolations.length) { failure = `decision-safety:${boundaryViolations[0].kind}`; break; }
-      const legal = actorId ? enumerateLegalActions(game, actorId) : [];
       if (!actorId || !legal.length) { failure = "no-legal-action"; break; }
       if (game.turnSequence !== intentTurnSequence) {
         intentTurnSequence = game.turnSequence;
@@ -43,20 +47,6 @@ export function collectBaselineImitation(options) {
       const freshLegal = legal.filter((action) => !isRepeatableIntent(action) || !attemptedIntents.has(`${actorId}:${actionKey(action)}`));
       const teacherLegal = freshLegal.length ? freshLegal : legal;
       let ranked = scoreActions(game, actorId, teacherLegal, options.baseline || DEFAULT_AI_MODEL);
-      if (game.pendingPayment) {
-        if (!paymentPlan.length) paymentPlan = planPaymentActions(game) || [{ kind: "cancelPayment" }];
-        const plannedKey = actionKey(paymentPlan[0]);
-        const plannedIndex = ranked.findIndex((item) => item.key === plannedKey);
-        if (plannedIndex >= 0) {
-          const [planned] = ranked.splice(plannedIndex, 1);
-          planned.score = Math.max(planned.score, (ranked[0]?.score || 0) + 12);
-          ranked.unshift(planned);
-        } else {
-          paymentPlan = [];
-        }
-      } else {
-        paymentPlan = [];
-      }
       const selected = ranked[0];
       const actionSet = encodeActionSet(game, actorId, legal, { requiredActions: [selected?.action] });
       const selectedIndex = actionSet.actions.findIndex((action) => actionKey(action) === selected?.key);
@@ -69,6 +59,7 @@ export function collectBaselineImitation(options) {
         selectedIndex,
         legalCount: actionSet.legalCount,
         oldLogProbability: 0,
+        behaviorTemperature: 1,
         value: evaluateState(game, actorId, options.baseline || DEFAULT_AI_MODEL),
         beliefTarget: encodeOpponentDeckTarget(game, actorId),
         initialMemory: new Float32Array(NEURAL_HIDDEN_SIZE),
@@ -83,9 +74,8 @@ export function collectBaselineImitation(options) {
         imitation: true
       });
       if (!applyAiAction(game, selected.action, actorId)?.ok) { failure = "teacher-action-failed"; break; }
-      const postActionViolations = auditDecisionBoundary(game);
+      const postActionViolations = auditRecordedDecisionSafety(game);
       if (postActionViolations.length) { failure = `decision-safety:${postActionViolations[0].kind}`; break; }
-      if (paymentPlan.length && selected.key === actionKey(paymentPlan[0])) paymentPlan.shift();
     }
     const didComplete = game.phase === "complete" && Boolean(game.winnerId);
     summaries.push({
@@ -104,12 +94,16 @@ export function collectBaselineImitation(options) {
       for (const player of game.players) {
         const reward = didComplete ? (player.id === game.winnerId ? 1 : -1) : 0;
         const steps = stepsByPlayer.get(player.id);
-        for (const step of steps) step.return = reward;
+        for (const step of steps) {
+          step.return = reward;
+          step.terminalOutcome = reward;
+        }
         if (steps.length) trajectories.push({
           gameId,
           playerId: player.id,
           imitation: true,
           completed: didComplete,
+          terminalOutcome: reward,
           engineFingerprint: options.engineFingerprint || null,
           decisionSafetyVersion: game.decisionSafety?.version || null,
           decisionSafetyViolations: structuredClone(game.decisionSafety?.violations || []),

@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { decklists } from "../src/cards.mjs";
 import { deserializeNeuralModel } from "../src/ai/neural/model.mjs";
-import { collectParallelSelfPlay } from "../src/ai/neural/selfplay.mjs";
+import { collectProcessPoolSelfPlay } from "./ai-selfplay-process-pool.mjs";
 import { writeTrajectoryArchive } from "../src/ai/neural/archive.mjs";
 import { buildMetaPreset } from "../src/ai/meta-presets.mjs";
 import { applyMetaSnapshot } from "../src/ai/meta.mjs";
@@ -23,13 +23,14 @@ if (shardIndex >= shardCount) throw new Error("shard-index must be smaller than 
 const poolId = args["card-pool"] || model.knowledge?.cardPoolId || "origins-era";
 if (!model.knowledge?.externalMeta) applyMetaSnapshot(model.knowledge, buildMetaPreset("origins-houston-2025"));
 const decks = resolveTrainingDecks(decklists, poolId, args["deck-ids"] || model.metadata?.trainingDeckIds || FOCUSED_TRAINING_DECK_IDS);
-const result = await collectParallelSelfPlay({
+const result = await collectProcessPoolSelfPlay({
   games: Math.max(1, Number(args.games) || 64),
   workers: Math.max(1, Number(args.workers) || 4),
   decks,
   model,
   meta: model.knowledge,
-  matchFraction: Number(args["match-fraction"]) || 0.25,
+  bestOfThreeFraction: Number(args["best-of-three-fraction"] ?? args["match-fraction"]) || 0.25,
+  mirrorFraction: Number(args["mirror-fraction"]) || 0.25,
   maxActions: Math.max(80, Number(args["max-actions"]) || 600),
   seed: ((Number(args.seed) || 20251207) + shardIndex * 1000003) >>> 0,
   engineFingerprint

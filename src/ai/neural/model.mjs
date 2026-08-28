@@ -1,11 +1,21 @@
 import { tf } from "./tf-runtime.mjs";
 import {
-  ACTION_DIM, CARD_BINS, CARD_VOCABULARY, MAX_ACTIONS, MAX_SEQUENCE, STATE_DIM,
-  encodeActionSet, encodeState
+  ACTION_DIM, LEGACY_ACTION_DIM, CARD_BINS, CARD_VOCABULARY, MAX_ACTIONS, MAX_SEQUENCE, STATE_DIM,
+  NEURAL_HIDDEN_SIZE, encodeActionSet, encodeState
 } from "./encoding.mjs";
+import { addAiPerformance, measureAiPerformance } from "../performance.mjs";
+import {
+  attachEvaluatorArchitecture,
+  createStructuredV2TensorInput,
+  disposeStructuredV2TensorInput,
+  evaluatorArchitecture,
+  evaluatorRequiresStructuredV2,
+  forwardEvaluatorValue
+} from "./evaluator-architecture.mjs";
+import { createPublicStructuredEvidenceSnapshot } from "./structured-evidence.mjs";
 
-export const NEURAL_MODEL_VERSION = 3;
-export const NEURAL_HIDDEN_SIZE = 64;
+export const NEURAL_MODEL_VERSION = 5;
+export { NEURAL_HIDDEN_SIZE };
 const EMBEDDING_SIZE = 64;
 
 export function createNeuralModel(options = {}) {
@@ -14,7 +24,22 @@ export function createNeuralModel(options = {}) {
     stateProjection: tf.layers.dense({ units: options.embeddingSize || EMBEDDING_SIZE, activation: "tanh", name: "state_projection" }),
     actionProjection: tf.layers.dense({ units: options.embeddingSize || EMBEDDING_SIZE, activation: "tanh", name: "action_projection" }),
     actionBias: tf.layers.dense({ units: 1, useBias: true, name: "action_bias" }),
+    actionValue: tf.layers.dense({ units: 1, activation: "tanh", kernelInitializer: "zeros", biasInitializer: "zeros", name: "action_value_head" }),
+    teacherProposalValue: tf.layers.dense({
+      units: 1,
+      activation: "tanh",
+      kernelInitializer: "zeros",
+      biasInitializer: "zeros",
+      name: "teacher_proposal_value_head"
+    }),
     value: tf.layers.dense({ units: 1, activation: "tanh", name: "value_head" }),
+    diagnostic: tf.layers.dense({
+      units: 2,
+      activation: "tanh",
+      kernelInitializer: "zeros",
+      biasInitializer: "zeros",
+      name: "diagnostic_auxiliary_head"
+    }),
     belief: tf.layers.dense({ units: CARD_BINS, activation: "sigmoid", name: "belief_head" })
   };
   const model = {
@@ -22,11 +47,22 @@ export function createNeuralModel(options = {}) {
     generation: options.generation || 0,
     gamesTrained: options.gamesTrained || 0,
     layers,
-    calibration: { temperature: 1, bins: [], ...(options.calibration || {}) },
+    calibration: { temperature: 1, bias: 0, bins: [], ...(options.calibration || {}) },
     knowledge: structuredClone(options.knowledge || {}),
-    metadata: { algorithm: "recurrent-ppo-belief", cardRepresentation: "relational-public-state-v3", actionRepresentation: "semantic-with-legal-set-collision-disambiguation", ...(options.metadata || {}) }
+    metadata: {
+      algorithm: "recurrent-ppo-action-value-belief-isolated-teacher-proposal",
+      cardRepresentation: "effect-and-own-deck-context-v4",
+      ...(options.metadata || {}),
+      actionRepresentation: "semantic-tactical-v3"
+    }
   };
   warmup(model);
+  if (options.evaluatorArchitecture) {
+    attachEvaluatorArchitecture(model, options.evaluatorArchitecture, {
+      seed: options.evaluatorArchitectureSeed,
+      warmStart: options.evaluatorWarmStart !== false
+    });
+  }
   return model;
 }
 
@@ -37,15 +73,40 @@ export function forwardNeural(model, states, actions, initialMemory = null) {
   const stateEmbedding = model.layers.stateProjection.apply(sequence);
   const actionEmbedding = model.layers.actionProjection.apply(actions);
   const actionBias = tf.squeeze(model.layers.actionBias.apply(actions), [-1]);
-  const logits = tf.add(tf.sum(tf.mul(tf.expandDims(stateEmbedding, 2), actionEmbedding), -1), actionBias);
+  const policyLogits = tf.add(tf.sum(tf.mul(tf.expandDims(stateEmbedding, 2), actionEmbedding), -1), actionBias);
+  const repeatedState = tf.tile(tf.expandDims(stateEmbedding, 2), [1, 1, MAX_ACTIONS, 1]);
+  const stateActionEmbedding = tf.concat([repeatedState, actionEmbedding], -1);
+  const actionValues = tf.squeeze(model.layers.actionValue.apply(stateActionEmbedding), [-1]);
+  // Provisional search evidence is intentionally isolated from every tensor
+  // used by the deployed policy. This head may prioritize future independent
+  // confirmations, but it must never alter action selection.
+  const teacherProposalValues = tf.squeeze(
+    model.layers.teacherProposalValue.apply(stateActionEmbedding),
+    [-1]
+  );
+  // Tactical heuristics are encoded as ordinary input features. They must not
+  // bypass learning by being added directly to the final policy logits: the
+  // same normally-good action can be wrong when a combo, response, sacrifice,
+  // or delayed payoff changes the actual win probability.
+  const logits = tf.add(policyLogits, tf.mul(actionValues, 0.5));
   const value = tf.squeeze(model.layers.value.apply(sequence), [-1]);
+  const diagnostic = model.layers.diagnostic.apply(sequence);
   const belief = model.layers.belief.apply(sequence);
-  return { logits, value, belief, memoryState };
+  return {
+    logits,
+    policyLogits,
+    actionValues,
+    teacherProposalValues,
+    value,
+    diagnostic,
+    belief,
+    memoryState
+  };
 }
 
 export function createNeuralSession(model, options = {}) {
   const histories = new Map();
-  const memories = new Map();
+  const memories = new Map(Object.entries(options.initialMemories || {}));
   const maxHistory = options.maxHistory || MAX_SEQUENCE;
   return {
     reset(playerId = null) {
@@ -53,6 +114,7 @@ export function createNeuralSession(model, options = {}) {
       else { histories.clear(); memories.clear(); }
     },
     history(playerId) { return histories.get(playerId) || []; },
+    memory(playerId) { return memories.get(playerId) || null; },
     decide(game, actorId, legalActions, decideOptions = {}) {
       if (!legalActions.length) return null;
       const state = encodeState(game, actorId);
@@ -62,7 +124,9 @@ export function createNeuralSession(model, options = {}) {
       const initialMemory = memories.get(actorId) || new Array(NEURAL_HIDDEN_SIZE).fill(0);
       const outputs = inferStep(model, state, actionSet.encoded, actionSet.legalCount, initialMemory);
       memories.set(actorId, outputs.memory);
-      const temperature = Math.max(0.05, decideOptions.temperature || model.calibration?.temperature || 1);
+      // Value calibration belongs only to the win-probability head. Reusing
+      // its temperature for action sampling silently changes the policy.
+      const temperature = Math.max(0.05, decideOptions.temperature ?? 1);
       const probabilities = softmax(outputs.logits.slice(0, actionSet.legalCount), temperature);
       const selectedIndex = decideOptions.greedy ? argmax(probabilities) : sample(probabilities, decideOptions.random || Math.random);
       return {
@@ -74,34 +138,113 @@ export function createNeuralSession(model, options = {}) {
         legalCount: actionSet.legalCount,
         probability: probabilities[selectedIndex],
         logProbability: Math.log(Math.max(1e-8, probabilities[selectedIndex])),
+        behaviorTemperature: temperature,
         probabilities,
-        value: outputs.value,
+        actionValues: outputs.actionValues.slice(0, actionSet.legalCount),
+        teacherProposalValues: outputs.teacherProposalValues.slice(0, actionSet.legalCount),
+        selectedActionValue: outputs.actionValues[selectedIndex],
+      value: outputs.value,
+      diagnostic: outputs.diagnostic,
         belief: outputs.belief,
-        initialMemory
+        initialMemory,
+        nextMemory: outputs.memory
       };
     }
   };
 }
 
 export function inferStep(model, state, actions, legalCount, memory = null) {
-  return tf.tidy(() => {
+  addAiPerformance("inferenceCalls");
+  return measureAiPerformance("inferenceMs", () => tf.tidy(() => {
     const stateTensor = tf.tensor3d(state, [1, 1, STATE_DIM]);
     const actionTensor = tf.tensor4d(actions, [1, 1, MAX_ACTIONS, ACTION_DIM]);
     const memoryTensor = memory ? tf.tensor2d(memory, [1, memory.length]) : null;
     const output = forwardNeural(model, stateTensor, actionTensor, memoryTensor);
     return {
       logits: Array.from(output.logits.slice([0, 0, 0], [1, 1, legalCount]).dataSync()),
+      actionValues: Array.from(output.actionValues.slice([0, 0, 0], [1, 1, legalCount]).dataSync()),
+      teacherProposalValues: Array.from(
+        output.teacherProposalValues.slice([0, 0, 0], [1, 1, legalCount]).dataSync()
+      ),
       value: output.value.dataSync()[0],
+      diagnostic: Array.from(output.diagnostic.dataSync()),
       belief: Array.from(output.belief.dataSync()),
       memory: Array.from(output.memoryState.dataSync())
     };
-  });
+  }));
 }
 
 export function estimateNeuralValue(model, game, viewerId) {
   const state = encodeState(game, viewerId);
-  const actions = new Float32Array(MAX_ACTIONS * ACTION_DIM);
-  return inferStep(model, state, actions, 1, new Array(NEURAL_HIDDEN_SIZE).fill(0)).value;
+  if (evaluatorRequiresStructuredV2(model)) {
+    const engineFingerprint = model.metadata?.engineFingerprint
+      || "runtime-engine-unversioned";
+    const structuredState = createPublicStructuredEvidenceSnapshot(
+      game,
+      viewerId,
+      {
+        engineFingerprint,
+        informationSetHash:
+          `runtime:${viewerId}:${Number(game.turnSequence) || 0}`
+      }
+    );
+    return estimateEvidenceNeuralValue(model, state, structuredState, {
+      engineFingerprint
+    });
+  }
+  return estimateEncodedNeuralValue(model, state);
+}
+
+export function estimateEncodedNeuralValue(model, encodedState, options = {}) {
+  if (!(Array.isArray(encodedState) || ArrayBuffer.isView(encodedState))
+    || encodedState.length !== STATE_DIM) {
+    throw new Error(`Encoded neural value state must contain ${STATE_DIM} values.`);
+  }
+  if (evaluatorRequiresStructuredV2(model)) {
+    if (!options.structuredState) {
+      throw new Error(
+        "Structured-v2 evaluator inference requires its public snapshot."
+      );
+    }
+    return estimateEvidenceNeuralValue(
+      model,
+      encodedState,
+      options.structuredState,
+      options
+    );
+  }
+  const state = Float32Array.from(encodedState);
+  return tf.tidy(() => forwardEvaluatorValue(
+    model,
+    tf.tensor3d(state, [1, 1, STATE_DIM]),
+    { targetHead: options.targetHead }
+  ).dataSync()[0]);
+}
+
+export function estimateEvidenceNeuralValue(
+  model,
+  encodedState,
+  structuredState,
+  options = {}
+) {
+  if (!evaluatorRequiresStructuredV2(model)) {
+    return estimateEncodedNeuralValue(model, encodedState);
+  }
+  const input = createStructuredV2TensorInput([structuredState], {
+    engineFingerprint: options.engineFingerprint,
+    informationSetHashes: options.informationSetHash
+      ? [options.informationSetHash]
+      : undefined,
+    legacyStates: [encodedState]
+  });
+  try {
+    return tf.tidy(() =>
+      forwardEvaluatorValue(model, input, {
+        targetHead: options.targetHead
+      }).dataSync()[0]);
+  } finally {
+    disposeStructuredV2TensorInput(input);
+  }
 }
 
 export function inferSequence(model, history, finalActions, legalCount) {
@@ -123,19 +266,43 @@ export function inferSequence(model, history, finalActions, legalCount) {
 
 export function trainPpoBatch(model, batch, optimizer, options = {}) {
   const clipRatio = options.clipRatio || 0.2;
-  const valueCoefficient = options.valueCoefficient || 0.5;
-  const beliefCoefficient = options.beliefCoefficient || 0.15;
+  const policyCoefficient = options.policyCoefficient ?? 1;
+  const valueCoefficient = options.valueCoefficient ?? 0.5;
+  const actionValueCoefficient = options.actionValueCoefficient ?? 0.25;
+  const diagnosticCoefficient = options.diagnosticCoefficient ?? 0.05;
+  const beliefCoefficient = options.beliefCoefficient ?? 0.15;
   const entropyCoefficient = options.entropyCoefficient ?? 0.01;
+  const teacherCoefficient = options.teacherCoefficient ?? 0.2;
+  const teacherDistillationCoefficient = options.teacherDistillationCoefficient ?? 1;
+  const teacherPolicyPreferenceCoefficient = options.teacherPolicyPreferenceCoefficient ?? 0.5;
+  const teacherRankingCoefficient = options.teacherRankingCoefficient ?? 0.3;
+  const teacherActionValueCoefficient = options.teacherActionValueCoefficient ?? 0.25;
+  const anchorCoefficient = options.anchorCoefficient ?? 0.03;
+  const anchorModels = normalizeAnchorModels(options);
+  if (!ppoBatchHasEffectiveSignal(batch, {
+    policyCoefficient,
+    valueCoefficient,
+    actionValueCoefficient,
+    diagnosticCoefficient,
+    beliefCoefficient,
+    entropyCoefficient,
+    teacherCoefficient,
+    teacherRankingCoefficient,
+    teacherActionValueCoefficient
+  })) {
+    return emptyPpoMetrics();
+  }
   const variableList = trainableVariables(model);
   const tensors = makeBatchTensors(batch);
   let components = null;
-  const loss = optimizer.minimize(() => {
+  const lossFunction = () => {
     const output = forwardNeural(model, tensors.states, tensors.actions, tensors.initialMemories);
     const legalMask = tf.less(
       tf.reshape(tf.range(0, MAX_ACTIONS, 1, "int32"), [1, 1, MAX_ACTIONS]),
       tf.expandDims(tensors.legalCounts, -1)
     ).toFloat();
-    const maskedLogits = tf.add(output.logits, tf.mul(tf.sub(1, legalMask), -1e9));
+    const policyTemperature = tf.maximum(0.05, tf.expandDims(tensors.behaviorTemperatures, -1));
+    const maskedLogits = tf.add(tf.div(output.logits, policyTemperature), tf.mul(tf.sub(1, legalMask), -1e9));
     const logProbabilities = tf.logSoftmax(maskedLogits, -1);
     const selectedMask = tf.oneHot(tensors.selectedIndices, MAX_ACTIONS);
     const newLogProbabilities = tf.sum(tf.mul(logProbabilities, selectedMask), -1);
@@ -143,40 +310,315 @@ export function trainPpoBatch(model, batch, optimizer, options = {}) {
     const clippedRatio = tf.clipByValue(ratio, 1 - clipRatio, 1 + clipRatio);
     const surrogate = tf.minimum(tf.mul(ratio, tensors.advantages), tf.mul(clippedRatio, tensors.advantages));
     const denominator = tf.maximum(1, tf.sum(tensors.stepMask));
-    const policyLoss = tf.neg(tf.div(tf.sum(tf.mul(surrogate, tensors.stepMask)), denominator));
+    const policyDenominator = tf.maximum(1, tf.sum(tensors.policyStepWeights));
+    const policyLoss = tf.neg(tf.div(
+      tf.sum(tf.mul(surrogate, tensors.policyStepWeights)),
+      policyDenominator
+    ));
+    // Candidate search can deliberately evaluate only a strategic subset.
+    // Distill relative preferences inside that support without treating every
+    // unsearched legal action as proven bad.
+    const teacherSupport = tf.greater(tensors.teacherSupports, 0).toFloat();
+    const teacherMaskedLogits = tf.add(output.policyLogits, tf.mul(tf.sub(1, teacherSupport), -1e9));
+    const teacherSupportedLogProbabilities = tf.logSoftmax(teacherMaskedLogits, -1);
+    const teacherTargetTotals = tf.maximum(1e-8, tf.sum(tensors.teacherTargets, -1, true));
+    const normalizedTeacherTargets = tf.div(tensors.teacherTargets, teacherTargetTotals);
+    const teacherLogProbabilities = tf.sum(tf.mul(teacherSupportedLogProbabilities, normalizedTeacherTargets), -1);
+    const teacherStepSupport = tf.mul(tf.greater(tensors.teacherWeights, 0).toFloat(), tensors.stepMask);
+    const teacherDenominator = tf.maximum(1, tf.sum(teacherStepSupport));
+    const teacherDistillationLoss = tf.neg(tf.div(
+      tf.sum(tf.mul(teacherLogProbabilities, tensors.teacherWeights)),
+      teacherDenominator
+    ));
     const valueError = tf.square(tf.sub(output.value, tensors.returns));
     const valueLoss = tf.div(tf.sum(tf.mul(valueError, tensors.stepMask)), denominator);
-    const clippedBelief = tf.clipByValue(output.belief, 1e-6, 1 - 1e-6);
-    const beliefCrossEntropy = tf.neg(tf.mean(tf.add(
-      tf.mul(tensors.beliefTargets, tf.log(clippedBelief)),
-      tf.mul(tf.sub(1, tensors.beliefTargets), tf.log(tf.sub(1, clippedBelief)))
-    ), -1));
-    const beliefLoss = tf.div(tf.sum(tf.mul(beliefCrossEntropy, tensors.stepMask)), denominator);
-    const entropy = tf.neg(tf.div(tf.sum(tf.mul(tf.sum(tf.mul(tf.exp(logProbabilities), logProbabilities), -1), tensors.stepMask)), denominator));
+    const selectedActionValues = tf.sum(tf.mul(output.actionValues, selectedMask), -1);
+    const actionValueError = tf.square(tf.sub(selectedActionValues, tensors.returns));
+    const actionValueLoss = tf.div(tf.sum(tf.mul(actionValueError, tensors.stepMask)), denominator);
+    const diagnosticError = tf.square(tf.sub(output.diagnostic, tensors.diagnosticTargets));
+    const diagnosticDenominator = tf.maximum(1, tf.sum(tensors.diagnosticWeights));
+    const diagnosticLoss = tf.div(
+      tf.sum(tf.mul(diagnosticError, tensors.diagnosticWeights)),
+      diagnosticDenominator
+    );
+    const teacherBestMask = tf.oneHot(tensors.teacherIndices, MAX_ACTIONS);
+    const teacherBestPolicyLogits = tf.sum(tf.mul(output.policyLogits, teacherBestMask), -1);
+    const selectedPolicyLogits = tf.sum(tf.mul(output.policyLogits, selectedMask), -1);
+    const teacherBestActionValues = tf.sum(tf.mul(output.actionValues, teacherBestMask), -1);
+    const distinctTeacherChoice = tf.notEqual(tensors.teacherIndices, tensors.selectedIndices).toFloat();
+    const rankingWeights = tf.mul(tf.mul(tensors.teacherWeights, distinctTeacherChoice), tensors.stepMask);
+    const rankingSupport = tf.mul(tf.mul(tf.greater(tensors.teacherWeights, 0).toFloat(), distinctTeacherChoice), tensors.stepMask);
+    const rankingDenominator = tf.maximum(1, tf.sum(rankingSupport));
+    // A verified correction should establish a margin, not push the teacher
+    // probability toward one forever. The hinge reaches exactly zero once the
+    // requested margin is satisfied, automatically lowering repeat priority.
+    const policyPreferenceError = tf.relu(tf.sub(
+      tensors.teacherMargins,
+      tf.sub(teacherBestPolicyLogits, selectedPolicyLogits)
+    ));
+    const teacherPolicyPreferenceLoss = tf.div(
+      tf.sum(tf.mul(policyPreferenceError, rankingWeights)),
+      rankingDenominator
+    );
+    const teacherLoss = tf.add(
+      tf.mul(teacherDistillationLoss, teacherDistillationCoefficient),
+      tf.mul(teacherPolicyPreferenceLoss, teacherPolicyPreferenceCoefficient)
+    );
+    const rankingError = tf.relu(tf.sub(tensors.teacherMargins,
+      tf.sub(teacherBestActionValues, selectedActionValues)));
+    const teacherRankingLoss = tf.div(tf.sum(tf.mul(rankingError, rankingWeights)), rankingDenominator);
+    const teacherActionValueError = tf.abs(tf.sub(output.actionValues, tensors.teacherActionValueTargets));
+    const teacherActionValueQuadratic = tf.minimum(teacherActionValueError, 1);
+    const teacherActionValueHuber = tf.add(
+      tf.mul(tf.square(teacherActionValueQuadratic), 0.5),
+      tf.sub(teacherActionValueError, teacherActionValueQuadratic)
+    );
+    const teacherActionValueSupport = tf.greater(tensors.teacherActionValueWeights, 0).toFloat();
+    const teacherActionValueDenominator = tf.maximum(1, tf.sum(teacherActionValueSupport));
+    const teacherActionValueLoss = tf.div(
+      tf.sum(tf.mul(teacherActionValueHuber, tensors.teacherActionValueWeights)),
+      teacherActionValueDenominator
+    );
+    const beliefLoss = weightedBeliefCrossEntropyLoss(
+      output.belief,
+      tensors.beliefTargets,
+      tensors.stepMask,
+      denominator
+    );
+    const entropy = tf.neg(tf.div(
+      tf.sum(tf.mul(
+        tf.sum(tf.mul(tf.exp(logProbabilities), logProbabilities), -1),
+        tensors.policyStepWeights
+      )),
+      policyDenominator
+    ));
+    let anchorKl = tf.scalar(0);
+    if (anchorModels.length && anchorCoefficient > 0) {
+      // Keep the candidate near both its immediate parent and the stable
+      // champion. A champion-only anchor allowed useful learner behaviour to
+      // disappear between non-promoted generations.
+      const weightedAnchorKls = anchorModels.map(({ model: anchorModel, weight }) => {
+        const anchorOutput = forwardNeural(anchorModel, tensors.states, tensors.actions, tensors.initialMemories);
+        const anchorMaskedLogits = tf.add(tf.div(anchorOutput.logits, policyTemperature), tf.mul(tf.sub(1, legalMask), -1e9));
+        // Anchor variables are intentionally absent from variableList, so this
+        // branch is constant with respect to the candidate update.
+        const anchorLogProbabilities = tf.logSoftmax(anchorMaskedLogits, -1);
+        const anchorProbabilities = tf.exp(anchorLogProbabilities);
+        const perStepKl = tf.sum(tf.mul(anchorProbabilities, tf.sub(anchorLogProbabilities, logProbabilities)), -1);
+        return tf.mul(tf.div(
+          tf.sum(tf.mul(perStepKl, tensors.policyStepWeights)),
+          policyDenominator
+        ), weight);
+      });
+      anchorKl = weightedAnchorKls.length === 1 ? weightedAnchorKls[0] : tf.addN(weightedAnchorKls);
+    }
     components = {
       policyLoss: tf.keep(policyLoss),
       valueLoss: tf.keep(valueLoss),
+      actionValueLoss: tf.keep(actionValueLoss),
+      diagnosticLoss: tf.keep(diagnosticLoss),
+      teacherActionValueLoss: tf.keep(teacherActionValueLoss),
+      teacherRankingLoss: tf.keep(teacherRankingLoss),
+      teacherDistillationLoss: tf.keep(teacherDistillationLoss),
+      teacherPolicyPreferenceLoss: tf.keep(teacherPolicyPreferenceLoss),
+      teacherLoss: tf.keep(teacherLoss),
       beliefLoss: tf.keep(beliefLoss),
-      entropy: tf.keep(entropy)
+      entropy: tf.keep(entropy),
+      anchorKl: tf.keep(anchorKl)
     };
     return tf.addN([
-      policyLoss,
+      tf.mul(policyLoss, policyCoefficient),
       tf.mul(valueLoss, valueCoefficient),
+      tf.mul(actionValueLoss, actionValueCoefficient),
+      tf.mul(diagnosticLoss, diagnosticCoefficient),
+      tf.mul(teacherLoss, teacherCoefficient),
+      tf.mul(teacherRankingLoss, teacherRankingCoefficient),
+      tf.mul(teacherActionValueLoss, teacherActionValueCoefficient),
       tf.mul(beliefLoss, beliefCoefficient),
+      tf.mul(anchorKl, anchorCoefficient),
       tf.mul(entropy, -entropyCoefficient)
     ]);
-  }, true, variableList);
+  };
+  const { value: loss, grads } = tf.variableGrads(lossFunction, variableList);
+  const gradientDiagnostics = summarizeGradientNorms(grads);
+  const gradientSignature = options.captureGradientSignature === true
+    ? captureGradientSignature(grads, options.gradientSignatureGroups || ["shared-state-memory"])
+    : null;
+  if (options.applyGradients !== false) optimizer.applyGradients(grads);
   const result = {
+    optimizerStepApplied: options.applyGradients !== false,
     loss: loss.dataSync()[0],
     policyLoss: components.policyLoss.dataSync()[0],
     valueLoss: components.valueLoss.dataSync()[0],
+    actionValueLoss: components.actionValueLoss.dataSync()[0],
+    diagnosticLoss: components.diagnosticLoss.dataSync()[0],
+    teacherActionValueLoss: components.teacherActionValueLoss.dataSync()[0],
+    teacherLoss: components.teacherLoss.dataSync()[0],
+    teacherDistillationLoss: components.teacherDistillationLoss.dataSync()[0],
+    teacherPolicyPreferenceLoss: components.teacherPolicyPreferenceLoss.dataSync()[0],
+    teacherRankingLoss: components.teacherRankingLoss.dataSync()[0],
     beliefLoss: components.beliefLoss.dataSync()[0],
-    entropy: components.entropy.dataSync()[0]
+    entropy: components.entropy.dataSync()[0],
+    anchorKl: components.anchorKl.dataSync()[0],
+    gradientNorm: gradientDiagnostics.total,
+    gradientNormByGroup: gradientDiagnostics.byGroup,
+    gradientSignature
   };
+  Object.values(grads).forEach((tensor) => tensor.dispose());
   loss.dispose();
   Object.values(components).forEach((tensor) => tensor.dispose());
   Object.values(tensors).forEach((tensor) => tensor.dispose());
   return result;
+}
+
+export function trainTeacherProposalValueBatch(model, batch, optimizer, options = {}) {
+  const coefficient = Math.max(0, Number(options.coefficient) || 0);
+  const hasTargets = coefficient > 0
+    && Array.from(batch.teacherActionValueWeights || []).some((value) => Number(value) > 0);
+  if (!hasTargets) return {
+    ...emptyPpoMetrics(),
+    teacherProposalValueLoss: 0
+  };
+  const tensors = makeBatchTensors(batch);
+  const variableList = model.layers.teacherProposalValue.trainableWeights
+    .map((weight) => weight.val);
+  let keptLoss = null;
+  const lossFunction = () => {
+    const output = forwardNeural(model, tensors.states, tensors.actions, tensors.initialMemories);
+    const absoluteError = tf.abs(tf.sub(
+      output.teacherProposalValues,
+      tensors.teacherActionValueTargets
+    ));
+    const quadratic = tf.minimum(absoluteError, 1);
+    const huber = tf.add(
+      tf.mul(tf.square(quadratic), 0.5),
+      tf.sub(absoluteError, quadratic)
+    );
+    const support = tf.greater(tensors.teacherActionValueWeights, 0).toFloat();
+    const denominator = tf.maximum(1, tf.sum(support));
+    const loss = tf.div(
+      tf.sum(tf.mul(huber, tensors.teacherActionValueWeights)),
+      denominator
+    );
+    keptLoss = tf.keep(loss);
+    return tf.mul(loss, coefficient);
+  };
+  const { value: loss, grads } = tf.variableGrads(lossFunction, variableList);
+  const gradientDiagnostics = summarizeGradientNorms(grads);
+  if (options.applyGradients !== false) optimizer.applyGradients(grads);
+  const proposalLoss = keptLoss.dataSync()[0];
+  const result = {
+    ...emptyPpoMetrics(),
+    optimizerStepApplied: options.applyGradients !== false,
+    loss: loss.dataSync()[0],
+    teacherActionValueLoss: proposalLoss,
+    teacherProposalValueLoss: proposalLoss,
+    gradientNorm: gradientDiagnostics.total,
+    gradientNormByGroup: gradientDiagnostics.byGroup
+  };
+  Object.values(grads).forEach((tensor) => tensor.dispose());
+  loss.dispose();
+  keptLoss.dispose();
+  Object.values(tensors).forEach((tensor) => tensor.dispose());
+  return result;
+}
+
+function captureGradientSignature(grads, includedGroups) {
+  const allowed = new Set(includedGroups || []);
+  const entries = [];
+  let length = 0;
+  for (const [name, gradient] of Object.entries(grads || {})) {
+    const group = gradientVariableGroup(name);
+    if (!allowed.has(group)) continue;
+    const values = Float32Array.from(gradient.dataSync());
+    entries.push({ name, group, values });
+    length += values.length;
+  }
+  return { version: 1, groups: [...allowed], length, entries };
+}
+
+function ppoBatchHasEffectiveSignal(batch, coefficients) {
+  const hasSteps = Array.from(batch.stepMask || []).some((value) => Number(value) > 0);
+  if (hasSteps && [
+    coefficients.policyCoefficient,
+    coefficients.valueCoefficient,
+    coefficients.actionValueCoefficient,
+    coefficients.beliefCoefficient,
+    coefficients.entropyCoefficient
+  ].some((value) => Number(value) !== 0)) return true;
+  if (Number(coefficients.diagnosticCoefficient) !== 0
+    && Array.from(batch.diagnosticWeights || []).some((value) => Number(value) > 0)) return true;
+  const hasTeacherPolicy = Array.from(batch.teacherWeights || []).some((value) => Number(value) > 0);
+  if (hasTeacherPolicy && (Number(coefficients.teacherCoefficient) !== 0
+    || Number(coefficients.teacherRankingCoefficient) !== 0)) return true;
+  return Number(coefficients.teacherActionValueCoefficient) !== 0
+    && Array.from(batch.teacherActionValueWeights || []).some((value) => Number(value) > 0);
+}
+
+function emptyPpoMetrics() {
+  return {
+    optimizerStepApplied: false,
+    loss: 0,
+    policyLoss: 0,
+    valueLoss: 0,
+    actionValueLoss: 0,
+    diagnosticLoss: 0,
+    teacherActionValueLoss: 0,
+    teacherLoss: 0,
+    teacherDistillationLoss: 0,
+    teacherPolicyPreferenceLoss: 0,
+    teacherRankingLoss: 0,
+    beliefLoss: 0,
+    entropy: 0,
+    anchorKl: 0,
+    gradientNorm: 0,
+    gradientNormByGroup: {},
+    gradientSignature: null
+  };
+}
+
+function summarizeGradientNorms(grads) {
+  const squaredByGroup = {};
+  let totalSquared = 0;
+  for (const [name, gradient] of Object.entries(grads || {})) {
+    const squared = tf.tidy(() => tf.sum(tf.square(gradient)).dataSync()[0]);
+    const group = gradientVariableGroup(name);
+    totalSquared += squared;
+    squaredByGroup[group] = (squaredByGroup[group] || 0) + squared;
+  }
+  return {
+    total: Math.sqrt(Math.max(0, totalSquared)),
+    byGroup: Object.fromEntries(Object.entries(squaredByGroup).map(([group, squared]) => [
+      group,
+      Math.sqrt(Math.max(0, squared))
+    ]))
+  };
+}
+
+function gradientVariableGroup(name) {
+  if (name.includes("memory_gru") || name.includes("state_projection")) return "shared-state-memory";
+  if (name.includes("action_projection") || name.includes("action_bias")) return "policy-action-encoder";
+  if (name.includes("action_value_head")) return "action-value";
+  if (name.includes("teacher_proposal_value_head")) return "teacher-proposal-value";
+  if (name.includes("value_head")) return "state-value";
+  if (name.includes("belief_head")) return "belief";
+  if (name.includes("diagnostic_auxiliary_head")) return "diagnostic";
+  return "other";
+}
+
+function normalizeAnchorModels(options) {
+  const configured = Array.isArray(options.anchorModels) && options.anchorModels.length
+    ? options.anchorModels
+    : (options.anchorModel ? [{ model: options.anchorModel, weight: 1 }] : []);
+  const unique = new Map();
+  for (const entry of configured) {
+    const model = entry?.model || entry;
+    if (!model) continue;
+    unique.set(model, (unique.get(model) || 0) + Math.max(0, Number(entry?.weight) || 0));
+  }
+  const totalWeight = [...unique.values()].reduce((sum, weight) => sum + weight, 0);
+  if (!(totalWeight > 0)) return [];
+  return [...unique].map(([model, weight]) => ({ model, weight: weight / totalWeight }));
 }
 
 export function trainBehaviorCloningBatch(model, batch, optimizer, options = {}) {
@@ -192,13 +634,16 @@ export function trainBehaviorCloningBatch(model, batch, optimizer, options = {})
     const maskedLogits = tf.add(output.logits, tf.mul(tf.sub(1, legalMask), -1e9));
     const logProbabilities = tf.logSoftmax(maskedLogits, -1);
     const selectedMask = tf.oneHot(tensors.selectedIndices, MAX_ACTIONS);
+    const teacherMask = tf.oneHot(tensors.teacherIndices, MAX_ACTIONS);
     const selectedLogProbabilities = tf.sum(tf.mul(logProbabilities, selectedMask), -1);
+    const teacherPolicyLogits = tf.sum(tf.mul(output.policyLogits, teacherMask), -1);
+    const selectedPolicyLogits = tf.sum(tf.mul(output.policyLogits, selectedMask), -1);
     const weights = tf.mul(tensors.stepMask, tf.maximum(0.05, tensors.advantages));
     const denominator = tf.maximum(1, tf.sum(weights));
     const policyLoss = tf.neg(tf.div(tf.sum(tf.mul(selectedLogProbabilities, weights)), denominator));
     const stepDenominator = tf.maximum(1, tf.sum(tensors.stepMask));
     const valueLoss = tf.div(tf.sum(tf.mul(tf.square(tf.sub(output.value, tensors.returns)), tensors.stepMask)), stepDenominator);
-    const beliefLoss = beliefCrossEntropyLoss(output.belief, tensors.beliefTargets, tensors.stepMask, stepDenominator);
+    const beliefLoss = weightedBeliefCrossEntropyLoss(output.belief, tensors.beliefTargets, tensors.stepMask, stepDenominator);
     const entropy = tf.neg(tf.div(tf.sum(tf.mul(tf.sum(tf.mul(tf.exp(logProbabilities), logProbabilities), -1), tensors.stepMask)), stepDenominator));
     components = {
       policyLoss: tf.keep(policyLoss), valueLoss: tf.keep(valueLoss),
@@ -224,7 +669,12 @@ export function evaluateBehaviorCloningBatch(model, batch) {
     const maskedLogits = tf.add(output.logits, tf.mul(tf.sub(1, legalMask), -1e9));
     const logProbabilities = tf.logSoftmax(maskedLogits, -1);
     const selectedMask = tf.oneHot(tensors.selectedIndices, MAX_ACTIONS);
+    const teacherMask = tf.oneHot(tensors.teacherIndices, MAX_ACTIONS);
     const selectedLogProbabilities = tf.sum(tf.mul(logProbabilities, selectedMask), -1);
+    const teacherPolicyLogits = tf.sum(tf.mul(output.policyLogits, teacherMask), -1);
+    const selectedPolicyLogits = tf.sum(tf.mul(output.policyLogits, selectedMask), -1);
+    const teacherActionValues = tf.sum(tf.mul(output.actionValues, teacherMask), -1);
+    const selectedActionValues = tf.sum(tf.mul(output.actionValues, selectedMask), -1);
     const predictions = tf.argMax(maskedLogits, -1).toInt();
     const correct = tf.mul(tf.equal(predictions, tensors.selectedIndices).toFloat(), tensors.stepMask);
     const decisionMask = tf.mul(tf.greater(tensors.legalCounts, 1).toFloat(), tensors.stepMask);
@@ -239,9 +689,21 @@ export function evaluateBehaviorCloningBatch(model, batch) {
       chanceCorrect: tf.sum(chanceCorrect).dataSync()[0],
       policyLoss: -tf.sum(tf.mul(selectedLogProbabilities, tensors.stepMask)).dataSync()[0] / count,
       valueMse: tf.sum(tf.mul(tf.square(tf.sub(output.value, tensors.returns)), tensors.stepMask)).dataSync()[0] / count,
-      beliefLoss: beliefCrossEntropyLoss(output.belief, tensors.beliefTargets, tensors.stepMask, tf.scalar(count)).dataSync()[0],
+      beliefLoss: weightedBeliefCrossEntropyLoss(output.belief, tensors.beliefTargets, tensors.stepMask, tf.scalar(count)).dataSync()[0],
       values: Array.from(output.value.dataSync()),
       returns: Array.from(tensors.returns.dataSync()),
+      outcomes: Array.from(tensors.outcomeTargets.dataSync()),
+      teacherPolicyMargins: Array.from(tf.sub(
+        teacherPolicyLogits,
+        selectedPolicyLogits
+      ).dataSync()),
+      teacherActionValueMargins: Array.from(tf.sub(
+        teacherActionValues,
+        selectedActionValues
+      ).dataSync()),
+      actionValues: Array.from(output.actionValues.dataSync()),
+      teacherWeights: Array.from(tensors.teacherWeights.dataSync()),
+      beliefMetrics: beliefEvaluationMetrics(output.belief, tensors.beliefTargets, tensors.stepMask),
       mask: Array.from(tensors.stepMask.dataSync())
     };
   });
@@ -262,7 +724,8 @@ export function serializeNeuralModel(model) {
       actionDim: ACTION_DIM,
       maxActions: MAX_ACTIONS,
       cardVocabulary: CARD_VOCABULARY,
-      cardVocabularySize: CARD_BINS
+      cardVocabularySize: CARD_BINS,
+      evaluator: evaluatorArchitecture(model)
     },
     weights: Object.fromEntries(Object.entries(model.layers).map(([name, layer]) => [name, layer.getWeights().map((tensor) => ({
       shape: tensor.shape,
@@ -272,20 +735,59 @@ export function serializeNeuralModel(model) {
 }
 
 export function deserializeNeuralModel(checkpoint) {
-  if (checkpoint?.version !== NEURAL_MODEL_VERSION) {
+  if (![2, 3, 4, NEURAL_MODEL_VERSION].includes(checkpoint?.version)) {
     throw new Error(`Neural checkpoint version ${checkpoint?.version ?? "unknown"} is incompatible with model version ${NEURAL_MODEL_VERSION}.`);
   }
   if (JSON.stringify(checkpoint.architecture?.cardVocabulary) !== JSON.stringify(CARD_VOCABULARY)) {
     throw new Error("Neural checkpoint card vocabulary does not match the registered card pool.");
   }
-  const model = createNeuralModel(checkpoint);
+  const model = createNeuralModel({
+    ...checkpoint,
+    evaluatorArchitecture: checkpoint.architecture?.evaluator || null,
+    evaluatorWarmStart: false
+  });
+  const migrateCompositeTacticalFeature = checkpoint.metadata?.actionRepresentation !== "semantic-tactical-v3";
   for (const [name, weights] of Object.entries(checkpoint.weights || {})) {
     if (!model.layers[name]) continue;
-    const tensors = weights.map((weight) => tf.tensor(weight.values, weight.shape));
+    const expected = model.layers[name].getWeights();
+    const tensors = weights.map((weight, index) => {
+      const shape = migratedWeightShape(weight, expected[index]?.shape);
+      let values = migratedWeightValues(weight, expected[index]?.shape);
+      if (migrateCompositeTacticalFeature && ["actionProjection", "actionBias"].includes(name)
+        && shape?.[0] === ACTION_DIM) values = zeroInputRow(values, shape, LEGACY_ACTION_DIM + 15);
+      return tf.tensor(values, shape);
+    });
     model.layers[name].setWeights(tensors);
     tensors.forEach((tensor) => tensor.dispose());
   }
   return model;
+}
+
+function migratedWeightShape(weight, expectedShape) {
+  if (canZeroPadInputDimension(weight.shape, expectedShape)) return expectedShape;
+  return weight.shape;
+}
+
+function migratedWeightValues(weight, expectedShape) {
+  if (!canZeroPadInputDimension(weight.shape, expectedShape)) return weight.values;
+  const rowSize = weight.shape.slice(1).reduce((product, value) => product * value, 1) || 1;
+  return [...weight.values, ...new Array((expectedShape[0] - weight.shape[0]) * rowSize).fill(0)];
+}
+
+function canZeroPadInputDimension(shape, expectedShape) {
+  return Array.isArray(shape) && Array.isArray(expectedShape)
+    && shape.length === expectedShape.length
+    && shape.length > 1
+    && shape[0] < expectedShape[0]
+    && JSON.stringify(shape.slice(1)) === JSON.stringify(expectedShape.slice(1));
+}
+
+function zeroInputRow(values, shape, row) {
+  const output = [...values];
+  const rowSize = shape.slice(1).reduce((product, value) => product * value, 1) || 1;
+  const start = row * rowSize;
+  output.fill(0, start, start + rowSize);
+  return output;
 }
 
 function makeBatchTensors(batch) {
@@ -297,9 +799,27 @@ function makeBatchTensors(batch) {
     selectedIndices: tf.tensor2d(batch.selectedIndices, [batchSize, sequenceLength], "int32"),
     legalCounts: tf.tensor2d(batch.legalCounts, [batchSize, sequenceLength], "int32"),
     oldLogProbabilities: tf.tensor2d(batch.oldLogProbabilities, [batchSize, sequenceLength]),
+    behaviorTemperatures: tf.tensor2d(batch.behaviorTemperatures, [batchSize, sequenceLength]),
     advantages: tf.tensor2d(batch.advantages, [batchSize, sequenceLength]),
     returns: tf.tensor2d(batch.returns, [batchSize, sequenceLength]),
+    outcomeTargets: tf.tensor2d(batch.outcomeTargets, [batchSize, sequenceLength]),
     stepMask: tf.tensor2d(batch.stepMask, [batchSize, sequenceLength]),
+    policyStepWeights: tf.tensor2d(
+      batch.policyStepWeights || batch.stepMask,
+      [batchSize, sequenceLength]
+    ),
+    teacherIndices: tf.tensor2d(batch.teacherIndices, [batchSize, sequenceLength], "int32"),
+    teacherWeights: tf.tensor2d(batch.teacherWeights, [batchSize, sequenceLength]),
+    teacherMargins: tf.tensor2d(batch.teacherMargins, [batchSize, sequenceLength]),
+    teacherTargets: tf.tensor3d(batch.teacherTargets, [batchSize, sequenceLength, MAX_ACTIONS]),
+    teacherSupports: tf.tensor3d(
+      batch.teacherSupports || batch.teacherTargets,
+      [batchSize, sequenceLength, MAX_ACTIONS]
+    ),
+    teacherActionValueTargets: tf.tensor3d(batch.teacherActionValueTargets, [batchSize, sequenceLength, MAX_ACTIONS]),
+    teacherActionValueWeights: tf.tensor3d(batch.teacherActionValueWeights, [batchSize, sequenceLength, MAX_ACTIONS]),
+    diagnosticTargets: tf.tensor3d(batch.diagnosticTargets, [batchSize, sequenceLength, 2]),
+    diagnosticWeights: tf.tensor3d(batch.diagnosticWeights, [batchSize, sequenceLength, 2]),
     beliefTargets: tf.tensor3d(batch.beliefTargets, [batchSize, sequenceLength, CARD_BINS])
   };
 }
@@ -311,13 +831,73 @@ function legalActionMask(legalCounts) {
   ).toFloat();
 }
 
-function beliefCrossEntropyLoss(prediction, target, stepMask, denominator) {
+function weightedBeliefCrossEntropyLoss(prediction, target, stepMask, denominator) {
   const clipped = tf.clipByValue(prediction, 1e-6, 1 - 1e-6);
+  const expandedStepMask = tf.expandDims(stepMask, -1);
+  const positives = tf.sum(tf.mul(target, expandedStepMask), [0, 1]);
+  const observations = tf.maximum(1, tf.sum(stepMask));
+  const negatives = tf.maximum(0, tf.sub(observations, positives));
+  const positiveWeights = tf.clipByValue(tf.div(negatives, tf.maximum(1, positives)), 1, 20);
   const crossEntropy = tf.neg(tf.mean(tf.add(
-    tf.mul(target, tf.log(clipped)),
+    tf.mul(tf.mul(target, positiveWeights), tf.log(clipped)),
     tf.mul(tf.sub(1, target), tf.log(tf.sub(1, clipped)))
   ), -1));
   return tf.div(tf.sum(tf.mul(crossEntropy, stepMask)), denominator);
+}
+
+function beliefEvaluationMetrics(prediction, target, stepMask, topK = 40) {
+  const [batchSize, sequenceLength, bins] = prediction.shape;
+  const predicted = prediction.dataSync();
+  const expected = target.dataSync();
+  const mask = stepMask.dataSync();
+  let positives = 0;
+  let topKHits = 0;
+  let topKPredictions = 0;
+  const thresholds = Array.from({ length: 11 }, (_, index) => ({
+    threshold: index / 10,
+    truePositive: 0,
+    falsePositive: 0,
+    falseNegative: 0
+  }));
+  for (let step = 0; step < batchSize * sequenceLength; step += 1) {
+    if (!mask[step]) continue;
+    const offset = step * bins;
+    const indexes = Array.from({ length: bins }, (_, index) => index)
+      .sort((left, right) => predicted[offset + right] - predicted[offset + left])
+      .slice(0, Math.min(topK, bins));
+    for (let index = 0; index < bins; index += 1) {
+      if (expected[offset + index] > 0.5) positives += 1;
+    }
+    topKHits += indexes.filter((index) => expected[offset + index] > 0.5).length;
+    topKPredictions += indexes.length;
+    for (const item of thresholds) {
+      for (let index = 0; index < bins; index += 1) {
+        const positive = expected[offset + index] > 0.5;
+        const selected = predicted[offset + index] >= item.threshold;
+        if (selected && positive) item.truePositive += 1;
+        else if (selected) item.falsePositive += 1;
+        else if (positive) item.falseNegative += 1;
+      }
+    }
+  }
+  return { positives, topKHits, topKPredictions, thresholds };
+}
+
+export function evaluatePpoBatchPolicyRatios(model, batch) {
+  const tensors = makeBatchTensors(batch);
+  const ratios = tf.tidy(() => {
+    const output = forwardNeural(model, tensors.states, tensors.actions, tensors.initialMemories);
+    const legalMask = legalActionMask(tensors.legalCounts);
+    const temperature = tf.maximum(0.05, tf.expandDims(tensors.behaviorTemperatures, -1));
+    const maskedLogits = tf.add(tf.div(output.logits, temperature), tf.mul(tf.sub(1, legalMask), -1e9));
+    const logProbabilities = tf.logSoftmax(maskedLogits, -1);
+    const selectedMask = tf.oneHot(tensors.selectedIndices, MAX_ACTIONS);
+    const selected = tf.sum(tf.mul(logProbabilities, selectedMask), -1);
+    return Array.from(tf.exp(tf.sub(selected, tensors.oldLogProbabilities)).dataSync());
+  });
+  const mask = Array.from(tensors.stepMask.dataSync());
+  Object.values(tensors).forEach((tensor) => tensor.dispose());
+  return ratios.filter((_, index) => mask[index]);
 }
 
 function readLossComponents(loss, components, batch) {

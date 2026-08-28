@@ -1,15 +1,26 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createWriteStream } from "node:fs";
+import { mkdir, readFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
-import { gzip, gunzip } from "node:zlib";
+import { createGzip, gunzip } from "node:zlib";
+import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
 
-const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
 
 export async function writeTrajectoryArchive(filename, payload) {
   await mkdir(path.dirname(filename), { recursive: true });
-  const serialized = JSON.stringify(payload, typedArrayReplacer);
-  await writeFile(filename, await gzipAsync(serialized));
+  const temporary = `${filename}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    await pipeline(
+      trajectoryArchiveJsonChunks(payload),
+      createGzip(),
+      createWriteStream(temporary)
+    );
+    await rename(temporary, filename);
+  } catch (error) {
+    await rm(temporary, { force: true }).catch(() => {});
+    throw error;
+  }
 }
 
 export async function readTrajectoryArchive(filename) {
@@ -30,4 +41,32 @@ function typedArrayReviver(key, value) {
   if (!Constructor) throw new Error(`Unsupported trajectory typed array: ${value.__typedArray}`);
   const copy = Uint8Array.from(bytes);
   return new Constructor(copy.buffer);
+}
+
+function* trajectoryArchiveJsonChunks(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    yield JSON.stringify(payload, typedArrayReplacer);
+    return;
+  }
+  yield "{";
+  let wroteProperty = false;
+  for (const [key, value] of Object.entries(payload)) {
+    if (key === "trajectories" && Array.isArray(value)) {
+      if (wroteProperty) yield ",";
+      yield `${JSON.stringify(key)}:[`;
+      for (let index = 0; index < value.length; index += 1) {
+        if (index) yield ",";
+        yield JSON.stringify(value[index], typedArrayReplacer) ?? "null";
+      }
+      yield "]";
+      wroteProperty = true;
+      continue;
+    }
+    const serialized = JSON.stringify(value, typedArrayReplacer);
+    if (serialized == null) continue;
+    if (wroteProperty) yield ",";
+    yield `${JSON.stringify(key)}:${serialized}`;
+    wroteProperty = true;
+  }
+  yield "}";
 }

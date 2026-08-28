@@ -124,6 +124,25 @@ export function validateTrajectories(trajectories, { engineFingerprint = null } 
       if (engineFingerprint && step.legalActionKeys?.length !== step.originalLegalCount) errors.push(`${prefix} has an incomplete legal-action manifest.`);
       if (![step.state, step.actions, step.beliefTarget, step.initialMemory].every(finiteArray)) errors.push(`${prefix} contains a non-finite tensor value.`);
       if (![step.advantage, step.return, step.teacherConfidence].every(Number.isFinite)) errors.push(`${prefix} contains a non-finite scalar.`);
+      if (Number(trajectory.learningTargetVersion) >= 3) {
+        if (!Number.isFinite(step.behaviorTemperature) || step.behaviorTemperature < 0.05) {
+          errors.push(`${prefix} has an invalid behavior temperature.`);
+        }
+        if (![1, -1].includes(Number(step.terminalOutcome))) {
+          errors.push(`${prefix} has no terminal win/loss outcome.`);
+        }
+      }
+      if (step.teacherRankingMargin != null && !Number.isFinite(step.teacherRankingMargin)) {
+        errors.push(`${prefix} contains a non-finite teacher ranking margin.`);
+      }
+      for (const field of ["teacherActionValueTargets", "teacherActionValueWeights"]) {
+        if (step[field] == null) continue;
+        if (step[field].length !== step.legalCount) errors.push(`${prefix} has invalid ${field} length.`);
+        if (!finiteArray(step[field])) errors.push(`${prefix} contains non-finite ${field}.`);
+      }
+      for (const field of ["shortHorizonReturn", "longHorizonReturn"]) {
+        if (step[field] != null && !Number.isFinite(step[field])) errors.push(`${prefix} contains a non-finite ${field}.`);
+      }
       if (errors.length >= 100) return errors;
     }
   }

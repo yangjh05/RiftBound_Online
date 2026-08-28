@@ -1,5 +1,9 @@
 import { observeGame } from "../observation.mjs";
 import { cards } from "../../cards.mjs";
+import { opponentResponseProfile, reactionReserveProfile } from "../resource-strategy.mjs";
+import { mulliganPlanProfile } from "../mulligan.mjs";
+import { remainingDeckProfile } from "../deck-memory.mjs";
+import { tacticalActionProfile } from "../action-tactics.mjs";
 
 export const CARD_VOCABULARY = Object.freeze([
   "<unknown>",
@@ -18,17 +22,46 @@ export const MAX_BASE_UNITS = 8;
 export const UNIT_FEATURES = 36;
 export const BATTLEFIELD_FEATURES = 24;
 export const CONTEXT_FEATURES = 64;
-const CARD_ZONE_FEATURES = CARD_BINS * 4;
-const BATTLEFIELD_STATE_FEATURES = MAX_BATTLEFIELDS * (BATTLEFIELD_FEATURES + MAX_FIELD_UNITS * UNIT_FEATURES);
-const BASE_STATE_FEATURES = 2 * MAX_BASE_UNITS * UNIT_FEATURES;
+export const CARD_ZONE_FEATURES = CARD_BINS * 4;
+export const BATTLEFIELD_STATE_FEATURES = MAX_BATTLEFIELDS * (BATTLEFIELD_FEATURES + MAX_FIELD_UNITS * UNIT_FEATURES);
+export const BASE_STATE_FEATURES = 2 * MAX_BASE_UNITS * UNIT_FEATURES;
 export const STATE_DIM = STATE_SCALARS + CARD_ZONE_FEATURES + BATTLEFIELD_STATE_FEATURES + BASE_STATE_FEATURES + CONTEXT_FEATURES;
+export const STRUCTURED_STATE_TOKEN_VERSION = 1;
+export const STRUCTURED_STATE_LAYOUT = Object.freeze({
+  version: STRUCTURED_STATE_TOKEN_VERSION,
+  scalars: Object.freeze({ offset: 0, count: STATE_SCALARS, width: 1 }),
+  cardZones: Object.freeze({ offset: STATE_SCALARS, count: 4, width: CARD_BINS }),
+  battlefields: Object.freeze({
+    offset: STATE_SCALARS + CARD_ZONE_FEATURES,
+    count: MAX_BATTLEFIELDS,
+    width: BATTLEFIELD_FEATURES + MAX_FIELD_UNITS * UNIT_FEATURES,
+    battlefieldWidth: BATTLEFIELD_FEATURES,
+    unitCount: MAX_FIELD_UNITS,
+    unitWidth: UNIT_FEATURES
+  }),
+  bases: Object.freeze({
+    offset: STATE_SCALARS + CARD_ZONE_FEATURES + BATTLEFIELD_STATE_FEATURES,
+    count: 2,
+    width: MAX_BASE_UNITS * UNIT_FEATURES,
+    unitCount: MAX_BASE_UNITS,
+    unitWidth: UNIT_FEATURES
+  }),
+  context: Object.freeze({
+    offset: STATE_DIM - CONTEXT_FEATURES,
+    count: CONTEXT_FEATURES,
+    width: 1
+  })
+});
 export const ACTION_SEMANTIC_DIM = 256;
 // The suffix is reserved for collision disambiguation inside the current legal
 // action set. It guarantees that two legal actions never reach the model as the
 // same vector, even when engine-generated identifiers happen to hash alike.
-export const ACTION_DIM = ACTION_SEMANTIC_DIM + 192;
+export const LEGACY_ACTION_DIM = ACTION_SEMANTIC_DIM + 192;
+export const ACTION_TACTICAL_DIM = 16;
+export const ACTION_DIM = LEGACY_ACTION_DIM + ACTION_TACTICAL_DIM;
 export const MAX_ACTIONS = 192;
 export const MAX_SEQUENCE = 128;
+export const NEURAL_HIDDEN_SIZE = 64;
 
 const ACTION_KINDS = Object.freeze([
   "confirmFirstPlayer", "selectChampion", "selectBattlefield", "toggleMulliganCard",
@@ -44,9 +77,15 @@ const ACTION_KIND_INDEX = new Map(ACTION_KINDS.map((kind, index) => [kind, index
 // kinds use previously unused feature slots instead of shifting the legacy map.
 ACTION_KIND_INDEX.set("togglePaymentPoolPower", 67);
 ACTION_KIND_INDEX.set("rollFirstPlayer", 68);
+ACTION_KIND_INDEX.set("submitMulligan", ACTION_KIND_INDEX.get("toggleMulliganCard"));
 
 export function encodeState(game, viewerId) {
-  const observation = observeGame(game, viewerId);
+  // The flat encoder consumes board, zone and decision context only. Avoid
+  // copying response logs and the full public turn ledger on every inference;
+  // Structured-v2 snapshots request those fields through the default observer.
+  const observation = observeGame(game, viewerId, {
+    includeExtendedContext: false
+  });
   if (!observation) return new Float32Array(STATE_DIM);
   const output = new Float32Array(STATE_DIM);
   const mine = observation.self;
@@ -119,6 +158,7 @@ export function encodeState(game, viewerId) {
     }
   }
   encodeDecisionContext(output, relationalOffset, game, observation, viewerId);
+  encodeOwnDeckContext(output, relationalOffset, game, viewerId);
   return output;
 }
 
@@ -126,7 +166,10 @@ export function encodeAction(game, actorId, action) {
   const output = new Float32Array(ACTION_DIM);
   const kindIndex = ACTION_KIND_INDEX.get(action.kind);
   if (kindIndex != null) output[kindIndex] = 1;
-  const card = findCard(game, action.cardId || action.unitId || action.unitIds?.[0]) || cardByNumber(action.cardNumber || action.outCardNumber);
+  const player = game.players.find((candidate) => candidate.id === actorId);
+  const card = findCard(game, action.cardId || action.cardIds?.[0] || action.unitId || action.unitIds?.[0])
+    || cardByNumber(action.cardNumber || action.outCardNumber)
+    || (action.kind === "beginPlayChampion" ? player?.champion : null);
   const secondaryCard = cardByNumber(action.inCardNumber);
   encodeIndexBits(output, 24, cardIndex(card?.cardNumber));
   encodeIndexBits(output, 34, cardIndex(secondaryCard?.cardNumber));
@@ -138,6 +181,7 @@ export function encodeAction(game, actorId, action) {
     output[56] = /power/iu.test(ability.localId) ? 1 : 0;
     encodeIndexBits(output, 57, cardIndex(findCard(game, ability.sourceId)?.cardNumber));
   }
+  encodeCardEffectSemantics(output, 69, 17, card);
   output[86] = action.playerId === actorId ? 1 : 0;
   output[87] = action.playerId && action.playerId !== actorId ? 1 : 0;
   const destinationId = action.destination || action.destinationId;
@@ -155,7 +199,6 @@ export function encodeAction(game, actorId, action) {
   output[98] = action.mode === "power" ? 1 : 0;
   output[99] = Math.min(1, (action.unitIds?.length || (action.unitId ? 1 : 0)) / 5);
   for (const tag of [...(card?.tags || []), ...(card?.keywords || [])]) output[100 + stableHash(tag) % 20] += 0.5;
-  const player = game.players.find((candidate) => candidate.id === actorId);
   output[120] = (player?.runes.filter((rune) => !rune.exhausted).length || 0) / 12;
   output[121] = game.phase === "showdown" ? 1 : 0;
   output[122] = game.actionChain ? 1 : 0;
@@ -165,6 +208,7 @@ export function encodeAction(game, actorId, action) {
   output[126] = action.kind === "endTurn" || action.kind === "passShowdown" ? 1 : 0;
   output[127] = 1;
   encodeActionSemantics(output, game, actorId, action, card);
+  encodeTacticalActionSemantics(output, LEGACY_ACTION_DIM, game, actorId, action);
   return output;
 }
 
@@ -224,7 +268,7 @@ export function actionStage(action) {
   if (["chooseEffectOption", "declineEffectChoice"].includes(action.kind)) return "choice";
   if (["passShowdown", "activateCard"].includes(action.kind)) return "reaction";
   if (["sideboardSwap", "sideboardDone", "chooseFirstPlayer"].includes(action.kind)) return "match";
-  if (["toggleMulliganCard", "confirmMulligan", "skipMulligan"].includes(action.kind)) return "mulligan";
+  if (["toggleMulliganCard", "confirmMulligan", "skipMulligan", "submitMulligan"].includes(action.kind)) return "mulligan";
   if (["moveUnit", "moveUnits"].includes(action.kind)) return "movement";
   return "main";
 }
@@ -338,6 +382,111 @@ function encodeDecisionContext(output, offset, game, observation, viewerId) {
     `priority:${observation.focusPlayerId === viewerId ? "self" : "opponent"}`
   ];
   for (const token of tokens) output[offset + stableHash(token) % CONTEXT_FEATURES] = Math.min(1, output[offset + stableHash(token) % CONTEXT_FEATURES] + 0.5);
+  const reserve = reactionReserveProfile(game, viewerId);
+  const opponentResponse = opponentResponseProfile(game, viewerId);
+  addContextFeature(output, offset, "reserve:reaction-count", Math.min(1, reserve.reactionCards / 4));
+  addContextFeature(output, offset, "reserve:affordable-reactions", Math.min(1, reserve.affordableReactions / 3));
+  addContextFeature(output, offset, "reserve:coverage", reserve.coverage);
+  addContextFeature(output, offset, "reserve:minimum-energy", Math.min(1, reserve.minimumEnergy / 8));
+  addContextFeature(output, offset, "reserve:maximum-energy", Math.min(1, reserve.maximumEnergy / 8));
+  addContextFeature(output, offset, "reserve:ready-runes", Math.min(1, reserve.readyRunes / 12));
+  addContextFeature(output, offset, "reserve:ready-resource-sources", Math.min(1, reserve.readyResourceSources / 4));
+  addContextFeature(output, offset, "reserve:generated-energy", Math.min(1, reserve.generatedEnergy / 8));
+  addContextFeature(output, offset, "reserve:generated-power", Math.min(1, reserve.generatedPower / 8));
+  addContextFeature(output, offset, "reserve:opponent-threat", Math.min(1, reserve.threat));
+  addContextFeature(output, offset, "opponent-response:probability", opponentResponse.responseProbability);
+  addContextFeature(output, offset, "opponent-response:severity", Math.min(1, opponentResponse.expectedSeverity / 2));
+  addContextFeature(output, offset, "opponent-response:expected-threat", Math.min(1, opponentResponse.expectedThreat));
+  addContextFeature(output, offset, "opponent-response:affordable-count", Math.min(1, opponentResponse.affordableResponses / 4));
+  addContextFeature(output, offset, "opponent-response:recent-passes", Math.min(1, opponentResponse.recentPasses / 4));
+  addContextFeature(output, offset, "opponent-response:pass-evidence", Math.min(1, opponentResponse.passEvidenceStrength / 3));
+  const mulliganBottomCards = observation.self.mulliganBottomCards || [];
+  addContextFeature(output, offset, "mulligan-bottom:count", Math.min(1, mulliganBottomCards.length / 2));
+  addContextFeature(output, offset, "mulligan-bottom:cards-ahead", observation.self.mulliganBottomCardsAhead == null
+    ? 0
+    : Math.min(1, observation.self.mulliganBottomCardsAhead / 40));
+  for (const card of mulliganBottomCards) {
+    addContextFeature(output, offset, `mulligan-bottom:card:${card.cardNumber || "unknown"}`, 0.8);
+    addContextFeature(output, offset, `mulligan-bottom:type:${card.type || "unknown"}`, 0.35);
+    addContextFeature(output, offset, `mulligan-bottom:energy:${Math.min(12, Math.max(0, card.energy || 0))}`, 0.35);
+  }
+  if (reserve.bestReactionCardNumber) addContextFeature(output, offset, `reserve:best-card:${reserve.bestReactionCardNumber}`, 0.75);
+  for (const domain of reserve.requiredPowerDomains) addContextFeature(output, offset, `reserve:required-domain:${domain}`, 0.5);
+  for (const [domain, amount] of Object.entries(reserve.runeDomains)) {
+    addContextFeature(output, offset, `reserve:rune-domain:${domain}`, Math.min(1, amount / 6));
+  }
+  for (const [domain, amount] of Object.entries(reserve.readyRuneDomains)) {
+    addContextFeature(output, offset, `reserve:ready-domain:${domain}`, Math.min(1, amount / 6));
+  }
+  if (game.phase === "mulligan") {
+    const player = game.players.find((candidate) => candidate.id === viewerId);
+    const hand = player?.hand || [];
+    const counts = new Map();
+    for (const card of hand) counts.set(card.cardNumber || card.name, (counts.get(card.cardNumber || card.name) || 0) + 1);
+    addContextFeature(output, offset, "mulligan:hand-average-energy", hand.length
+      ? Math.min(1, hand.reduce((sum, card) => sum + Math.max(0, Number(card.energy) || 0), 0) / hand.length / 8)
+      : 0);
+    addContextFeature(output, offset, "mulligan:early-card-count", Math.min(1, hand.filter((card) => (Number(card.energy) || 0) <= 3).length / 3));
+    addContextFeature(output, offset, "mulligan:high-card-count", Math.min(1, hand.filter((card) => (Number(card.energy) || 0) >= 5).length / 3));
+    addContextFeature(output, offset, "mulligan:duplicate-count", Math.min(1, [...counts.values()].reduce((sum, count) => sum + Math.max(0, count - 1), 0) / 2));
+  }
+}
+
+function encodeOwnDeckContext(output, offset, game, viewerId) {
+  const player = game.players.find((candidate) => candidate.id === viewerId);
+  if (!player) return;
+  const ownedBattlefieldCards = game.battlefields.flatMap((field) => [
+    ...field.units.filter((card) => card.ownerId === viewerId),
+    ...(field.hidden || []).filter((item) => item.ownerId === viewerId).map((item) => item.card)
+  ]);
+  const deckCards = [
+    ...player.mainDeck, ...player.hand, ...player.base, ...player.trash, ...(player.banished || []),
+    ...ownedBattlefieldCards,
+    ...(player.champion ? [player.champion] : [])
+  ].filter(Boolean);
+  const scale = 1 / Math.max(1, deckCards.length);
+  for (const card of deckCards) {
+    addContextFeature(output, offset, `deck:type:${card.type || "unknown"}`, scale);
+    addContextFeature(output, offset, `deck:energy:${Math.min(12, Math.max(0, card.energy || 0))}`, scale);
+    for (const effect of card.effects || []) {
+      addContextFeature(output, offset, `deck:effect:${effect.timing || "none"}:${effect.kind || "unknown"}`, scale);
+    }
+    for (const keyword of card.keywords || []) addContextFeature(output, offset, `deck:keyword:${keyword}`, scale);
+  }
+  const remainingScale = 1 / Math.max(1, player.mainDeck.length);
+  for (const card of player.mainDeck) {
+    addContextFeature(output, offset, `remaining:type:${card.type || "unknown"}`, remainingScale * 0.5);
+    for (const effect of card.effects || []) {
+      addContextFeature(output, offset, `remaining:effect:${effect.timing || "none"}:${effect.kind || "unknown"}`, remainingScale * 0.5);
+    }
+  }
+  const draw = remainingDeckProfile(game, viewerId);
+  addContextFeature(output, offset, "next-draw:expected-energy", Math.min(1, draw.expectedEnergy / 8));
+  addContextFeature(output, offset, "next-draw:early-probability", draw.earlyProbability);
+  addContextFeature(output, offset, "next-draw:high-cost-probability", draw.highCostProbability);
+  addContextFeature(output, offset, "next-draw:unit-probability", draw.unitProbability);
+  addContextFeature(output, offset, "next-draw:reaction-probability", draw.reactionProbability);
+  addContextFeature(output, offset, "next-draw:development-probability", draw.developmentProbability);
+  addContextFeature(output, offset, "known-bottom:count", Math.min(1, draw.knownBottomCount / 12));
+  addContextFeature(output, offset, "known-bottom:batches", Math.min(1, draw.knownBottomBatchCount / 6));
+  for (const card of draw.topCards.slice(0, 8)) {
+    addContextFeature(output, offset, `next-draw:card:${card.cardNumber}`, card.nextDrawProbability);
+    addContextFeature(output, offset, `within-three:card:${card.cardNumber}`, card.withinThreeProbability * 0.75);
+  }
+}
+
+function addContextFeature(output, offset, token, amount) {
+  const index = offset + stableHash(token) % CONTEXT_FEATURES;
+  output[index] = Math.min(1, output[index] + amount);
+}
+
+function encodeCardEffectSemantics(output, offset, size, card) {
+  for (const effect of card?.effects || []) {
+    const token = `${effect.timing || "none"}:${effect.kind || "unknown"}`;
+    const amount = Math.max(0.25, Math.min(1, Math.abs(Number(effect.amount || effect.draw || effect.damage || 1)) / 4));
+    const index = offset + stableHash(token) % size;
+    output[index] = Math.min(1, output[index] + amount);
+  }
 }
 
 function encodeActionSemantics(output, game, actorId, action, primaryCard) {
@@ -352,6 +501,7 @@ function encodeActionSemantics(output, game, actorId, action, primaryCard) {
   const resource = player?.runePool?.energy?.find((candidate) => candidate.id === action.energyId)
     || player?.runePool?.power?.find((candidate) => candidate.id === action.powerId);
   const effect = (game.pendingPayment?.optionalPowerEffects || game.pendingPayment?.optionalEffects || []).find((candidate) => candidate.id === action.effectId);
+  const mulligan = mulliganPlanProfile(game, actorId, action);
   encodeIndexBits(output, 128, cardIndex(optionCard?.cardNumber));
   encodeIndexBits(output, 138, cardIndex(battlefieldCard?.cardNumber));
   if (battlefieldId === "base") output[148] = 1;
@@ -371,9 +521,43 @@ function encodeActionSemantics(output, game, actorId, action, primaryCard) {
   output[175] = action.runeId || action.energyId || action.powerId || action.effectId ? 1 : 0;
   encodeHashBits(output, 176, action.cardId || action.unitId || action.unitIds?.join("|") || "");
   encodeHashBits(output, 192, action.optionId || "");
-  encodeHashBits(output, 208, action.runeId || action.energyId || action.powerId || action.effectId || action.abilityId || "");
+  encodeHashBits(output, 208, action.kind === "submitMulligan"
+    ? mulligan.selectedCardNumbers.join("|") || "keep"
+    : action.runeId || action.energyId || action.powerId || action.effectId || action.abilityId || "");
   encodeHashBits(output, 224, battlefieldId || action.playerId || "");
   encodeHashBits(output, 240, `${game.pendingChoice?.effect || ""}|${semanticActionDescriptor(action)}`);
+  if (action.kind === "submitMulligan") {
+    output[168] = mulligan.selectedCount / 2;
+    output[169] = Math.min(1, mulligan.averageSelectedEnergy / 10);
+    output[170] = mulligan.selectedHighCostRatio;
+    output[171] = mulligan.selectedEarlyRatio;
+    output[172] = (mulligan.expectedDelta + 1) / 2;
+    output[173] = Math.min(1, mulligan.keptEarlyCards / 3);
+    output[174] = Math.min(1, mulligan.keptDuplicatePenalty);
+    output[175] = 1;
+  }
+}
+
+function encodeTacticalActionSemantics(output, offset, game, actorId, action) {
+  const profile = tacticalActionProfile(game, actorId, action);
+  output[offset] = profile.targetRelation === "friendly" ? 1 : 0;
+  output[offset + 1] = profile.targetRelation === "enemy" ? 1 : 0;
+  output[offset + 2] = profile.polarity === "beneficial" ? 1 : 0;
+  output[offset + 3] = profile.polarity === "harmful" ? 1 : 0;
+  output[offset + 4] = profile.targetAlignment > 0 ? 1 : 0;
+  output[offset + 5] = profile.targetAlignment < 0 ? 1 : 0;
+  output[offset + 6] = Math.min(1, profile.effectAmount / 12);
+  output[offset + 7] = profile.savesFromLethal ? 1 : 0;
+  output[offset + 8] = profile.isMovement ? 1 : 0;
+  output[offset + 9] = Math.min(1, profile.casterSideBenefit);
+  output[offset + 10] = profile.targetImpact;
+  output[offset + 11] = profile.projectedFieldAdvantage;
+  output[offset + 12] = profile.hopelessReinforcement ? 1 : 0;
+  output[offset + 13] = profile.controlGain ? 1 : 0;
+  output[offset + 14] = profile.reversesRemoval ? 1 : 0;
+  // Keep raw, observable facts in the model input. The former composite
+  // tacticalPrior collapsed several judgments into one hand-written answer.
+  output[offset + 15] = Math.min(1, profile.incomingDamage / 12);
 }
 
 function semanticActionDescriptor(action) {
