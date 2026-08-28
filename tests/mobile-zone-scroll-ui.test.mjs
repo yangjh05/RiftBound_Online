@@ -21,13 +21,13 @@ test("player zones preserve their own horizontal scroll positions", () => {
   assert.match(styles, /\.player-stats\s*\{[\s\S]*?overflow-x:\s*auto[\s\S]*?touch-action:\s*pan-x/);
 });
 
-test("battlefield lanes keep every unit reachable with horizontal scrolling", () => {
+test("battlefield lanes fill from the leading edge and keep every unit reachable with horizontal scrolling", () => {
   assert.match(appSource, /class="field-lane top-lane[\s\S]*?data-scroll-key="field-\$\{field\.instanceId\}-\$\{topPlayer\.id\}"[\s\S]*?class="field-lane-track"/);
   assert.match(appSource, /class="field-lane bottom-lane[\s\S]*?data-scroll-key="field-\$\{field\.instanceId\}-\$\{bottomPlayer\.id\}"[\s\S]*?class="field-lane-track"/);
   assert.match(styles, /\.field-lane\s*\{[\s\S]*?overflow-x:\s*auto[\s\S]*?overscroll-behavior-x:\s*contain[\s\S]*?scrollbar-width:\s*thin/);
   assert.match(styles, /\.top-lane\s*\{[\s\S]*?justify-content:\s*flex-start/);
-  assert.match(styles, /\.field-lane-track\s*\{[\s\S]*?flex:\s*0 0 auto[\s\S]*?min-width:\s*100%/);
-  assert.match(styles, /\.top-lane \.field-lane-track > :first-child\s*\{[\s\S]*?margin-inline-start:\s*auto/);
+  assert.match(styles, /\.field-lane-track\s*\{[\s\S]*?flex:\s*0 0 auto[\s\S]*?justify-content:\s*flex-start[\s\S]*?min-width:\s*100%/);
+  assert.doesNotMatch(styles, /\.top-lane \.field-lane-track > :first-child\s*\{[\s\S]*?margin-inline-start:\s*auto/);
 });
 
 test("wider layouts wrap every player zone count inside the identity card", () => {

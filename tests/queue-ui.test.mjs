@@ -17,9 +17,9 @@ test("processing queue items wrap readable text instead of forcing one-line elli
   assert.match(styles, /\.chain-zone-item\s*\{[\s\S]*min-height:\s*128px/);
 });
 
-test("declared unit plays remain visible in the Chain tree with their destination", () => {
+test("Pending hand plays are visible only to their player until Finalize", () => {
   assert.match(appSource, /function chainItemVisibleInTree\(item\)/);
-  assert.match(appSource, /return Boolean\(item\);/);
+  assert.match(appSource, /return chainItemVisibleToViewer\(item, viewerPlayerId\(\)\);/);
   assert.match(appSource, /item\?\.destination/);
 });
 

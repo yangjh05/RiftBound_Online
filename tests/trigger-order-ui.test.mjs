@@ -27,3 +27,15 @@ test("trigger ordering exposes toggled positions, mandatory status, and disabled
   assert.match(styles, /\.trigger-order-confirm/);
   assert.match(styles, /\.choice-option \.trigger-order-effect\s*\{[\s\S]*-webkit-line-clamp:\s*5/);
 });
+
+test("trigger order confirmation remains visible while long selections scroll", () => {
+  const headerStart = appSource.indexOf('<div class="section-head trigger-order-head">');
+  const confirmStart = appSource.indexOf('<div class="trigger-order-confirm">', headerStart);
+  const headerEnd = appSource.indexOf("</div>", confirmStart);
+  const trackStart = appSource.indexOf('<div class="trigger-order-track"', headerStart);
+  assert.ok(headerStart >= 0 && confirmStart > headerStart && headerEnd > confirmStart);
+  assert.ok(trackStart > confirmStart, "the confirmation action is rendered before scrollable trigger content");
+  assert.match(styles, /\.modal-panel\.trigger-order-panel\s*\{[\s\S]*display:\s*flex;[\s\S]*max-height:\s*min\(86vh,\s*720px\);[\s\S]*overflow:\s*hidden;/);
+  assert.match(styles, /\.trigger-order-selected\s*\{[\s\S]*max-height:\s*120px;[\s\S]*overflow-y:\s*auto;/);
+  assert.match(styles, /\.choice-grid\.trigger-order-grid\s*\{[\s\S]*flex:\s*1 1 180px;[\s\S]*min-height:\s*180px;[\s\S]*max-height:\s*240px;/);
+});

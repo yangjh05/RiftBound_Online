@@ -36,7 +36,7 @@ const KEYWORD_TRANSLATIONS = {
 };
 
 const TYPE_TRANSLATIONS = {
-  legend: "레전드",
+  legend: "전설",
   battlefield: "전장",
   unit: "유닛",
   spell: "주문",
@@ -46,7 +46,7 @@ const TYPE_TRANSLATIONS = {
 
 const DOMAIN_TRANSLATIONS = {
   Body: "신체",
-  Calm: "인내",
+  Calm: "평정",
   Chaos: "혼돈",
   Fury: "격노",
   Mind: "정신",
@@ -61,13 +61,13 @@ const UI_KO = {
   currentMight: "현재 위력",
   damageAssign: "피해 배정",
   dropUnitHere: "여기에 유닛 배치",
-  legend: "레전드",
+  legend: "전설",
   locationSlot: "전장 칸",
   mainDeck: "주 덱",
   noBattlefield: "전장 없음",
   noDeck: "덱 없음",
   noRunes: "룬 없음",
-  openLocation: "빈 전장",
+  openLocation: "개방 전장",
   playChampionToBase: "챔피언을 기지에 사용",
   remainingHealth: "남은 체력",
   revealHidden: "숨긴 카드 공개",
@@ -305,7 +305,7 @@ const UI_KO = {
   banishedEmpty: "추방 영역이 비어 있습니다.",
   intel: "정보",
   playChampionToField: "챔피언을 {name}에 사용",
-  useLegend: "레전드 사용",
+  useLegend: "전설 사용",
   activateCard: "{name} 발동",
   reviewFinalState: "최종 게임 상태와 이벤트 기록을 확인하세요.",
   sendingCommand: "명령 전송 중",
@@ -718,6 +718,8 @@ export function translateCardText(cardOrText, locale = LOCALES.EN) {
 export function normalizeKoreanCardTerminology(text = "") {
   return String(text)
     .replace(/매복/gu, "기습")
+    .replace(/인내/gu, "평정")
+    .replace(/비어 있는 전장|빈 전장/gu, "개방 전장")
     .replace(/탭:/gu, "탈진:")
     .replace(/버림 더미|무덤/gu, "폐기장")
     .replace(/공격력/gu, "위력")

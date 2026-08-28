@@ -39,6 +39,11 @@ import {
   unitDamageState
 } from "./engine.mjs";
 import { hiddenCardControllerId, hiddenCardIsControlledBy } from "./rules/zones.mjs";
+import {
+  chainItemVisibleToViewer,
+  gameLogVisibleToViewer,
+  handCountVisibleToViewer
+} from "./rules/visibility.mjs";
 import { cards, DOMAINS, makeRune, rawDecklists, RUNE_COLORS, runeCardsForDomain } from "./cards.mjs";
 import {
   DECK_RULES,
@@ -56,6 +61,10 @@ import {
   configureOnlineServer,
   configuredMultiplayerServer,
   createOnlineRoom,
+  fetchAiGenerationCheckpoint,
+  fetchAiGenerations,
+  fetchAiSpectatorReplay,
+  fetchAiSpectatorReplays,
   fetchRooms,
   joinOnlineRoom,
   leaveOnlineRoom,
@@ -87,15 +96,36 @@ import {
   resetPresentationState,
   snapshotPresentationGame
 } from "./presentation.mjs";
-import { activeActorId as aiActiveActorId, applyAiAction, cloneGame, enumerateLegalActions, resolveLegalAction } from "./ai/actions.mjs";
+import { activeActorId as aiActiveActorId, applyAiAction, cloneGame, enumerateAiPolicyActions, enumerateLegalActions, resolveLegalAction } from "./ai/actions.mjs";
+import { resolvePlannedPayment } from "./ai/payment-planner.mjs";
 import { buildMatchReport } from "./ai/coach.mjs";
 import { recommendDeckForPool } from "./ai/deckbuilding.mjs";
+import {
+  AI_GENERATIONS,
+  aiGenerationDescriptor,
+  normalizeAiGeneration,
+  sameDeckConfiguration
+} from "./ai/generations.mjs";
 import { choosePolicyAction, createModel, DEFAULT_AI_MODEL } from "./ai/policy.mjs";
 import { createAiReplay, finalizeAiReplay, persistableAiReplay, recordReplayDecision, refineAiReplay } from "./ai/replay.mjs";
 import { CARD_PACKS, CARD_POOL_FORMATS, cardAllowedInPool, packForCard } from "./card-pools.mjs";
 import { commandFailureFeedback } from "./ui/command-feedback.mjs";
 import { cardStatusItems } from "./ui/card-status.mjs";
 import { resolveBoardClickTarget } from "./ui/board-click.mjs";
+import { legalMoveDestinationIds, sharedLegalMoveDestinationIds } from "./ui/movement-options.mjs";
+import { detectEffectAnimations, EFFECT_ANIMATION_DURATION_MS } from "./ui/effect-animations.mjs";
+import { collectChainTargetIds } from "./ui/chain-targets.mjs";
+import { pendingDecisionVisibleToViewer } from "./ui/game-visibility.mjs";
+import { battlefieldDisplayName } from "./ui/battlefield-labels.mjs";
+import {
+  advanceTutorialAfterCommand,
+  createTutorialGame,
+  TUTORIAL_CATALOG,
+  TUTORIAL_IDS,
+  tutorialActionAllowed,
+  tutorialProgress,
+  tutorialStep
+} from "./tutorial.mjs";
 import {
   hasUnexpectedEnglish,
   localizeKoreanChoiceLabel,
@@ -110,12 +140,15 @@ const LOCAL_SERVER_HOSTNAMES = new Set(["127.0.0.1", "localhost"]);
 const DECK_STORAGE_KEY = "riftbound.deckStore.v1";
 const ONLINE_STORAGE_KEY = "riftbound.onlineSeat.v1";
 const SETTINGS_STORAGE_KEY = "riftbound.settings.v1";
+const TUTORIAL_STORAGE_KEY = "riftbound.tutorial.v1";
 const ALL_CARDS = Object.values(cards).sort((a, b) => a.name.localeCompare(b.name));
 const CARD_BY_NUMBER = new Map(ALL_CARDS.map((card) => [card.cardNumber, card]));
+const RAW_DECK_BY_ID = new Map(Object.values(rawDecklists).map((deck) => [deck.id, deck]));
 const LOCALIZED_CARD_NAMES = [...ALL_CARDS]
   .sort((left, right) => right.name.length - left.name.length)
   .map((card) => [card.name, translateCardName(card, LOCALES.KO)]);
 let settings = loadSettings();
+let tutorialRecord = loadTutorialRecord();
 let deckStore = loadDeckStore();
 let appView = "menu";
 let online = loadOnlineSeat();
@@ -147,6 +180,8 @@ let game = createGame({ interactive: true, randomFirstPlayer: true, manualAction
 let logOpen = false;
 let handOpen = false;
 let chainZoneCollapsed = false;
+let inspectedChainItemId = null;
+let inspectedChainTargetIds = new Set();
 let graveyardOpenPlayerId = null;
 let banishedOpenPlayerId = null;
 let intelOpenPlayerId = null;
@@ -160,6 +195,8 @@ let handScrollLeft = 0;
 let shellScrollState = {};
 let previousUiSnapshot = null;
 let uiMotion = emptyMotion();
+let effectAnimations = emptyEffectAnimationState();
+let effectAnimationTimer = null;
 let uiLegalActions = [];
 let recentFeedback = null;
 let feedbackDismissTimer = null;
@@ -184,13 +221,30 @@ let aiPlayerId = null;
 let aiModel = createModel(DEFAULT_AI_MODEL);
 let neuralAiModel = null;
 let neuralAiSession = null;
+let neuralValueEstimator = null;
+let neuralAiLoadedGeneration = null;
 let neuralAiLoadState = "idle";
 let neuralAiLoadError = "";
 let neuralAiLoadPromise = null;
+let availableAiGenerations = [...AI_GENERATIONS];
+let aiGenerationCatalogState = "loading";
+let aiGenerationCatalogError = "";
 let aiReplay = null;
 let aiTurnTimer = null;
 let aiThinking = false;
 let aiDeepReviewRunning = false;
+let replayMode = false;
+let replayBrowser = {
+  loading: false,
+  error: "",
+  items: [],
+  current: null,
+  frameIndex: 0,
+  playing: false,
+  speed: 1,
+  viewerPlayerId: "p1",
+  timer: null
+};
 const app = document.querySelector("#app");
 let reportingUiException = false;
 
@@ -220,6 +274,10 @@ function locale() {
 
 function cardName(card) {
   return translateCardName(card, locale());
+}
+
+function battlefieldName(field) {
+  return battlefieldDisplayName(game, field, cardName(field));
 }
 
 function cardText(card) {
@@ -353,6 +411,11 @@ function renderApp() {
     restoreScrollState(scrollState);
     return;
   }
+  if (appView === "tutorials") {
+    app.innerHTML = tutorialMenuView();
+    restoreScrollState(scrollState);
+    return;
+  }
   if (appView === "decks") {
     app.innerHTML = deckEditorView();
     restoreScrollState(scrollState);
@@ -362,6 +425,11 @@ function renderApp() {
     app.innerHTML = multiplayerView();
     restoreScrollState(scrollState);
     ensureRoomRefresh();
+    return;
+  }
+  if (appView === "replays") {
+    app.innerHTML = replayBrowserView();
+    restoreScrollState(scrollState);
     return;
   }
   if (appView === "game" && matchIsBetweenGames()) {
@@ -412,24 +480,82 @@ function renderApp() {
       <div class="turnbox">
         <span>${turnLabel()}</span>
         <button class="secondary" data-action="toggle-log" title="${t("toggleLog", locale())}">${t("log", locale())}</button>
-        ${aiReplay ? `<button class="secondary" data-action="coach-report">${locale() === LOCALES.KO ? "AI 분석" : "AI Review"}</button>` : ""}
-        ${game.phase !== "complete" ? `<button class="secondary danger" data-action="surrender" title="${t("surrender", locale())}">${t("surrender", locale())}</button>` : ""}
-        <button class="secondary" data-action="new-game" title="${t("newGame", locale())}">${t("newGame", locale())}</button>
+        ${replayMode ? `<button class="secondary" data-action="replay-exit">${locale() === LOCALES.KO ? "리플레이 목록" : "Replay list"}</button>` : ""}
+        ${!replayMode && aiReplay ? `<button class="secondary" data-action="coach-report">${locale() === LOCALES.KO ? "AI 분석" : "AI Review"}</button>` : ""}
+        ${replayMode ? "" : isTutorialGame()
+          ? `<button class="secondary" data-action="tutorial-exit">${locale() === LOCALES.KO ? "튜토리얼 나가기" : "Exit Tutorial"}</button>`
+          : `${game.phase !== "complete" ? `<button class="secondary danger" data-action="surrender" title="${t("surrender", locale())}">${t("surrender", locale())}</button>` : ""}
+             <button class="secondary" data-action="new-game" title="${t("newGame", locale())}">${t("newGame", locale())}</button>`}
       </div>
     </header>
-    <main class="layout phase-${game.phase} ${inspectorOpen ? "inspector-open" : ""} ${activeImpact ? `impact-active impact-${activeImpact.kind}` : ""} ${staticImpactPreview ? "preview-impact" : ""}">
+    <main class="layout phase-${game.phase} ${isTutorialGame() ? "tutorial-active" : ""} ${inspectorOpen ? "inspector-open" : ""} ${activeImpact ? `impact-active impact-${activeImpact.kind}` : ""} ${staticImpactPreview ? "preview-impact" : ""}">
       ${game.phase === "first-player" ? firstPlayerPanel() : game.phase === "champion-select" ? championSelectPanel() : game.phase === "battlefield-select" ? setupPanel() : game.phase === "mulligan" ? mulliganPanel() : gamePanel(player)}
+      ${tutorialPanel()}
       ${cinematicImpactOverlay()}
       ${["first-player", "champion-select", "mulligan"].includes(game.phase) ? "" : inspector(uiSelectedCard())}
       ${pendingGameExit ? gameExitConfirmModal() : ""}
-      ${gameResultModal()}
+      ${isTutorialGame() ? "" : gameResultModal()}
       ${fullCardOpen ? fullCardModal(fullCardPreviewCard || uiSelectedCard()) : ""}
       ${logOpen ? logDrawer() : ""}
+      ${replayMode ? replayPlaybackControls() : ""}
     </main>
   `;
+  applyTutorialTargets();
   restorePaymentScroll();
   restoreScrollState(scrollState);
   scheduleAiTurn();
+  scheduleReplayPlayback();
+}
+
+function isTutorialGame() {
+  return Boolean(game?.tutorial?.active);
+}
+
+function tutorialPanel() {
+  if (!isTutorialGame()) return "";
+  const step = tutorialStep(game, { handOpen });
+  if (!step) return "";
+  const progress = tutorialProgress(step);
+  const lesson = TUTORIAL_CATALOG.find((entry) => entry.id === game.tutorial.id);
+  const complete = step.id === "complete";
+  const welcome = step.id === "welcome";
+  return `
+    <aside class="tutorial-panel tutorial-step-${step.id}" role="status" aria-live="polite">
+      <div class="tutorial-panel-head">
+        <span>${escapeHtml(locale() === LOCALES.KO ? (lesson?.title || "초보자 튜토리얼") : (lesson?.englishTitle || "Beginner Tutorial"))}</span>
+        <b>${progress.current}/${progress.total}</b>
+      </div>
+      <div class="tutorial-progress" role="progressbar" aria-valuemin="1" aria-valuemax="${progress.total}" aria-valuenow="${progress.current}">
+        <i style="width:${progress.percent}%"></i>
+      </div>
+      <h2>${escapeHtml(step.title)}</h2>
+      <p>${escapeHtml(step.body)}</p>
+      <small>${escapeHtml(step.hint)}</small>
+      ${welcome ? `<button class="primary tutorial-panel-action" data-action="tutorial-next">${escapeHtml(step.actionLabel)}</button>` : ""}
+      ${complete ? `
+        <div class="tutorial-complete-actions">
+          <button class="secondary" data-action="tutorial-restart">${locale() === LOCALES.KO ? "다시 연습" : "Replay"}</button>
+          <button class="primary" data-action="tutorial-exit">${locale() === LOCALES.KO ? "튜토리얼 목록" : "Tutorial List"}</button>
+        </div>
+      ` : ""}
+    </aside>
+  `;
+}
+
+function applyTutorialTargets() {
+  if (!isTutorialGame()) return;
+  for (const node of app.querySelectorAll("[data-action]")) {
+    const action = node.dataset.action;
+    if (node.closest(".tutorial-panel") || action === "tutorial-exit") continue;
+    const allowed = tutorialActionAllowed(game, action, { ...node.dataset }, { handOpen });
+    node.classList.toggle("tutorial-target", allowed);
+    node.classList.toggle("tutorial-locked", !allowed);
+    if (!allowed) node.setAttribute("aria-disabled", "true");
+  }
+}
+
+function tutorialAllowsUiAction(action, data = {}) {
+  return !isTutorialGame() || tutorialActionAllowed(game, action, data, { handOpen });
 }
 
 function reportUiException(error, context = "UI") {
@@ -598,6 +724,9 @@ function menuView() {
   const activeDecks = activeDeckRecords();
   const validPair = activeDecks.length === 2 && activeDecks.every((deck) => validateDeckRecord(deck).playable);
   const playableDecks = deckStore.decks.filter((deck) => validateDeckRecord(deck).playable);
+  const generation = selectedAiGenerationDescriptor();
+  const aiDeckTrainingId = trainingDeckIdForGeneration(activeDecks[1], generation);
+  const aiMatchReady = validPair && Boolean(aiDeckTrainingId);
   return `
     <main class="shell-screen main-menu">
       <section class="menu-hero">
@@ -628,23 +757,389 @@ function menuView() {
             </select>
           </label>
         </div>
+        <div class="ai-menu-config">
+          <label>
+            <span>${locale() === LOCALES.KO ? "AI 세대" : "AI generation"}</span>
+            <select data-action="menu-ai-generation" ${neuralAiLoadState === "loading" ? "disabled" : ""}>
+              ${availableAiGenerations.map((entry) => `<option value="${entry.generation}" ${entry.generation === generation.generation ? "selected" : ""}>${escapeHtml(aiGenerationOptionLabel(entry))}</option>`).join("")}
+            </select>
+          </label>
+          <div class="ai-training-scope">
+            <span>${locale() === LOCALES.KO ? "이 세대가 학습한 AI 덱" : "AI decks trained for this generation"}</span>
+            <strong>${escapeHtml(trainingDeckNames(generation).join(" · "))}</strong>
+            <small>${escapeHtml(aiGenerationDetailText(generation))}</small>
+          </div>
+        </div>
         <label class="sideboard-toggle">
           <input type="checkbox" data-action="settings-sideboarding" ${settings.sideboardingEnabled ? "checked" : ""} />
           <span>${locale() === LOCALES.KO ? "사이드전 사용 (3판 2선승)" : "Use sideboarding (best of three)"}</span>
         </label>
         <div class="menu-actions">
+          <button class="primary menu-button tutorial-start" data-action="menu-tutorial">
+            ${locale() === LOCALES.KO
+              ? `튜토리얼 ${tutorialRecord.completedIds.length}/${TUTORIAL_CATALOG.length}`
+              : `Tutorials ${tutorialRecord.completedIds.length}/${TUTORIAL_CATALOG.length}`}
+          </button>
           <button class="primary menu-button" data-action="menu-start" ${validPair ? "" : "disabled"}>${t("startGame", locale())}</button>
-          <button class="primary menu-button coach-start" data-action="menu-ai" ${validPair && neuralAiLoadState !== "loading" ? "" : "disabled"}>${neuralAiLoadState === "loading" ? (locale() === LOCALES.KO ? "완성 모델 로딩 중…" : "Loading trained model…") : (locale() === LOCALES.KO ? "학습 AI와 대전" : "Play Learning AI")}</button>
+          <button class="primary menu-button coach-start" data-action="menu-ai" ${aiMatchReady && neuralAiLoadState !== "loading" ? "" : "disabled"}>${neuralAiLoadState === "loading" ? (locale() === LOCALES.KO ? "선택한 세대 로딩 중…" : "Loading selected generation…") : (locale() === LOCALES.KO ? "학습 AI와 대전" : "Play Learning AI")}</button>
+          <button class="secondary menu-button replay-menu-button" data-action="menu-replays">${locale() === LOCALES.KO ? "AI 경기 리플레이" : "AI Match Replays"}</button>
           <button class="secondary menu-button" data-action="menu-multiplayer">${t("multiplayer", locale())}</button>
           <button class="secondary menu-button" data-action="menu-decks">${t("deckEdit", locale())}</button>
         </div>
         <p class="ai-model-status">${escapeHtml(neuralAiStatusText())}</p>
+        ${aiGenerationCatalogError ? `<p class="online-error" role="alert">${escapeHtml(aiGenerationCatalogError)}</p>` : ""}
+        ${validPair && !aiDeckTrainingId ? `<p class="deck-warning ai-deck-warning">${escapeHtml(locale() === LOCALES.KO
+          ? `${generation.generation}세대 AI는 학습한 5개 덱만 사용할 수 있습니다. 플레이어 2 덱을 위 학습 덱 중 하나로 선택해 주세요.`
+          : `Generation ${generation.generation} AI can only use its five trained decks. Select one of the trained decks for Player 2.`)}</p>` : ""}
         ${online.loading ? `<p class="online-status">${locale() === LOCALES.KO ? "멀티플레이 서버에 연결 중입니다." : "Connecting to the multiplayer server."}</p>` : ""}
         ${online.error ? `<p class="online-error" role="alert">${escapeHtml(localizedOnlineError(online.error))}</p>` : ""}
         <div class="active-decks-summary">
           ${activeDecks.map((deck, index) => deckSummaryBadge(deck, t("playerDeck", locale(), { n: index + 1 }))).join("")}
         </div>
         ${validPair ? "" : `<p class="deck-warning">${locale() === LOCALES.KO ? `토너먼트에서 사용 가능한 덱 2개가 필요합니다. 주 덱은 정확히 ${DECK_RULES.tournamentMainExact}장, 사이드보드는 최대 ${DECK_RULES.sideboardMax}장, 룬은 ${DECK_RULES.runeExact}장, 전장은 ${DECK_RULES.battlefieldsExact}장이어야 합니다.` : `Two tournament-legal decks are required: exactly ${DECK_RULES.tournamentMainExact} Main Deck cards, up to ${DECK_RULES.sideboardMax} Sideboard cards, ${DECK_RULES.runeExact} Runes, and ${DECK_RULES.battlefieldsExact} Battlefields.`}</p>`}
+      </section>
+    </main>
+  `;
+}
+
+function replayBrowserView() {
+  const korean = locale() === LOCALES.KO;
+  return `
+    <main class="shell-screen replay-browser-screen">
+      <section class="replay-browser-shell">
+        <header class="replay-browser-head">
+          <div>
+            <p class="eyebrow visible">${korean ? "AI 자기대전 관전실" : "AI self-play theater"}</p>
+            <h1>${korean ? "최근 AI 경기 리플레이" : "Recent AI match replays"}</h1>
+            <p>${korean ? "모델과 양쪽 덱, 경기 결과를 확인한 뒤 관전할 경기를 선택하세요." : "Choose a match after reviewing its models, decks, and result."}</p>
+          </div>
+          <div class="actions inline">
+            <button class="secondary" data-action="replay-list-refresh" ${replayBrowser.loading ? "disabled" : ""}>${korean ? "새로고침" : "Refresh"}</button>
+            <button data-action="replay-list-back">${korean ? "메뉴로" : "Menu"}</button>
+          </div>
+        </header>
+        ${replayBrowser.loading ? `<p class="replay-list-message">${korean ? "최근 리플레이를 불러오는 중입니다…" : "Loading recent replays…"}</p>` : ""}
+        ${replayBrowser.error ? `<p class="online-error replay-list-message" role="alert">${escapeHtml(replayBrowser.error)}</p>` : ""}
+        <div class="replay-list">
+          ${!replayBrowser.loading && !replayBrowser.items.length ? `
+            <section class="replay-empty">
+              <strong>${korean ? "아직 관전 가능한 기록이 없습니다." : "No watchable matches yet."}</strong>
+              <p>${korean ? "다음 AI 학습 자기대전부터 표본 경기가 자동 저장됩니다." : "Sample matches will be saved automatically during the next AI training run."}</p>
+            </section>
+          ` : replayBrowser.items.map(replayListCard).join("")}
+        </div>
+      </section>
+    </main>
+  `;
+}
+
+function replayListCard(item) {
+  const korean = locale() === LOCALES.KO;
+  const decks = ["p1", "p2"].map((playerId) => item.decks?.find((deck) => deck.playerId === playerId) || {});
+  const models = ["p1", "p2"].map((playerId) => item.models?.find((model) => model.playerId === playerId) || {});
+  const winnerIndex = item.winnerId === "p2" ? 1 : item.winnerId === "p1" ? 0 : -1;
+  const score = item.scores || [0, 0];
+  const date = formatReplayDate(item.completedAt || item.createdAt);
+  return `
+    <article class="replay-list-card">
+      <div class="replay-card-summary">
+        <span>${escapeHtml(date)}${item.matchGameNumber ? ` · ${korean ? `${item.matchGameNumber}경기` : `Game ${item.matchGameNumber}`}` : ""}</span>
+        <strong>${score[0] || 0} : ${score[1] || 0}</strong>
+        <em>${winnerIndex < 0 ? (korean ? "미완료/무승부" : "Incomplete/draw") : `${korean ? "승자" : "Winner"} · ${escapeHtml(localizedDeckName(decks[winnerIndex].name || decks[winnerIndex].id || `P${winnerIndex + 1}`))}`}</em>
+      </div>
+      <div class="replay-matchup">
+        ${replaySeatSummary("P1", decks[0], models[0], winnerIndex === 0)}
+        <b>VS</b>
+        ${replaySeatSummary("P2", decks[1], models[1], winnerIndex === 1)}
+      </div>
+      <footer>
+        <span>${korean ? `세대 ${item.generation ?? "-"} · ${item.turns || 0}라운드 · ${item.actionCount || 0}행동` : `Gen ${item.generation ?? "-"} · ${item.turns || 0} rounds · ${item.actionCount || 0} actions`}</span>
+        <button class="primary" data-action="replay-open" data-replay-id="${escapeHtml(item.id)}">${korean ? "이 경기 관전" : "Watch match"}</button>
+      </footer>
+    </article>
+  `;
+}
+
+function replaySeatSummary(seat, deck = {}, model = {}, won = false) {
+  const korean = locale() === LOCALES.KO;
+  const deckName = localizedDeckName(deck.name || deck.id || seat);
+  const legendName = deck.legend?.name ? localizedDynamicText(deck.legend.name) : "";
+  return `
+    <section class="replay-seat ${won ? "winner" : ""}">
+      <span>${seat}${won ? ` · ${korean ? "승리" : "WIN"}` : ""}</span>
+      <strong>${escapeHtml(deckName)}</strong>
+      <small>${escapeHtml(legendName || deck.id || "-")}</small>
+      <em>${korean ? "모델" : "Model"} G${model.generation ?? "-"} · ${escapeHtml(model.role || "AI")}</em>
+    </section>
+  `;
+}
+
+function formatReplayDate(value) {
+  const date = new Date(value || 0);
+  if (Number.isNaN(date.getTime())) return "-";
+  return new Intl.DateTimeFormat(locale() === LOCALES.KO ? "ko-KR" : "en-US", {
+    month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"
+  }).format(date);
+}
+
+async function openReplayBrowser() {
+  pauseReplayPlayback();
+  replayMode = false;
+  replayBrowser.current = null;
+  appView = "replays";
+  render();
+  await loadReplayList();
+}
+
+async function loadReplayList() {
+  if (replayBrowser.loading) return;
+  replayBrowser.loading = true;
+  replayBrowser.error = "";
+  render();
+  try {
+    const result = await fetchAiSpectatorReplays(40);
+    replayBrowser.items = Array.isArray(result.replays) ? result.replays : [];
+  } catch (error) {
+    replayBrowser.error = locale() === LOCALES.KO
+      ? `리플레이 목록을 불러오지 못했습니다: ${localizedOnlineError(error.message)}`
+      : `Could not load replays: ${error.message}`;
+  } finally {
+    replayBrowser.loading = false;
+    render();
+  }
+}
+
+async function openAiSpectatorReplay(id) {
+  if (!id || replayBrowser.loading) return;
+  replayBrowser.loading = true;
+  replayBrowser.error = "";
+  render();
+  try {
+    const result = await fetchAiSpectatorReplay(id);
+    if (!Array.isArray(result.replay?.frames) || !result.replay.frames.length) throw new Error("Replay has no frames.");
+    clearOnlineSeat();
+    aiMode = false;
+    aiReplay = null;
+    localMatch = null;
+    replayBrowser.current = result.replay;
+    replayBrowser.frameIndex = 0;
+    replayBrowser.viewerPlayerId = "p1";
+    replayBrowser.playing = false;
+    replayMode = true;
+    appView = "game";
+    game = structuredClone(result.replay.frames[0].game);
+    resetGameUiState();
+  } catch (error) {
+    replayBrowser.error = locale() === LOCALES.KO
+      ? `리플레이를 열지 못했습니다: ${localizedOnlineError(error.message)}`
+      : `Could not open replay: ${error.message}`;
+    replayMode = false;
+    appView = "replays";
+  } finally {
+    replayBrowser.loading = false;
+    render();
+  }
+}
+
+function leaveReplayBrowser() {
+  pauseReplayPlayback();
+  replayMode = false;
+  replayBrowser.current = null;
+  appView = "menu";
+}
+
+function exitReplayToList() {
+  pauseReplayPlayback();
+  replayMode = false;
+  replayBrowser.current = null;
+  appView = "replays";
+}
+
+function replayPlaybackControls() {
+  const replay = replayBrowser.current;
+  if (!replay?.frames?.length) return "";
+  const frame = replay.frames[replayBrowser.frameIndex] || replay.frames[0];
+  const lastIndex = replay.frames.length - 1;
+  const korean = locale() === LOCALES.KO;
+  return `
+    <aside class="replay-playback-controls" aria-label="${korean ? "리플레이 재생 조작" : "Replay controls"}">
+      <div class="replay-now-playing">
+        <span>${korean ? `행동 ${replayBrowser.frameIndex}/${lastIndex}` : `Action ${replayBrowser.frameIndex}/${lastIndex}`} · ${korean ? `${frame.turnNumber || 1}라운드` : `Round ${frame.turnNumber || 1}`}</span>
+        <strong>${escapeHtml(replayActionDescription(frame))}</strong>
+      </div>
+      <div class="replay-transport">
+        <button data-action="replay-first" title="${korean ? "처음" : "First"}">|◀</button>
+        <button data-action="replay-prev" title="${korean ? "이전 행동" : "Previous"}">◀</button>
+        <button class="primary" data-action="replay-toggle">${replayBrowser.playing ? (korean ? "일시정지" : "Pause") : (korean ? "재생" : "Play")}</button>
+        <button data-action="replay-next" title="${korean ? "다음 행동" : "Next"}">▶</button>
+        <button data-action="replay-last" title="${korean ? "마지막" : "Last"}">▶|</button>
+      </div>
+      <input class="replay-timeline" type="range" min="0" max="${lastIndex}" value="${replayBrowser.frameIndex}" data-action="replay-seek" aria-label="${korean ? "리플레이 위치" : "Replay position"}" />
+      <div class="replay-view-options">
+        <button class="${replayBrowser.viewerPlayerId === "p1" ? "active" : ""}" data-action="replay-viewer" data-player="p1">P1</button>
+        <button class="${replayBrowser.viewerPlayerId === "p2" ? "active" : ""}" data-action="replay-viewer" data-player="p2">P2</button>
+        <select data-action="replay-speed" aria-label="${korean ? "재생 속도" : "Playback speed"}">
+          ${[0.5, 1, 2, 4].map((speed) => `<option value="${speed}" ${replayBrowser.speed === speed ? "selected" : ""}>${speed}×</option>`).join("")}
+        </select>
+      </div>
+    </aside>
+  `;
+}
+
+function replayActionDescription(frame) {
+  if (!frame?.action) return locale() === LOCALES.KO ? "경기 시작 상태" : "Match start";
+  const actor = game.players.find((player) => player.id === frame.actorId);
+  const actorName = actor ? playerName(actor) : (frame.actorId || "AI");
+  const action = frame.action;
+  const cardId = action.cardId || action.unitId || action.sourceCardId;
+  const card = findVisibleCard(cardId);
+  const target = card ? cardName(card) : "";
+  const koreanLabels = {
+    confirmFirstPlayer: "선공 확정", rollFirstPlayer: "선공 주사위", chooseFirstPlayer: "선공 선택",
+    selectChampion: "챔피언 선택", selectBattlefield: "전장 선택", submitMulligan: "멀리건 확정",
+    skipMulligan: "멀리건 유지", beginPlayCard: "카드 플레이", beginPlayChampion: "챔피언 플레이",
+    hideCard: "카드 매복", moveUnit: "유닛 이동", moveUnits: "유닛 일괄 이동", activateCard: "능력 사용",
+    chooseEffectOption: "효과 선택", declineEffectChoice: "선택 거절", passShowdown: "쇼다운 패스",
+    endTurn: "턴 종료", gameComplete: "경기 종료"
+  };
+  const englishLabels = {
+    confirmFirstPlayer: "confirmed first player", rollFirstPlayer: "rolled for first player", chooseFirstPlayer: "chose first player",
+    selectChampion: "selected a champion", selectBattlefield: "selected a battlefield", submitMulligan: "confirmed mulligan",
+    skipMulligan: "kept opening hand", beginPlayCard: "played a card", beginPlayChampion: "played the champion",
+    hideCard: "set a hidden card", moveUnit: "moved a unit", moveUnits: "moved units", activateCard: "activated an ability",
+    chooseEffectOption: "made an effect choice", declineEffectChoice: "declined an effect", passShowdown: "passed showdown",
+    endTurn: "ended the turn", gameComplete: "match complete"
+  };
+  const label = (locale() === LOCALES.KO ? koreanLabels : englishLabels)[action.kind] || action.kind;
+  return locale() === LOCALES.KO
+    ? `${actorName} · ${label}${target ? ` · ${target}` : ""}`
+    : `${actorName} ${label}${target ? ` · ${target}` : ""}`;
+}
+
+function handleReplayGameClick(event) {
+  const button = event.target.closest("button");
+  const action = button?.dataset.action;
+  if (action === "replay-exit") return exitReplayToList();
+  if (action === "replay-first") { pauseReplayPlayback(); return applyReplayFrame(0); }
+  if (action === "replay-prev") { pauseReplayPlayback(); return applyReplayFrame(replayBrowser.frameIndex - 1); }
+  if (action === "replay-next") { pauseReplayPlayback(); return applyReplayFrame(replayBrowser.frameIndex + 1); }
+  if (action === "replay-last") { pauseReplayPlayback(); return applyReplayFrame((replayBrowser.current?.frames?.length || 1) - 1); }
+  if (action === "replay-toggle") {
+    replayBrowser.playing = !replayBrowser.playing;
+    if (replayBrowser.playing && replayBrowser.frameIndex >= replayBrowser.current.frames.length - 1) applyReplayFrame(0);
+    if (!replayBrowser.playing) pauseReplayPlayback();
+    return;
+  }
+  if (action === "replay-viewer" && ["p1", "p2"].includes(button.dataset.player)) {
+    replayBrowser.viewerPlayerId = button.dataset.player;
+    handOpen = false;
+    game.selectedCardId = null;
+    return;
+  }
+  if (action === "toggle-log") { logOpen = !logOpen; return; }
+  if (action === "toggle-hand") { handOpen = !handOpen; return; }
+  if (action === "toggle-graveyard") { graveyardOpenPlayerId = graveyardOpenPlayerId === button.dataset.player ? null : button.dataset.player; return; }
+  if (action === "toggle-banished") { banishedOpenPlayerId = banishedOpenPlayerId === button.dataset.player ? null : button.dataset.player; return; }
+  if (action === "close-graveyard") { graveyardOpenPlayerId = null; return; }
+  if (action === "close-banished") { banishedOpenPlayerId = null; return; }
+  if (action === "close-full-card") { fullCardOpen = false; fullCardPreviewCard = null; return; }
+  if (action === "view-full-card") { fullCardPreviewCard = uiSelectedCard(); fullCardOpen = Boolean(fullCardPreviewCard); return; }
+  const cardNode = event.target.closest("[data-card-id]");
+  if (cardNode) setUiSelectedCard(cardNode.dataset.cardId);
+}
+
+function applyReplayFrame(requestedIndex) {
+  const frames = replayBrowser.current?.frames || [];
+  if (!frames.length) return;
+  const previousIndex = replayBrowser.frameIndex;
+  const index = Math.max(0, Math.min(frames.length - 1, Math.trunc(requestedIndex)));
+  replayBrowser.frameIndex = index;
+  game = structuredClone(frames[index].game);
+  game.selectedCardId = null;
+  fullCardOpen = false;
+  fullCardPreviewCard = null;
+  attachmentsOpenCardId = null;
+  graveyardOpenPlayerId = null;
+  banishedOpenPlayerId = null;
+  if (index <= previousIndex) {
+    previousUiSnapshot = null;
+    clearEffectAnimations();
+    resetPresentationState(presentationState);
+  }
+}
+
+function scheduleReplayPlayback() {
+  if (!replayMode || !replayBrowser.playing || replayBrowser.timer) return;
+  const frames = replayBrowser.current?.frames || [];
+  if (replayBrowser.frameIndex >= frames.length - 1) {
+    replayBrowser.playing = false;
+    return;
+  }
+  replayBrowser.timer = window.setTimeout(() => {
+    replayBrowser.timer = null;
+    applyReplayFrame(replayBrowser.frameIndex + 1);
+    render();
+  }, Math.max(180, 1200 / replayBrowser.speed));
+}
+
+function pauseReplayPlayback() {
+  replayBrowser.playing = false;
+  if (replayBrowser.timer) window.clearTimeout(replayBrowser.timer);
+  replayBrowser.timer = null;
+}
+
+function restartReplayTimer() {
+  const wasPlaying = replayBrowser.playing;
+  if (replayBrowser.timer) window.clearTimeout(replayBrowser.timer);
+  replayBrowser.timer = null;
+  replayBrowser.playing = wasPlaying;
+  if (wasPlaying) scheduleReplayPlayback();
+}
+
+function tutorialMenuView() {
+  const completed = new Set(tutorialRecord.completedIds);
+  const isKorean = locale() === LOCALES.KO;
+  return `
+    <main class="shell-screen tutorial-menu-screen">
+      <section class="tutorial-menu-shell">
+        <header class="tutorial-menu-header">
+          <button class="round-back" data-action="tutorial-menu-back">${t("back", locale())}</button>
+          <div>
+            <p class="eyebrow visible">${isKorean ? "오리진 덱으로 배우는" : "Learn With Origins Decks"}</p>
+            <h1>${isKorean ? "초보자 튜토리얼" : "Beginner Tutorials"}</h1>
+            <p>${isKorean
+              ? "오리진 출시 환경의 카드와 덱으로 기본 규칙부터 전투와 비용 지불까지 차례대로 연습합니다."
+              : "Practice the core rules, combat, and costs with cards and decks from the Origins environment."}</p>
+          </div>
+          <div class="tutorial-menu-progress" aria-label="${isKorean ? "튜토리얼 완료 현황" : "Tutorial completion"}">
+            <strong>${completed.size}/${TUTORIAL_CATALOG.length}</strong>
+            <span>${isKorean ? "완료" : "complete"}</span>
+          </div>
+        </header>
+        <div class="tutorial-course-grid">
+          ${TUTORIAL_CATALOG.map((lesson) => {
+            const done = completed.has(lesson.id);
+            return `
+              <article class="tutorial-course-card ${done ? "is-complete" : ""}">
+                <div class="tutorial-course-number">${lesson.order}</div>
+                <div class="tutorial-course-copy">
+                  <div class="tutorial-course-title">
+                    <h2>${escapeHtml(isKorean ? lesson.title : lesson.englishTitle)}</h2>
+                    ${done ? `<span class="tutorial-complete-badge">${isKorean ? "완료" : "Complete"}</span>` : ""}
+                  </div>
+                  <p>${escapeHtml(isKorean ? lesson.summary : lesson.englishSummary)}</p>
+                  <small>${escapeHtml(isKorean ? lesson.focus : lesson.englishFocus)}</small>
+                </div>
+                <div class="tutorial-course-action">
+                  <span>${escapeHtml(lesson.duration)}</span>
+                  <button class="${lesson.order === 1 ? "primary" : "secondary"}" data-action="tutorial-select" data-tutorial="${lesson.id}">
+                    ${done ? (isKorean ? "다시 하기" : "Replay") : (isKorean ? "시작하기" : "Start")}
+                  </button>
+                </div>
+              </article>
+            `;
+          }).join("")}
+        </div>
       </section>
     </main>
   `;
@@ -657,16 +1152,90 @@ function deckPickerOptions(playableDecks, selectedId) {
   `).join("");
 }
 
+function selectedAiGenerationDescriptor() {
+  return availableAiGenerations.find((entry) => entry.generation === Number(settings.aiGeneration))
+    || aiGenerationDescriptor(settings.aiGeneration)
+    || availableAiGenerations.at(-1)
+    || AI_GENERATIONS.at(-1);
+}
+
+function aiGenerationOptionLabel(entry) {
+  const korean = locale() === LOCALES.KO;
+  const state = entry.kind === "learner"
+    ? (korean ? "현재 learner" : "current learner")
+    : entry.promoted
+      ? (korean ? "승격" : "promoted")
+      : entry.kind === "candidate"
+        ? (korean ? "후보" : "candidate")
+        : entry.kind === "league"
+          ? (korean ? "리그" : "league")
+          : (korean ? "배포" : "bundled");
+  const progress = entry.inProgress ? (korean ? " · 학습 진행 중" : " · training in progress") : "";
+  return korean
+    ? `${entry.generation}세대 (${state}${progress})`
+    : `Generation ${entry.generation} (${state}${progress})`;
+}
+
+function aiGenerationDetailText(entry) {
+  const korean = locale() === LOCALES.KO;
+  const games = korean ? `${entry.gamesTrained || 0}경기 학습` : `${entry.gamesTrained || 0} training games`;
+  const compatibility = entry.engineCompatible === false
+    ? (korean ? "과거 엔진 체크포인트" : "historical-engine checkpoint")
+    : (korean ? "현재 엔진 호환" : "current-engine compatible");
+  return `${games} · ${compatibility}`;
+}
+
+function trainingDeckNames(generation = selectedAiGenerationDescriptor()) {
+  return generation.trainingDeckIds.map((id) => {
+    const deck = RAW_DECK_BY_ID.get(id);
+    return localizedDeckName(deck?.playerName || id);
+  });
+}
+
+function trainingDeckIdForGeneration(deck, generation = selectedAiGenerationDescriptor()) {
+  if (!deck) return null;
+  return generation.trainingDeckIds.find((id) => {
+    const rawDeck = RAW_DECK_BY_ID.get(id);
+    if (!rawDeck) return false;
+    const trainedDeck = deckRecordFromRaw(`trained-${id}`, rawDeck.playerName || id, rawDeck);
+    return sameDeckConfiguration(deck, trainedDeck);
+  }) || null;
+}
+
 function loadSettings() {
   try {
     const parsed = JSON.parse(localStorage.getItem(SETTINGS_STORAGE_KEY) || "null");
     return {
       locale: normalizeLocale(parsed?.locale || LOCALES.EN),
-      sideboardingEnabled: parsed?.sideboardingEnabled === true
+      sideboardingEnabled: parsed?.sideboardingEnabled === true,
+      aiGeneration: Number.isInteger(Number(parsed?.aiGeneration)) && Number(parsed.aiGeneration) >= 0
+        ? Number(parsed.aiGeneration)
+        : normalizeAiGeneration()
     };
   } catch {
-    return { locale: LOCALES.EN, sideboardingEnabled: false };
+    return { locale: LOCALES.EN, sideboardingEnabled: false, aiGeneration: normalizeAiGeneration() };
   }
+}
+
+function loadTutorialRecord() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(TUTORIAL_STORAGE_KEY) || "null");
+    const completedIds = Array.isArray(parsed?.completedIds)
+      ? parsed.completedIds.filter((id) => TUTORIAL_CATALOG.some((entry) => entry.id === id))
+      : (parsed?.completed === true ? [TUTORIAL_IDS.firstVictory] : []);
+    return {
+      completedIds: [...new Set(completedIds)],
+      completedAtById: parsed?.completedAtById && typeof parsed.completedAtById === "object"
+        ? parsed.completedAtById
+        : (parsed?.completedAt ? { [TUTORIAL_IDS.firstVictory]: parsed.completedAt } : {})
+    };
+  } catch {
+    return { completedIds: [], completedAtById: {} };
+  }
+}
+
+function saveTutorialRecord() {
+  localStorage.setItem(TUTORIAL_STORAGE_KEY, JSON.stringify(tutorialRecord));
 }
 
 function saveSettings() {
@@ -1503,6 +2072,8 @@ function resetGameUiState() {
   logOpen = false;
   handOpen = false;
   chainZoneCollapsed = false;
+  inspectedChainItemId = null;
+  inspectedChainTargetIds.clear();
   graveyardOpenPlayerId = null;
   banishedOpenPlayerId = null;
   intelOpenPlayerId = null;
@@ -1516,6 +2087,7 @@ function resetGameUiState() {
   paymentRunesScrollLeft = 0;
   handScrollLeft = 0;
   previousUiSnapshot = null;
+  clearEffectAnimations();
   resetPresentationState(presentationState);
   activeImpact = null;
   resultRevealReady = true;
@@ -1677,12 +2249,32 @@ function startGameFromMenu() {
   appView = "game";
 }
 
+function startTutorial(tutorialId = TUTORIAL_IDS.firstVictory) {
+  clearOnlineSeat();
+  aiMode = false;
+  aiReplay = null;
+  localMatch = null;
+  game = createTutorialGame(tutorialId);
+  resetGameUiState();
+  appView = "game";
+}
+
+function exitTutorial() {
+  game.tutorial.active = false;
+  appView = "tutorials";
+  resetGameUiState();
+}
+
 async function startAiGameFromMenu() {
   clearOnlineSeat();
   const pair = activeDeckRecords();
   if (pair.length !== 2 || pair.some((deck) => !validateDeckRecord(deck).playable)) return;
-  await ensureNeuralAiLoaded();
-  localMatch = createMatchState({ decks: pair, sideboardingEnabled: settings.sideboardingEnabled });
+  const generation = selectedAiGenerationDescriptor();
+  if (!trainingDeckIdForGeneration(pair[1], generation)) return;
+  if (!await ensureNeuralAiLoaded()) return;
+  const currentPair = activeDeckRecords();
+  if (currentPair.length !== 2 || !trainingDeckIdForGeneration(currentPair[1], generation)) return;
+  localMatch = createMatchState({ decks: currentPair, sideboardingEnabled: settings.sideboardingEnabled });
   sideboardDrafts = localMatch.currentDecks.map((deck) => structuredClone(deck));
   game = createGame({
     interactive: true,
@@ -1690,7 +2282,7 @@ async function startAiGameFromMenu() {
     manualActionChainPriority: true,
     enforceChampionLegendMatch: true,
     format: settings.sideboardingEnabled ? "match" : "duel",
-    decks: pair.map(resolveDeckRecord)
+    decks: currentPair.map(resolveDeckRecord)
   });
   aiMode = true;
   neuralAiSession?.reset();
@@ -1700,10 +2292,11 @@ async function startAiGameFromMenu() {
     humanPlayerId: aiHumanPlayerId,
     aiPlayerId,
     model: activeCoachModel(),
-    deckIds: pair.map((deck) => deck.id)
+    deckIds: currentPair.map((deck) => deck.id)
   });
   resetGameUiState();
   appView = "game";
+  render();
 }
 
 async function onlineCreateRoom() {
@@ -1809,6 +2402,15 @@ function dispatchGameCommand(command, applyLocal) {
     const actorId = aiActiveActorId(game);
     const result = applyLocal?.(resolvedCommand);
     if (result?.ok === false) actionRejection = localizedCommandFailure(result.message);
+    advanceTutorialAfterCommand(game, resolvedCommand, result);
+    if (game.tutorial?.completed && !tutorialRecord.completedIds.includes(game.tutorial.id)) {
+      const completedAt = new Date().toISOString();
+      tutorialRecord = {
+        completedIds: [...tutorialRecord.completedIds, game.tutorial.id],
+        completedAtById: { ...tutorialRecord.completedAtById, [game.tutorial.id]: completedAt }
+      };
+      saveTutorialRecord();
+    }
     recordLocalGameIfComplete();
     if (aiReplay && result?.ok) queueReplayAnalysis(before, actorId, resolvedCommand, result);
     return;
@@ -1874,8 +2476,19 @@ function scheduleAiTurn() {
     aiTurnTimer = null;
     aiThinking = true;
     try {
+      if (game.pendingPayment) {
+        const payment = resolvePlannedPayment(game, {
+          model: aiModel,
+          ...(neuralAiModel && neuralValueEstimator ? {
+            learnedCandidateLimit: 3,
+            valueEstimator: (state, actorId) => neuralValueEstimator(neuralAiModel, state, actorId)
+          } : {})
+        });
+        if (!payment?.ok) throw new Error(payment?.message || "AI가 비용 결제를 완료하지 못했습니다.");
+        return;
+      }
       const before = cloneGame(game);
-      const legal = enumerateLegalActions(game, aiPlayerId);
+      const legal = enumerateAiPolicyActions(game, aiPlayerId);
       const selected = neuralAiSession
         ? neuralAiSession.decide(game, aiPlayerId, legal, { temperature: 0.22 })
         : choosePolicyAction(game, aiPlayerId, legal, aiModel, { temperature: 0.22 });
@@ -1889,7 +2502,7 @@ function scheduleAiTurn() {
       aiThinking = false;
       render();
     }
-  }, 240);
+  }, EFFECT_ANIMATION_DURATION_MS);
 }
 
 function isOnlineGame() {
@@ -1917,10 +2530,20 @@ function emptyMotion() {
   };
 }
 
+function emptyEffectAnimationState() {
+  return {
+    draws: new Map(),
+    deaths: new Map(),
+    mightChanges: new Map(),
+    countered: new Map()
+  };
+}
+
 function prepareUiMotion() {
   const current = uiSnapshot();
   const previous = previousUiSnapshot;
   previousUiSnapshot = current;
+  pruneEffectAnimations();
   if (!previous) return emptyMotion();
 
   const motion = emptyMotion();
@@ -1929,29 +2552,101 @@ function prepareUiMotion() {
   motion.chained = diffSet(current.chain, previous.chain);
   motion.trashed = diffSet(current.trash, previous.trash);
   motion.feedback = buildRealtimeFeedback(current, previous, motion);
+  rememberEffectAnimations(detectEffectAnimations(previous, current));
 
   return motion;
+}
+
+function rememberEffectAnimations(events) {
+  const expiresAt = Date.now() + EFFECT_ANIMATION_DURATION_MS;
+  for (const event of events.draws) effectAnimations.draws.set(event.playerId, { ...event, expiresAt });
+  for (const event of events.deaths) effectAnimations.deaths.set(event.id, { ...event, expiresAt });
+  for (const event of events.mightChanges) effectAnimations.mightChanges.set(event.unitId, { ...event, expiresAt });
+  for (const event of events.countered) effectAnimations.countered.set(event.id, { ...event, expiresAt });
+  scheduleEffectAnimationCleanup();
+}
+
+function pruneEffectAnimations(now = Date.now()) {
+  for (const group of Object.values(effectAnimations)) {
+    for (const [id, event] of group) {
+      if (event.expiresAt <= now) group.delete(id);
+    }
+  }
+}
+
+function scheduleEffectAnimationCleanup() {
+  if (effectAnimationTimer) clearTimeout(effectAnimationTimer);
+  const expirations = Object.values(effectAnimations).flatMap((group) => [...group.values()].map((event) => event.expiresAt));
+  if (!expirations.length) {
+    effectAnimationTimer = null;
+    return;
+  }
+  const delay = Math.max(0, Math.min(...expirations) - Date.now()) + 24;
+  effectAnimationTimer = setTimeout(() => {
+    effectAnimationTimer = null;
+    pruneEffectAnimations();
+    scheduleEffectAnimationCleanup();
+    if (appView === "game") render();
+  }, delay);
+}
+
+function clearEffectAnimations() {
+  effectAnimations = emptyEffectAnimationState();
+  if (effectAnimationTimer) clearTimeout(effectAnimationTimer);
+  effectAnimationTimer = null;
 }
 
 function uiSnapshot() {
   const chainItems = visibleChainItems().map((item, index) => chainItemSnapshot(item, index));
   const cardZones = cardZoneSnapshot();
+  const boardUnits = boardUnitSnapshot();
+  const visibleLog = gameLogVisibleToViewer(game, viewerPlayerId());
   return {
     phase: game.phase,
     currentPlayerId: game.currentPlayerId,
     turnNumber: game.turnNumber,
-    logHead: game.log[0] || "",
+    logHead: visibleLog[0] || "",
     effectStamp: game.effectFlash?.stamp || 0,
+    effectMessage: game.effectFlash?.message || "",
+    players: new Map(game.players.map((player) => [player.id, {
+      deckCount: player.mainDeck.length,
+      handIds: new Set(player.hand.map((card) => card.instanceId))
+    }])),
     hand: new Set(game.players.flatMap((player) => player.hand.map((card) => card.instanceId))),
-    board: new Set([
-      ...game.players.flatMap((player) => player.base.map((card) => card.instanceId)),
-      ...game.battlefields.flatMap((field) => field.units.map((card) => card.instanceId))
-    ]),
+    board: new Set(boardUnits.keys()),
+    boardUnits,
     trash: new Set(game.players.flatMap((player) => player.trash.map((card) => card.instanceId))),
-    chain: new Set(chainCardInstanceIds(game)),
+    chain: new Set(chainCardInstanceIds(game, viewerPlayerId())),
     chainItems,
     chainItemIds: new Set(chainItems.map((item) => item.id)),
     cardZones
+  };
+}
+
+function boardUnitSnapshot() {
+  const units = new Map();
+  for (const player of game.players) {
+    for (const card of player.base) {
+      if (card.type === "unit") units.set(card.instanceId, effectUnitSnapshot(card, "base"));
+    }
+  }
+  for (const field of game.battlefields) {
+    for (const card of field.units) {
+      if (card.type === "unit") units.set(card.instanceId, effectUnitSnapshot(card, field.instanceId));
+    }
+  }
+  return units;
+}
+
+function effectUnitSnapshot(card, location) {
+  return {
+    id: card.instanceId,
+    playerId: card.controllerId || card.ownerId,
+    ownerId: card.ownerId,
+    name: card.name || "Unit",
+    image: card.image || "",
+    location,
+    might: currentMight(game, card)
   };
 }
 
@@ -1967,6 +2662,7 @@ function chainItemSnapshot(item, index) {
     cardId: card.instanceId,
     playerId: item.playerId,
     name: chainItemTitle(item),
+    rawName: card.name || item.trigger?.label || "",
     sourceName: chainItemSourceTitle(item),
     type: item.itemType || "card",
     status: item.status || "pending",
@@ -2110,6 +2806,7 @@ function interactionStatus() {
   }
   if (game.pendingPayment) {
     const payment = game.pendingPayment;
+    const decisionVisible = pendingDecisionVisibleToViewer({ aiMode, viewerPlayerId: viewerPlayerId(), decision: payment });
     const player = game.players.find((candidate) => candidate.id === payment.playerId);
     const card = paymentDisplayCard(player, payment) || payment.effectPayment?.sourceCard;
     const needed = payment.energyCost ?? card?.energy ?? 0;
@@ -2118,19 +2815,24 @@ function interactionStatus() {
       tone: mine ? "attention" : "waiting",
       label: t("paymentInProgress", locale()),
       title: t("playerMustPay", locale(), { name: actorName }),
-      detail: needed > 0
+      detail: !decisionVisible
+        ? t("playerIsChoosing", locale(), { name: actorName })
+        : needed > 0
         ? t("energyProgressDetail", locale(), { selected, needed, remaining: Math.max(0, needed - selected) })
         : t("finishDialog", locale())
     };
   }
   if (game.pendingChoice) {
     const choice = game.pendingChoice;
+    const decisionVisible = pendingDecisionVisibleToViewer({ aiMode, viewerPlayerId: viewerPlayerId(), decision: choice });
     const source = choice.card ? cardName(choice.card) : t("effect", locale());
     return {
       tone: mine ? "attention" : "waiting",
       label: choice.data?.declareTrigger ? t("declaring", locale()) : t("resolving", locale()),
       title: t("playerMustChoose", locale(), { name: actorName }),
-      detail: `${source} · ${localizedChoicePrompt(choice)}`
+      detail: decisionVisible
+        ? `${source} · ${localizedChoicePrompt(choice)}`
+        : t("playerIsChoosing", locale(), { name: actorName })
     };
   }
   const queuedTriggers = game.triggerQueue?.length || 0;
@@ -2213,6 +2915,9 @@ function firstPlayerPanel() {
 function firstPlayerRollPanel(decision) {
   const chooser = game.players.find((player) => player.id === decision.chooserId);
   const isChoosing = decision.status === "choosing";
+  if (isChoosing && !setupSelectionVisibleToViewer(chooser?.id)) {
+    return privateFirstPlayerWaitingPanel(chooser);
+  }
   const canUseDecisionControl = viewerCanAct();
   const notice = isChoosing
     ? (canUseDecisionControl
@@ -2247,6 +2952,20 @@ function firstPlayerRollPanel(decision) {
   `;
 }
 
+function privateFirstPlayerWaitingPanel(player) {
+  const name = player ? playerName(player) : t("opponentSide", locale());
+  return `
+    <section class="first-player-screen">
+      <article class="first-player-card dice-order-card private-setup-waiting">
+        <div class="setup-hidden-choice">
+          <strong>${t("waiting", locale())}</strong>
+          <span>${t("playerIsChoosing", locale(), { name })}</span>
+        </div>
+      </article>
+    </section>
+  `;
+}
+
 function firstPlayerDieSeat(player, decision, index) {
   const value = decision.rolls?.[player.id];
   const showPreviousTie = Object.values(decision.rolls || {}).every((roll) => roll == null);
@@ -2269,7 +2988,7 @@ function winnerName() {
 }
 
 function updateGamePresentation() {
-  const snapshot = snapshotPresentationGame(game, effectiveMight);
+  const snapshot = snapshotPresentationGame(game, (card) => currentMight(game, card), viewerPlayerId());
   const update = advancePresentation(presentationState, snapshot, viewerPlayerId());
   if (update.impact) rememberCinematicImpact(update.impact);
   return update;
@@ -2308,7 +3027,7 @@ function cinematicImpactOverlay() {
 }
 
 function gameResultModal() {
-  if (game.phase !== "complete" || !resultRevealReady || resultDismissed) return "";
+  if (replayMode || game.phase !== "complete" || !resultRevealReady || resultDismissed) return "";
   const won = game.winnerId === viewerPlayerId();
   const winner = game.players.find((player) => player.id === game.winnerId);
   const loser = game.players.find((player) => player.id !== game.winnerId);
@@ -2406,9 +3125,20 @@ function scoreTrack() {
 }
 
 function gamePanel(player) {
+  syncInspectedChainTargets();
   const selected = uiSelectedCard();
   const bottomPlayer = viewerPlayer();
   const topPlayer = opponentPlayer();
+  const showPendingPayment = pendingDecisionVisibleToViewer({
+    aiMode,
+    viewerPlayerId: viewerPlayerId(),
+    decision: game.pendingPayment
+  });
+  const showPendingChoice = pendingDecisionVisibleToViewer({
+    aiMode,
+    viewerPlayerId: viewerPlayerId(),
+    decision: game.pendingChoice
+  });
   return `
     <div class="play-area ${actingPlayerClass()} ${isOnlineGame() && !viewerCanAct() ? "waiting-for-opponent" : ""} ${online.commandPending ? "command-pending" : ""}" aria-busy="${online.commandPending ? "true" : "false"}">
       <section class="board-panel" aria-label="${t("gameBoard", locale())}">
@@ -2432,10 +3162,10 @@ function gamePanel(player) {
       ${moveBatchBar(player)}
       ${actionBar(player, selected)}
       ${handDrawer(player)}
-      <div class="floating-panels ${game.phase === "showdown" ? "showdown-dock" : ""} ${game.pendingPayment || game.pendingChoice || graveyardOpenPlayerId || banishedOpenPlayerId ? "has-modal" : ""}">
+      <div class="floating-panels ${game.phase === "showdown" ? "showdown-dock" : ""} ${showPendingPayment || showPendingChoice || graveyardOpenPlayerId || banishedOpenPlayerId ? "has-modal" : ""}">
         ${game.phase === "showdown" ? "" : ""}
-        ${game.pendingPayment ? paymentPanel() : ""}
-        ${game.pendingChoice ? choicePanel() : ""}
+        ${showPendingPayment ? paymentPanel() : ""}
+        ${showPendingChoice ? choicePanel() : ""}
         ${graveyardOpenPlayerId ? graveyardPanel(graveyardOpenPlayerId) : ""}
         ${banishedOpenPlayerId ? banishedPanel(banishedOpenPlayerId) : ""}
         ${intelOpenPlayerId ? intelPanel(intelOpenPlayerId) : ""}
@@ -2482,30 +3212,30 @@ function moveBatchBar(player) {
 
 function batchMoveDestinations(units) {
   const options = [];
-  const contexts = units.map((unit) => selectedContext(unit.instanceId));
-  if (contexts.every((context) => context?.location !== "base")) {
+  const destinationIds = new Set(sharedLegalMoveDestinationIds(
+    uiLegalActions,
+    units.map((unit) => unit.instanceId)
+  ));
+  if (destinationIds.has("base")) {
     options.push({ id: "base", label: t("moveToBase", locale()) });
   }
   for (const [index, field] of visibleBattlefields().entries()) {
-    const legal = units.every((unit, unitIndex) => {
-      const context = contexts[unitIndex];
-      if (!context || context.location === field.instanceId) return false;
-      if (context.location !== "base" && !hasKeyword(unit, "Ganking")) return false;
-      return true;
-    });
-    if (legal) options.push({ id: field.instanceId, label: t("moveToField", locale(), { n: index + 1 }) });
+    if (destinationIds.has(field.instanceId)) {
+      options.push({ id: field.instanceId, label: t("moveToField", locale(), { n: index + 1 }) });
+    }
   }
   return options;
 }
 
 function logDrawer() {
   const interaction = interactionStatus();
+  const visibleLog = gameLogVisibleToViewer(game, viewerPlayerId());
   return `
     <aside class="log-drawer" aria-label="${t("eventTimeline", locale())}">
       <div class="section-head">
         <div>
           <h2>${t("eventTimeline", locale())}</h2>
-          <span>${game.log.length} ${t("recentEvents", locale())}</span>
+          <span>${visibleLog.length} ${t("recentEvents", locale())}</span>
         </div>
         <button data-action="toggle-log">${t("close", locale())}</button>
       </div>
@@ -2514,13 +3244,13 @@ function logDrawer() {
         <span>${interaction.detail}</span>
       </div>
       <div class="log-list">
-        ${game.log.map((entry, index) => logEntryView(entry, index)).join("")}
+        ${visibleLog.map((entry, index) => logEntryView(entry, index, visibleLog.length)).join("")}
       </div>
     </aside>
   `;
 }
 
-function logEntryView(entry, index) {
+function logEntryView(entry, index, total = game.log.length) {
   const value = String(entry || "");
   const category = /pay|cost/i.test(value)
     ? "payment"
@@ -2536,7 +3266,7 @@ function logEntryView(entry, index) {
   const exception = value.startsWith("[UI Exception]");
   return `
     <article class="log-entry log-${category} ${exception ? "ui-exception-log" : ""}">
-      <span class="log-index">${game.log.length - index}</span>
+      <span class="log-index">${total - index}</span>
       <p>${escapeHtml(localizedLogEntry(value))}</p>
     </article>
   `;
@@ -2951,7 +3681,7 @@ function intelPanel(playerId) {
   const hiddenCards = game.battlefields.flatMap((field) =>
     (field.hidden || [])
       .filter((item) => hiddenCardIsControlledBy(item, player.id))
-      .map((item) => ({ ...item, fieldName: field.name }))
+      .map((item) => ({ ...item, fieldName: battlefieldName(field) }))
   );
   return `
     <section class="intel-panel modal-panel reveal-panel">
@@ -3033,6 +3763,11 @@ function triggerOrderPanel(choice) {
           <p class="choice-instruction trigger-order-instruction">${t("triggerOrderHelp", locale())}</p>
           ${mandatoryRemaining ? `<p class="trigger-order-required">${t("triggerOrderMandatoryRemaining", locale(), { n: mandatoryRemaining })}</p>` : ""}
         </div>
+        ${confirmOption ? `
+          <div class="trigger-order-confirm">
+            <button type="button" class="primary" data-action="choose-effect" data-choice="${confirmOption.id}" ${confirmOption.disabled ? "disabled aria-disabled=\"true\"" : ""}>${t("triggerOrderConfirm", locale())}</button>
+          </div>
+        ` : ""}
       </div>
       <div class="trigger-order-track" aria-label="${t("triggerOrderSelected", locale())}">
         ${Array.from({ length: total }, (_, index) => {
@@ -3056,11 +3791,6 @@ function triggerOrderPanel(choice) {
       <div class="choice-grid trigger-order-grid">
         ${triggerOptions.map((option) => triggerOrderOptionButton(choice, option)).join("")}
       </div>
-      ${confirmOption ? `
-        <div class="trigger-order-confirm">
-          <button type="button" class="primary" data-action="choose-effect" data-choice="${confirmOption.id}" ${confirmOption.disabled ? "disabled aria-disabled=\"true\"" : ""}>${t("triggerOrderConfirm", locale())}</button>
-        </div>
-      ` : ""}
     </section>
   `;
 }
@@ -3184,7 +3914,9 @@ function revealConfirmationPanel(choice) {
 
 function choiceOptionButton(option) {
   const preview = choicePreviewCard(option);
-  const label = preview && !preview.redacted ? cardName(preview) : localizedChoiceOptionLabel(option);
+  const label = preview && !preview.redacted
+    ? (preview.type === "battlefield" ? battlefieldName(preview) : cardName(preview))
+    : localizedChoiceOptionLabel(option);
   const context = option.cardId ? choiceCardContext(option.cardId, preview) : null;
   const ownership = choiceOwnership(context, preview);
   const location = context ? choiceLocationLabel(context) : "";
@@ -3226,7 +3958,7 @@ function choiceLocationLabel(context) {
   if (!context) return "";
   if (["battlefield", "hidden", "attachment", "battlefield-card"].includes(context.zone)) {
     const field = game.battlefields.find((candidate) => candidate.instanceId === context.location);
-    return field ? `${cardName(field)} · ${t("battlefield", locale())}` : t("battlefield", locale());
+    return field ? `${battlefieldName(field)} · ${t("battlefield", locale())}` : t("battlefield", locale());
   }
   const labels = {
     hand: t("hand", locale()),
@@ -3307,6 +4039,8 @@ function choiceEffectInstruction(choice) {
       damageUnit: `${sourceName}: 피해 ${amount || "지정된 수치"}를 받을 유닛을 선택하세요.`,
       returnUnitToHand: `${sourceName}: 소유자의 손으로 되돌릴 유닛을 선택하세요.`,
       readyUnit: `${sourceName}: 준비시킬 아군 탈진 유닛을 선택하세요.`,
+      readyAnotherExhausted: `${sourceName}: 준비시킬 다른 탈진 비주문 오브젝트를 선택하세요.`,
+      playEffectUnitDestination: `${sourceName}: 공개한 유닛을 사용할 합법적인 장소를 선택하세요.`,
       sabotage: `${sourceName}: 재활용할 상대의 공개된 비유닛 카드를 선택하세요.`,
       equipGear: `${sourceName}: 이 도구를 부착할 유닛을 선택하세요.`,
       stealEnemyGear: `${sourceName}: 추가 비용을 지불한 뒤 가져올 적 도구를 선택하세요.`,
@@ -3344,6 +4078,8 @@ function choiceEffectInstruction(choice) {
     damageUnit: `${sourceName}: choose a unit to take ${amount || "the listed"} damage.`,
     returnUnitToHand: `${sourceName}: choose a unit to return to its owner's hand.`,
     readyUnit: `${sourceName}: choose a friendly exhausted unit to ready.`,
+    readyAnotherExhausted: `${sourceName}: choose another exhausted non-spell object to ready.`,
+    playEffectUnitDestination: `${sourceName}: choose a legal location for the revealed unit.`,
     sabotage: `${sourceName}: choose a revealed non-unit card from the opponent's hand to recycle.`,
     equipGear: `${sourceName}: choose the unit this gear will attach to.`,
     stealEnemyGear: `${sourceName}: choose an enemy gear to take and attach after paying the additional cost.`,
@@ -3555,7 +4291,7 @@ function showdownPanel() {
     <section class="showdown-panel">
       <div class="section-head">
         <div>
-          <h2>${t("showdown", locale())}: ${field ? cardName(field) : t("battlefield", locale())}</h2>
+          <h2>${t("showdown", locale())}: ${field ? battlefieldName(field) : t("battlefield", locale())}</h2>
           <span>${chain.length ? t("resolveChainFirst", locale()) : t("passToFight", locale())}</span>
         </div>
         <button class="primary" data-action="pass-showdown" ${viewerCanAct() ? "" : "disabled"}>${t("pass", locale())}</button>
@@ -3574,8 +4310,9 @@ function chainCard(item, index) {
   const motionClass = cardId && uiMotion.chained.has(cardId)
     ? (hasKeyword(card, "Ambush") ? "ambush-chain" : (card.tags?.includes("Reaction") ? "reaction-chain" : "chain-enter"))
     : "";
+  const itemId = item?.id || `${cardId || "chain"}-${index}`;
   return `
-    <button type="button" class="chain-card ${motionClass}" data-action="view-chain-card" data-card-id="${cardId}" title="${t("viewFullCard", locale())}" ${cardId ? "" : "disabled"}>
+    <button type="button" class="chain-card ${motionClass} ${inspectedChainItemId === itemId ? "is-inspected" : ""}" data-action="inspect-chain-effect" data-chain-item-id="${escapeHtml(itemId)}" data-card-id="${cardId}" title="${t("target", locale())}">
       <strong>${t(index === 0 ? "next" : "queued", locale())}</strong>
       <span>${chainItemTitle(item)}</span>
       <small>${player ? playerName(player) : ""} / ${localizedDynamicText(t(item?.status || "finalized", locale()))}</small>
@@ -3584,6 +4321,38 @@ function chainCard(item, index) {
 }
 
 function chainZonePanel() {
+  const counteredItems = [...effectAnimations.countered.values()];
+  const items = currentChainTreeItems();
+  const responding = responsePromptInfo();
+  if (!items.length && !responding && !counteredItems.length) {
+    chainZoneCollapsed = false;
+    return "";
+  }
+  if (counteredItems.length) chainZoneCollapsed = false;
+  return `
+    <section class="chain-zone ${chainZoneCollapsed ? "is-collapsed" : ""} ${counteredItems.length ? "has-counter-animation" : ""}" aria-label="${t("processingQueue", locale())}" aria-live="polite">
+      <div class="chain-zone-head">
+        <div>
+          <strong>${t("processingQueue", locale())}</strong>
+          <span>${counteredItems.length ? t("countered", locale()) : items.length ? `${items.length} ${t("pending", locale())}` : t("responseWindow", locale())}</span>
+          ${responding ? `<em>${t("youMayRespond", locale())}</em>` : ""}
+        </div>
+        <button type="button" class="chain-zone-toggle" data-action="toggle-chain-zone" aria-expanded="${chainZoneCollapsed ? "false" : "true"}" aria-controls="chain-zone-content">
+          <span aria-hidden="true">${chainZoneCollapsed ? "▾" : "▴"}</span>
+          ${t(chainZoneCollapsed ? "showChain" : "hideChain", locale())}
+        </button>
+      </div>
+      <div id="chain-zone-content" class="chain-zone-content" ${chainZoneCollapsed ? "hidden" : ""}>
+        <div class="chain-stack" data-scroll-key="chain-stack">
+          ${counteredItems.map(counteredChainZoneItem).join("")}${items.map((item, index) => chainZoneItem(item, items.length - index)).join("") || `<p class="empty">${t("noChainItem", locale())}</p>`}
+        </div>
+        ${inspectedChainTargetPanel(items, responding)}
+      </div>
+    </section>
+  `;
+}
+
+function currentChainTreeItems() {
   const chain = game.actionChain || game.showdown;
   const chainItems = chain ? [...normalizeUiChain(chain.chain)].reverse() : [];
   const activeTriggerChoice = game.pendingChoice?.data?.triggerId ? game.pendingChoice : null;
@@ -3593,7 +4362,11 @@ function chainZonePanel() {
       itemType: "trigger",
       playerId: activeTriggerChoice.playerId,
       card: activeTriggerChoice.card,
-      trigger: { sourceCardId: activeTriggerChoice.card?.instanceId, kind: activeTriggerChoice.effect },
+      trigger: {
+        sourceCardId: activeTriggerChoice.card?.instanceId,
+        kind: activeTriggerChoice.effect,
+        data: activeTriggerChoice.data
+      },
       status: "resolving"
     }] : []),
     ...(game.triggerQueue || []).map((trigger, index) => ({
@@ -3605,32 +4378,80 @@ function chainZonePanel() {
       status: trigger.status || "pending"
     }))
   ];
-  const items = [...chainItems, ...triggerItems];
-  const responding = responsePromptInfo();
-  if (!items.length && !responding) {
-    chainZoneCollapsed = false;
-    return "";
+  return [...chainItems, ...triggerItems];
+}
+
+function syncInspectedChainTargets() {
+  if (!inspectedChainItemId) {
+    inspectedChainTargetIds.clear();
+    return;
+  }
+  const item = currentChainTreeItems().find((candidate) => candidate.id === inspectedChainItemId);
+  if (!item) {
+    inspectedChainItemId = null;
+    inspectedChainTargetIds.clear();
+    return;
+  }
+  inspectedChainTargetIds = new Set(chainItemTargetIds(item));
+}
+
+function inspectedChainTargetPanel(items, responding) {
+  const item = inspectedChainItemId
+    ? items.find((candidate) => candidate.id === inspectedChainItemId)
+    : null;
+  if (!item && !responding) return "";
+  const targets = item ? chainItemTargetIds(item) : [];
+  const sourceCardId = item?.card?.instanceId || item?.trigger?.sourceCardId || "";
+  return `
+    <aside class="chain-context-panel ${item ? "showing-targets" : ""}" aria-live="polite">
+      ${item ? `
+        <section class="chain-target-panel">
+          <div class="chain-target-head">
+            <div>
+              <span>${t("target", locale())}</span>
+              <strong>${chainItemTitle(item)}</strong>
+            </div>
+            ${sourceCardId ? `<button type="button" class="secondary" data-action="view-chain-card" data-card-id="${escapeHtml(sourceCardId)}">${t("viewFullCard", locale())}</button>` : ""}
+          </div>
+          <div class="chain-target-list">
+            ${targets.length
+              ? targets.map(chainTargetCard).join("")
+              : `<p class="chain-no-target">${t("noTargetDeclared", locale())}</p>`}
+          </div>
+        </section>
+      ` : ""}
+      ${responding ? responsePrompt(responding) : ""}
+    </aside>
+  `;
+}
+
+function chainTargetCard(targetId) {
+  if (targetId === "base") {
+    return `<div class="chain-target-card destination-target"><span>${t("target", locale())}</span><strong>${t("base", locale())}</strong></div>`;
+  }
+  const card = visibleChainTargetCard(targetId);
+  if (!card) {
+    return `<div class="chain-target-card destination-target"><span>${t("target", locale())}</span><strong>${escapeHtml(targetLabel(targetId))}</strong></div>`;
   }
   return `
-    <section class="chain-zone ${chainZoneCollapsed ? "is-collapsed" : ""}" aria-label="${t("processingQueue", locale())}" aria-live="polite">
-      <div class="chain-zone-head">
-        <div>
-          <strong>${t("processingQueue", locale())}</strong>
-          <span>${items.length ? `${items.length} ${t("pending", locale())}` : t("responseWindow", locale())}</span>
-          ${responding ? `<em>${t("youMayRespond", locale())}</em>` : ""}
-        </div>
-        <button type="button" class="chain-zone-toggle" data-action="toggle-chain-zone" aria-expanded="${chainZoneCollapsed ? "false" : "true"}" aria-controls="chain-zone-content">
-          <span aria-hidden="true">${chainZoneCollapsed ? "▾" : "▴"}</span>
-          ${t(chainZoneCollapsed ? "showChain" : "hideChain", locale())}
-        </button>
-      </div>
-      <div id="chain-zone-content" class="chain-zone-content" ${chainZoneCollapsed ? "hidden" : ""}>
-        <div class="chain-stack" data-scroll-key="chain-stack">
-          ${items.map((item, index) => chainZoneItem(item, items.length - index)).join("") || `<p class="empty">${t("noChainItem", locale())}</p>`}
-        </div>
-        ${responding ? responsePrompt(responding) : ""}
-      </div>
-    </section>
+    <button type="button" class="chain-target-card" data-action="focus-chain-target" data-card-id="${escapeHtml(targetId)}">
+      ${card.image ? `<img src="${escapeHtml(card.image)}" alt="" loading="lazy" />` : `<span class="chain-target-fallback" aria-hidden="true">◎</span>`}
+      <span><small>${t("target", locale())}</small><strong>${escapeHtml(cardName(card))}</strong></span>
+    </button>
+  `;
+}
+
+function counteredChainZoneItem(item) {
+  const targets = (item.targetIds || []).map(targetLabel).filter(Boolean);
+  return `
+    <article class="chain-zone-item chain-zone-countered" aria-label="${escapeHtml(`${item.name} ${t("countered", locale())}`)}">
+      <b>${playerPerspectiveLabel(item.playerId)}</b>
+      <strong>${escapeHtml(localizedDynamicText(item.name))}</strong>
+      <span>${t("source", locale())}: ${escapeHtml(localizedDynamicText(item.sourceName || item.name))}</span>
+      ${targets.length ? `<small>${t("target", locale())}: ${targets.join(", ")}</small>` : ""}
+      <em>${t("countered", locale())}</em>
+      <i class="counter-slash" aria-hidden="true"></i>
+    </article>
   `;
 }
 
@@ -3643,10 +4464,7 @@ function normalizeUiChain(items = []) {
 }
 
 function chainItemVisibleInTree(item) {
-  // Declaring a card from hand makes that card and its destination public. In
-  // particular, units must remain visible while their payment is pending so
-  // both players can respond to the actual declared play.
-  return Boolean(item);
+  return chainItemVisibleToViewer(item, viewerPlayerId());
 }
 
 function chainZoneItem(item, order) {
@@ -3658,10 +4476,11 @@ function chainZoneItem(item, order) {
   const itemClass = [
     "chain-zone-item",
     uiMotion.chained.has(item.card?.instanceId) ? "chain-zone-new" : "",
+    inspectedChainItemId === item.id ? "is-inspected" : "",
     item.status ? `status-${item.status}` : ""
   ].filter(Boolean).join(" ");
   return `
-    <button type="button" class="${itemClass}" data-action="view-chain-card" data-card-id="${previewCardId}" title="${t("viewFullCard", locale())}" ${previewCardId ? "" : "disabled"}>
+    <button type="button" class="${itemClass}" data-action="inspect-chain-effect" data-chain-item-id="${escapeHtml(item.id)}" data-card-id="${previewCardId}" title="${t("target", locale())}">
       <b>[${order}] ${playerPerspectiveLabel(item.playerId)}</b>
       <strong>${chainItemTitle(item)}</strong>
       <span>${t("source", locale())}: ${source}</span>
@@ -3739,32 +4558,29 @@ function chainItemSourceTitle(item) {
 }
 
 function chainItemTargetIds(item) {
-  const card = item?.card || {};
-  const targets = [
-    ...(card.declaredPlayTargets || []).flatMap((target) => [
-      target.cardId,
-      target.targetId,
-      target.unitId,
-      target.battlefieldId,
-      target.destinationId
-    ]),
-    ...(card.declaredPlayChoices || []).flatMap((choice) => [
-      choice.cardId,
-      choice.targetId,
-      choice.unitId,
-      choice.battlefieldId,
-      choice.destinationId
-    ]),
-    item?.destination
-  ].filter(Boolean);
-  return [...new Set(targets)];
+  const targets = collectChainTargetIds(item);
+  if (item?.destination && !targets.includes(item.destination)) targets.push(item.destination);
+  return targets;
+}
+
+function visibleChainTargetCard(cardId) {
+  const card = findVisibleCard(cardId);
+  if (!card || card.redacted) return null;
+  const context = selectedContext(cardId);
+  const privateZones = new Set(["hand", "main-deck", "rune-deck", "hidden", "champion-choice"]);
+  if (context?.playerId && context.playerId !== viewerPlayerId() && privateZones.has(context.zone)
+    && !canViewPrivateInfo(viewerPlayerId(), context.playerId)) return null;
+  return card;
 }
 
 function targetLabel(cardId) {
   if (!cardId) return "";
   if (cardId === "base") return t("base", locale());
-  const card = findVisibleCard(cardId);
-  return card ? cardName(card) : cardId;
+  const card = visibleChainTargetCard(cardId);
+  if (card) return cardName(card);
+  const context = selectedContext(cardId);
+  if (context?.zone === "hidden") return t("hiddenZone", locale());
+  return locale() === LOCALES.KO ? "공개되지 않은 대상" : "Undisclosed target";
 }
 
 function playerPerspectiveLabel(playerId) {
@@ -3846,9 +4662,16 @@ function triggerChip(item) {
 }
 
 function setupPanel() {
+  const selectingPlayer = game.players.find((player) => player.id === game.setupPlayerId);
+  if (!setupSelectionVisibleToViewer(selectingPlayer?.id)) {
+    return privateSetupWaitingPanel(selectingPlayer);
+  }
+  const visiblePlayers = aiMode
+    ? game.players.filter((player) => player.id === viewerPlayerId())
+    : game.players;
   return `
     <section class="setup">
-      ${game.players.map((player) => `
+      ${visiblePlayers.map((player) => `
         <article class="setup-player ${player.id === game.setupPlayerId ? "active" : ""}">
           <div class="section-head">
             <div>
@@ -3877,9 +4700,16 @@ function battlefieldSelectionContent(player) {
 }
 
 function championSelectPanel() {
+  const selectingPlayer = game.players.find((player) => player.id === game.championSelectPlayerId);
+  if (!setupSelectionVisibleToViewer(selectingPlayer?.id)) {
+    return privateSetupWaitingPanel(selectingPlayer, "champion-setup");
+  }
+  const visiblePlayers = aiMode
+    ? game.players.filter((player) => player.id === viewerPlayerId())
+    : game.players;
   return `
     <section class="setup champion-setup">
-      ${game.players.map((player) => `
+      ${visiblePlayers.map((player) => `
         <article class="setup-player ${player.id === game.championSelectPlayerId ? "active" : ""}">
           <div class="section-head">
             <div>
@@ -3939,7 +4769,7 @@ function battlefieldChoice(player, field) {
 function mulliganPanel() {
   const player = game.players.find((candidate) => candidate.id === game.mulligan?.playerId);
   const selected = new Set(game.mulligan?.selectedCardIds || []);
-  if (isOnlineGame() && player?.id !== viewerPlayerId()) {
+  if ((isOnlineGame() && player?.id !== viewerPlayerId()) || !setupSelectionVisibleToViewer(player?.id)) {
     return `
       <section class="mulligan">
         <article class="mulligan-player active waiting">
@@ -3974,6 +4804,29 @@ function mulliganPanel() {
   `;
 }
 
+function setupSelectionVisibleToViewer(playerId) {
+  if (!playerId) return true;
+  return pendingDecisionVisibleToViewer({
+    aiMode,
+    viewerPlayerId: viewerPlayerId(),
+    decision: { playerId }
+  });
+}
+
+function privateSetupWaitingPanel(player, panelClass = "") {
+  const name = player ? playerName(player) : t("opponentSide", locale());
+  return `
+    <section class="setup ${panelClass} private-setup-waiting">
+      <article class="setup-player active">
+        <div class="setup-hidden-choice">
+          <strong>${t("waiting", locale())}</strong>
+          <span>${t("playerIsChoosing", locale(), { name })}</span>
+        </div>
+      </article>
+    </section>
+  `;
+}
+
 function mulliganCard(card, selected) {
   return `
     <article class="${imageCardClass(card, `mulligan-card ${selected ? "chosen" : ""}`)}" data-card-id="${card.instanceId}">
@@ -3991,6 +4844,8 @@ function playerSide(player, side) {
   const acting = activePlayerId() === player.id;
   const intel = canViewPrivateInfo(viewerPlayerId(), player.id);
   const handGlow = uiMotion.sourceZones.has(`${player.id}:hand`) ? "source-hand-glow" : "";
+  const drawAnimation = effectAnimations.draws.get(player.id);
+  const baseDeaths = unitDeathGhosts("base", player.id);
   return `
     <section class="player-side ${side} owner-${player.id} ${acting ? "acting-player" : ""} ${handGlow}">
       <div class="player-identity">
@@ -4002,8 +4857,8 @@ function playerSide(player, side) {
           <h2>${playerName(player)}</h2>
           <div class="player-stats" data-scroll-key="player-stats-${player.id}">
             <span class="xp-stat">${t("level", locale())} ${player.xp || 0}</span>
-            <span class="deck-stat">${t("deck", locale())} ${player.mainDeck.length}</span>
-            <span class="hand-stat">${t("hand", locale())} ${player.hand.length}</span>
+            <span class="deck-stat" data-effect="${drawAnimation ? "draw" : ""}" aria-label="${t("deck", locale())} ${player.mainDeck.length}">${t("deck", locale())} <b>${player.mainDeck.length}</b></span>
+            <span class="hand-stat">${t("hand", locale())} ${handCountVisibleToViewer(game, player, viewerPlayerId())}</span>
             <button class="trash-button" data-action="toggle-graveyard" data-player="${player.id}" title="${t("viewTrashTitle", locale(), { name: playerName(player) })}">
               ${t("trash", locale())} ${player.trash.length}
             </button>
@@ -4025,7 +4880,7 @@ function playerSide(player, side) {
       <div class="base-zone">
         <span class="zone-caption">${t("base", locale())}</span>
         <div class="base-row ${baseTarget.className}" data-scroll-key="base-${player.id}" ${baseTarget.attrs}>
-          ${player.base.map((card) => boardCard(card, "base")).join("") || `<p class="empty">${t("baseEmpty", locale())}</p>`}
+          ${player.base.map((card) => boardCard(card, "base")).join("")}${baseDeaths || (!player.base.length ? `<p class="empty">${t("baseEmpty", locale())}</p>` : "")}
         </div>
       </div>
     </section>
@@ -4040,8 +4895,9 @@ function miniIdentity(card, player = null) {
     : "";
   const exhausted = card?.exhausted ? " exhausted" : "";
   const sourceGlow = uiMotion.sourceIds.has(card?.instanceId) ? " source-card-glow" : "";
+  const chainTarget = chainTargetClass(card?.instanceId) ? " chain-effect-target" : "";
   return `
-    <button class="identity-button${championState}${exhausted}${sourceGlow}" data-action="select-card" data-card="${card.instanceId}" title="${cardName(card)}">
+    <button class="identity-button${championState}${exhausted}${sourceGlow}${chainTarget}" data-action="select-card" data-card="${card.instanceId}" title="${cardName(card)}">
       <img src="${card.image}" alt="${cardName(card)}" loading="lazy" />
       ${championState || exhausted ? `<span>${card.exhausted ? t("spent", locale()) : championState.trim() === "deployed" ? t("used", locale()) : t("zone", locale())}</span>` : ""}
     </button>
@@ -4088,7 +4944,7 @@ function battlefieldCard(field) {
   const bottomTarget = targetAttributes(field.instanceId, bottomPlayer.id);
   const showdownActive = game.phase === "showdown" && game.showdown?.battlefieldId === field.instanceId;
   return `
-    <article class="battlefield location-column ${showdownActive ? "showdown-location" : ""}" data-card-id="${field.instanceId}">
+    <article class="battlefield location-column ${showdownActive ? "showdown-location" : ""} ${chainTargetClass(field.instanceId)}" data-card-id="${field.instanceId}">
       <div class="field-lane top-lane ${topTarget.className}" data-scroll-key="field-${field.instanceId}-${topPlayer.id}" ${topTarget.attrs}>
         <span class="lane-label">${t("opponentUnits", locale())}</span>
         <div class="field-lane-track">
@@ -4098,7 +4954,7 @@ function battlefieldCard(field) {
       <div class="field-center location-card">
         <div class="field-image">${cardImage(field)}</div>
         <div class="battlefield-head">
-          <h2>${cardName(field)}</h2>
+          <h2>${battlefieldName(field)}</h2>
           <span>${controller}</span>
         </div>
       </div>
@@ -4157,8 +5013,9 @@ function battlefieldStatus(field) {
 function battlefieldLaneContents(player, field, units, hiddenItems, side) {
   const unitCards = units.map((unit) => boardCard(unit, field.instanceId)).join("");
   const hiddenCards = hiddenItems.map((item) => hiddenCardBack(item, field, side)).join("");
-  if (!unitCards && !hiddenCards) return `<span class="unit-placeholder">${t("dropUnitHere", locale())}</span>`;
-  return `${side === "top" ? hiddenCards : ""}${unitCards}${side === "bottom" ? hiddenCards : ""}`;
+  const deathGhosts = unitDeathGhosts(field.instanceId, player.id);
+  if (!unitCards && !hiddenCards && !deathGhosts) return `<span class="unit-placeholder">${t("dropUnitHere", locale())}</span>`;
+  return `${side === "top" ? hiddenCards : ""}${unitCards}${deathGhosts}${side === "bottom" ? hiddenCards : ""}`;
 }
 
 function hiddenCardBack(item, field) {
@@ -4168,9 +5025,10 @@ function hiddenCardBack(item, field) {
   const playable = hiddenPlayable(item, field);
   const sourceGlow = uiMotion.sourceIds.has(item.card.instanceId) ? " source-card-glow hidden-reveal-glow" : "";
   const targetGlow = uiMotion.targetIds.has(item.card.instanceId) ? " target-card-glow" : "";
+  const chainTarget = chainTargetClass(item.card.instanceId) ? " chain-effect-target" : "";
   if (controlledByViewer) {
     return `
-      <button class="hidden-card-back hidden-card-owned owner-${item.ownerId} ${playable ? "usable-card" : ""}${sourceGlow}${targetGlow}" data-action="select-card" data-card="${item.card.instanceId}" data-card-id="${item.card.instanceId}" title="${cardName(item.card)}">
+      <button class="hidden-card-back hidden-card-owned owner-${item.ownerId} ${playable ? "usable-card" : ""}${sourceGlow}${targetGlow}${chainTarget}" data-action="select-card" data-card="${item.card.instanceId}" data-card-id="${item.card.instanceId}" title="${cardName(item.card)}">
         ${cardImage(item.card)}
         <span class="hidden-label">${t("hiddenZone", locale())}</span>
       </button>
@@ -4178,7 +5036,7 @@ function hiddenCardBack(item, field) {
   }
   if (visibleByIntel && !controlledByViewer) {
     return `
-      <article class="${imageCardClass(item.card, `hidden-revealed owner-${item.ownerId}${sourceGlow}${targetGlow}`)}" data-card-id="${item.card.instanceId}" title="${cardName(item.card)}">
+      <article class="${imageCardClass(item.card, `hidden-revealed owner-${item.ownerId}${sourceGlow}${targetGlow}${chainTarget}`)}" data-card-id="${item.card.instanceId}" title="${cardName(item.card)}">
         ${cardImage(item.card)}
         <span class="status-line">${t("revealed", locale())}</span>
       </article>
@@ -4186,7 +5044,7 @@ function hiddenCardBack(item, field) {
   }
   const attrs = `title="${t("hiddenZone", locale())}" aria-label="${t("opponentHiddenCard", locale())}"`;
   return `
-    <button class="hidden-card-back owner-${item.ownerId} locked-hidden ${playable ? "usable-card" : ""}${sourceGlow}${targetGlow}" ${attrs}>
+    <button class="hidden-card-back owner-${item.ownerId} locked-hidden ${playable ? "usable-card" : ""}${sourceGlow}${targetGlow}${chainTarget}" ${attrs}>
       <span class="card-back-mark">H</span>
       <span class="hidden-label">${controlledByViewer ? t("hiddenZone", locale()) : t("setHidden", locale())}</span>
     </button>
@@ -4201,6 +5059,7 @@ function canViewPrivateInfo(viewerId, ownerId) {
 }
 
 function viewerPlayerId() {
+  if (replayMode) return replayBrowser.viewerPlayerId || "p1";
   if (isOnlineGame() && online.playerId) return online.playerId;
   if (aiMode && aiHumanPlayerId) return aiHumanPlayerId;
   return currentPlayer(game)?.id || game.players[0]?.id;
@@ -4216,6 +5075,7 @@ function opponentPlayer() {
 }
 
 function viewerCanAct() {
+  if (replayMode) return false;
   if (online.commandPending) return false;
   if (aiMode) return activePlayerId() === aiHumanPlayerId && !aiThinking;
   if (!isOnlineGame()) return true;
@@ -4348,6 +5208,49 @@ function cardStatusPanel(card, { compact = false } = {}) {
   `;
 }
 
+function unitDeathGhosts(location, playerId) {
+  return [...effectAnimations.deaths.values()]
+    .filter((unit) => unit.location === location && unit.playerId === playerId)
+    .map(unitDeathGhost)
+    .join("");
+}
+
+function unitDeathGhost(unit) {
+  const label = locale() === LOCALES.KO ? `${unit.name} 처치됨` : `${unit.name} defeated`;
+  const art = unit.image
+    ? `<img src="${escapeHtml(unit.image)}" alt="" />`
+    : `<span>${escapeHtml(unit.name)}</span>`;
+  return `
+    <article class="unit-token unit-death-ghost owner-${unit.ownerId}" aria-label="${escapeHtml(label)}">
+      <div class="death-ghost-copy">
+        <div class="unit-token-art">${art}</div>
+        <div class="unit-token-body"><strong>${escapeHtml(unit.name)}</strong><span>${locale() === LOCALES.KO ? "처치됨" : "Defeated"}</span></div>
+      </div>
+      <div class="death-fragments" aria-hidden="true">
+        ${["one", "two", "three", "four"].map((part) => `<span class="death-fragment fragment-${part}">${art}</span>`).join("")}
+      </div>
+    </article>
+  `;
+}
+
+function unitMightAnimation(card) {
+  return effectAnimations.mightChanges.get(card.instanceId) || null;
+}
+
+function unitMightAnimationClass(card) {
+  const animation = unitMightAnimation(card);
+  if (!animation) return "";
+  return animation.delta > 0 ? "effect-might-up" : "effect-might-down";
+}
+
+function unitMightCue(card) {
+  const animation = unitMightAnimation(card);
+  if (!animation) return "";
+  const sign = animation.delta > 0 ? "+" : "";
+  const label = locale() === LOCALES.KO ? "위력" : "Might";
+  return `<span class="unit-might-cue" aria-label="${escapeHtml(`${label} ${sign}${animation.delta}`)}"><b>${sign}${animation.delta}</b><small>${label}</small></span>`;
+}
+
 function boardCard(card, location) {
   const flashed = isFlashed(card.instanceId);
   const owner = game.players.find((player) => player.id === card.ownerId);
@@ -4369,9 +5272,9 @@ function boardCard(card, location) {
 function baseToken(card, location, owner, motion, attachments, flashed) {
   const domain = domainText(card.domains?.[0]) || (card.tags?.[0] ? keywordText([card.tags[0]]) : cardType(card));
   const state = card.stunned ? t("stunned", locale()) : card.exhausted ? t("exhausted", locale()) : t("readyState", locale());
-  const mainBadge = card.type === "unit" ? `${t("might", locale())} ${effectiveMight(card)}` : cardType(card);
+  const mainBadge = card.type === "unit" ? `${t("might", locale())} ${currentMight(game, card)}` : cardType(card);
   return `
-    <article class="unit-token base-token ${card.type}-token owner-${card.ownerId} controller-${card.controllerId} ${attachments.length ? "has-attachments" : ""} ${card.exhausted ? "exhausted" : "ready"} ${cardStatusClassNames(card)} ${flashed ? "effect-flash" : ""} ${motion}" data-card-id="${card.instanceId}" data-location="${location}">
+    <article class="unit-token base-token ${card.type}-token owner-${card.ownerId} controller-${card.controllerId} ${attachments.length ? "has-attachments" : ""} ${card.exhausted ? "exhausted" : "ready"} ${cardStatusClassNames(card)} ${unitMightAnimationClass(card)} ${chainTargetClass(card.instanceId)} ${flashed ? "effect-flash" : ""} ${motion}" data-card-id="${card.instanceId}" data-location="${location}">
       <div class="unit-token-art">
         ${card.image ? `<img src="${card.image}" alt="${cardName(card)}" loading="lazy" />` : `<span>${cardName(card)}</span>`}
       </div>
@@ -4387,6 +5290,7 @@ function baseToken(card, location, owner, motion, attachments, flashed) {
         </div>
       </div>
       <span class="owner-chip">${owner ? playerName(owner) : card.ownerId}</span>
+      ${card.type === "unit" ? unitMightCue(card) : ""}
       ${card.type === "unit" ? moveSelectButton(card) : ""}
       ${attachmentStrip(attachments)}
     </article>
@@ -4398,9 +5302,9 @@ function unitToken(card, location, owner, motion, attachments, flashed) {
   const state = card.exhausted ? t("exhausted", locale()) : card.stunned ? t("stunned", locale()) : t("readyState", locale());
   const zoneClass = location === "base" ? "base-token" : "field-token";
   const combatStats = showdownUnitStats(card, location);
-  const displayMight = combatStats?.might ?? effectiveMight(card);
+  const displayMight = combatStats?.might ?? currentMight(game, card);
   return `
-    <article class="unit-token ${zoneClass} owner-${card.ownerId} controller-${card.controllerId} ${attachments.length ? "has-attachments" : ""} ${card.exhausted ? "exhausted" : ""} ${cardStatusClassNames(card)} ${flashed ? "effect-flash" : ""} ${motion}" data-card-id="${card.instanceId}" data-location="${location}">
+    <article class="unit-token ${zoneClass} owner-${card.ownerId} controller-${card.controllerId} ${attachments.length ? "has-attachments" : ""} ${card.exhausted ? "exhausted" : ""} ${cardStatusClassNames(card)} ${unitMightAnimationClass(card)} ${chainTargetClass(card.instanceId)} ${flashed ? "effect-flash" : ""} ${motion}" data-card-id="${card.instanceId}" data-location="${location}">
       <div class="unit-token-art">
         ${card.image ? `<img src="${card.image}" alt="${cardName(card)}" loading="lazy" />` : `<span>${cardName(card)}</span>`}
       </div>
@@ -4416,6 +5320,7 @@ function unitToken(card, location, owner, motion, attachments, flashed) {
         </div>
       </div>
       <span class="owner-chip">${owner ? playerName(owner) : card.ownerId}</span>
+      ${unitMightCue(card)}
       ${moveSelectButton(card)}
       ${attachmentStrip(attachments)}
     </article>
@@ -4445,7 +5350,7 @@ function attachmentStrip(attachments) {
   return `
     <div class="attachment-strip" aria-label="${locale() === LOCALES.KO ? "부착된 도구" : "Attached gear"}">
       ${attachments.map((gear) => `
-        <button class="attached-gear ${game.selectedCardId === gear.instanceId ? "selected-attachment" : ""}" data-card-id="${gear.instanceId}" title="${cardName(gear)}">
+        <button class="attached-gear ${game.selectedCardId === gear.instanceId ? "selected-attachment" : ""} ${chainTargetClass(gear.instanceId)}" data-card-id="${gear.instanceId}" title="${cardName(gear)}">
           ${gear.image ? `<img src="${gear.image}" alt="${cardName(gear)}" loading="lazy" />` : `<span>${cardName(gear)}</span>`}
         </button>
       `).join("")}
@@ -4480,7 +5385,11 @@ function imageCard(card, className = "") {
 function imageCardClass(card, extra = "") {
   const sourceGlow = uiMotion.sourceIds.has(card?.instanceId) ? "source-card-glow" : "";
   const targetGlow = uiMotion.targetIds.has(card?.instanceId) ? "target-card-glow" : "";
-  return `image-card ${extra} ${sourceGlow} ${targetGlow} ${isUsableCard(card) ? "usable-card" : ""} ${game.selectedCardId === card.instanceId ? "selected-card" : ""}`.trim();
+  return `image-card ${extra} ${sourceGlow} ${targetGlow} ${chainTargetClass(card?.instanceId)} ${isUsableCard(card) ? "usable-card" : ""} ${game.selectedCardId === card.instanceId ? "selected-card" : ""}`.trim();
+}
+
+function chainTargetClass(cardId) {
+  return cardId && inspectedChainTargetIds.has(cardId) ? "chain-effect-target" : "";
 }
 
 function motionCardClass(card, zone) {
@@ -4501,7 +5410,7 @@ function cardImage(card) {
 
 function statusLine(card) {
   if (card.type !== "unit") return "";
-  const items = [`${t("might", locale())} ${effectiveMight(card)}`];
+  const items = [`${t("might", locale())} ${currentMight(game, card)}`];
   if (card.exhausted) items.push(t("exhausted", locale()));
   if (card.damage) items.push(`${card.damage} ${t("damageShort", locale())}`);
   if (card.stunned) items.push(t("stunned", locale()));
@@ -4510,15 +5419,14 @@ function statusLine(card) {
   return `<span class="status-line">${items.join(" / ")}</span>`;
 }
 
-function moveButtons(card, location) {
-  const buttons = [];
-  if (location !== "base") {
-    buttons.push(`<button data-action="move" data-unit="${card.instanceId}" data-destination="base">${t("base", locale())}</button>`);
-  }
+function moveButtons(card) {
+  const destinationIds = new Set(legalMoveDestinationIds(uiLegalActions, card.instanceId));
+  const buttons = destinationIds.has("base")
+    ? [`<button data-action="move" data-unit="${card.instanceId}" data-destination="base">${t("base", locale())}</button>`]
+    : [];
   for (const [index, field] of visibleBattlefields().entries()) {
-    if (location === field.instanceId) continue;
-    if (location !== "base" && !hasKeyword(card, "Ganking")) continue;
-    buttons.push(`<button data-action="move" data-unit="${card.instanceId}" data-destination="${field.instanceId}" title="${cardName(field)}">${t("moveToField", locale(), { n: index + 1 })}</button>`);
+    if (!destinationIds.has(field.instanceId)) continue;
+    buttons.push(`<button data-action="move" data-unit="${card.instanceId}" data-destination="${field.instanceId}" title="${battlefieldName(field)}">${t("moveToField", locale(), { n: index + 1 })}</button>`);
   }
   return buttons.join("");
 }
@@ -4600,7 +5508,7 @@ function showdownBarSummary() {
   const chainCount = game.showdown.chain.length;
   return {
     label: t("showdown", locale()),
-    title: `${t("showdown", locale())}: ${field ? cardName(field) : t("battlefield", locale())}`,
+    title: `${t("showdown", locale())}: ${field ? battlefieldName(field) : t("battlefield", locale())}`,
     detail: chainCount ? `${chainCount} ${t("pending", locale())}` : t("passNoAction", locale())
   };
 }
@@ -4638,7 +5546,7 @@ function handActions(card, player) {
     const label = field
       ? (inShowdown
         ? (hasKeyword(card, "Ambush") ? keywordText(["Ambush"]) : (card.tags?.includes("Reaction") ? t("chainReaction", locale()) : t("chainAction", locale())))
-        : t("playToBattlefield", locale(), { name: cardName(field) }))
+        : t("playToBattlefield", locale(), { name: battlefieldName(field) }))
       : inShowdown
         ? (card.tags?.includes("Reaction") ? t("chainReaction", locale()) : t("chainAction", locale()))
         : inActionChain
@@ -4648,7 +5556,7 @@ function handActions(card, player) {
   }
   for (const command of legalCardActions.filter((action) => action.kind === "hideCard")) {
     const field = game.battlefields.find((candidate) => candidate.instanceId === command.destination);
-    if (field) actions.push(`<button data-action="hide-card" data-card="${card.instanceId}" data-destination="${field.instanceId}">${t("hideAtBattlefield", locale(), { name: cardName(field) })}</button>`);
+    if (field) actions.push(`<button data-action="hide-card" data-card="${card.instanceId}" data-destination="${field.instanceId}">${t("hideAtBattlefield", locale(), { name: battlefieldName(field) })}</button>`);
   }
   return actions;
 }
@@ -4658,7 +5566,7 @@ function championActions(player) {
   return uiLegalActions.filter((action) => action.kind === "beginPlayChampion").map(({ destination }) => {
     if (destination === "base") return `<button data-action="begin-champion" data-destination="base">${t("playChampionToBase", locale())}</button>`;
     const field = game.battlefields.find((candidate) => candidate.instanceId === destination);
-    return `<button data-action="begin-champion" data-destination="${destination}">${t("playChampionToField", locale(), { name: cardName(field) })}</button>`;
+    return `<button data-action="begin-champion" data-destination="${destination}">${t("playChampionToField", locale(), { name: battlefieldName(field) })}</button>`;
   });
 }
 
@@ -4928,7 +5836,7 @@ function inspector(card) {
       <div class="inspector-text">
         <h2>${cardName(card)}</h2>
         <span>${cardTags(card).join(" / ")} / ${cost}</span>
-        ${["unit", "gear"].includes(card.type) ? `<strong>${t("might", locale())} ${card.type === "unit" ? card.might + (card.buffs || 0) + (card.mightModifier || 0) : card.might || 0}</strong>` : ""}
+        ${["unit", "gear"].includes(card.type) ? `<strong>${t("might", locale())} ${card.type === "unit" ? inspectorUnitMight(card) : card.might || 0}</strong>` : ""}
         <p>${shortCardText(cardText(card))}</p>
         ${(card.keywords || []).length ? `<small>${keywordText(card.keywords)}</small>` : ""}
         ${cardStatusPanel(card, { compact: true })}
@@ -4942,6 +5850,12 @@ function inspector(card) {
       </div>
     </aside>
   `;
+}
+
+function inspectorUnitMight(card) {
+  const onBoard = game.players.some((player) => player.base.some((unit) => unit.instanceId === card.instanceId))
+    || game.battlefields.some((field) => field.units.some((unit) => unit.instanceId === card.instanceId));
+  return onBoard ? currentMight(game, card) : effectiveMight(card);
 }
 
 function attachedGearPanel(attachments) {
@@ -5016,7 +5930,7 @@ app.addEventListener("click", (event) => {
 }, true);
 
 function handlePendingChoiceClick(event) {
-  if (appView !== "game" || !game.pendingChoice) return false;
+  if (replayMode || appView !== "game" || !game.pendingChoice) return false;
   const button = event.target.closest("button[data-action='choose-effect'], button[data-action='decline-effect'], button[data-action='assign-alpha-strike']");
   if (!button || !app.contains(button)) return false;
   event.preventDefault();
@@ -5024,6 +5938,10 @@ function handlePendingChoiceClick(event) {
   event.stopImmediatePropagation();
 
   const { action, choice } = button.dataset;
+  if (!tutorialAllowsUiAction(action, { ...button.dataset })) {
+    render();
+    return true;
+  }
   if (action === "choose-effect") dispatchGameCommand({ kind: "chooseEffectOption", optionId: choice }, () => chooseEffectOption(game, choice));
   if (action === "assign-alpha-strike") {
     const input = app.querySelector(`input[data-alpha-target="${button.dataset.target}"]`);
@@ -5047,6 +5965,22 @@ app.addEventListener("click", (event) => {
 
     if (isTextEditingTarget(event.target)) return;
 
+    if (replayMode) {
+      handleReplayGameClick(event);
+      render();
+      return;
+    }
+
+    const tutorialControl = event.target.closest("button[data-action^='tutorial-']");
+    if (tutorialControl) {
+      const tutorialAction = tutorialControl.dataset.action;
+      if (tutorialAction === "tutorial-next") game.tutorial.introDismissed = true;
+      if (tutorialAction === "tutorial-restart") startTutorial(game.tutorial.id);
+      if (tutorialAction === "tutorial-exit") exitTutorial();
+      render();
+      return;
+    }
+
     const payRunes = app.querySelector(".pay-runes");
     if (payRunes) paymentRunesScrollLeft = payRunes.scrollLeft;
 
@@ -5055,6 +5989,10 @@ app.addEventListener("click", (event) => {
 
     if (targetZone) {
       const { zoneAction, card, unit, destination } = targetZone.dataset;
+      if (!tutorialAllowsUiAction(zoneAction, { card, unit, destination })) {
+        render();
+        return;
+      }
       if (zoneAction === "begin-play") {
         handOpen = false;
         dispatchGameCommand({ kind: "beginPlayCard", cardId: card, destination }, () => beginPlayCard(game, card, destination));
@@ -5077,6 +6015,10 @@ app.addEventListener("click", (event) => {
     }
 
     const { action, card, unit, destination, player, battlefield, rune, energy, mode, choice, ability } = button.dataset;
+    if (!tutorialAllowsUiAction(action, { ...button.dataset })) {
+      render();
+      return;
+    }
     if (action === "sideboard-select-main") sideboardSelectedMain = button.dataset.cardNumber;
     if (action === "sideboard-swap-in") {
       const match = activeBetweenGamesMatch();
@@ -5100,6 +6042,13 @@ app.addEventListener("click", (event) => {
     if (action === "dismiss-feedback") clearRealtimeFeedback();
     if (action === "toggle-inspector") inspectorOpen = !inspectorOpen;
     if (action === "toggle-chain-zone") chainZoneCollapsed = !chainZoneCollapsed;
+    if (action === "inspect-chain-effect") {
+      inspectedChainItemId = inspectedChainItemId === button.dataset.chainItemId ? null : button.dataset.chainItemId;
+      fullCardOpen = false;
+      fullCardPreviewCard = null;
+      syncInspectedChainTargets();
+    }
+    if (action === "focus-chain-target") setUiSelectedCard(button.dataset.cardId);
     if (action === "confirm-first-player") dispatchGameCommand({ kind: "confirmFirstPlayer" }, () => confirmFirstPlayer(game));
     if (action === "roll-first-player") dispatchGameCommand({ kind: "rollFirstPlayer" }, () => rollFirstPlayer(game, activePlayerId()));
     if (action === "choose-first-player") dispatchGameCommand({ kind: "chooseFirstPlayer", playerId: player }, () => chooseFirstPlayer(game, activePlayerId(), player));
@@ -5229,6 +6178,12 @@ app.addEventListener("input", (event) => {
     const target = event.target;
     if (!(target instanceof HTMLInputElement)) return;
     const action = target.dataset.action;
+    if (action === "replay-seek" && replayMode) {
+      pauseReplayPlayback();
+      applyReplayFrame(Number(target.value));
+      render();
+      return;
+    }
     if (action === "settings-sideboarding") {
       settings.sideboardingEnabled = target.checked;
       saveSettings();
@@ -5263,9 +6218,19 @@ app.addEventListener("change", (event) => {
   try {
     const target = event.target;
     if (!(target instanceof HTMLSelectElement)) return;
+    if (target.dataset.action === "replay-speed") {
+      replayBrowser.speed = Math.max(0.25, Math.min(4, Number(target.value) || 1));
+      restartReplayTimer();
+      return;
+    }
     if (target.dataset.action === "settings-language") {
       settings.locale = normalizeLocale(target.value);
       saveSettings();
+      render();
+      return;
+    }
+    if (target.dataset.action === "menu-ai-generation") {
+      selectAiGeneration(target.value);
       render();
       return;
     }
@@ -5322,7 +6287,7 @@ function renderDeckSearchOnly() {
 function handleShellClick(event) {
   const button = event.target.closest("button");
   if (!button) return;
-  const { action, deck, cardNumber, domain, slot, room, tab } = button.dataset;
+  const { action, deck, cardNumber, domain, slot, room, tab, tutorial } = button.dataset;
   if (action === "menu-home") appView = "menu";
   if (action === "menu-decks") {
     appView = "decks";
@@ -5332,7 +6297,14 @@ function handleShellClick(event) {
     connectDefaultMultiplayer();
   }
   if (action === "menu-start") startGameFromMenu();
+  if (action === "menu-tutorial") appView = "tutorials";
+  if (action === "tutorial-menu-back") appView = "menu";
+  if (action === "tutorial-select") startTutorial(tutorial);
   if (action === "menu-ai") void startAiGameFromMenu();
+  if (action === "menu-replays") void openReplayBrowser();
+  if (action === "replay-list-back") leaveReplayBrowser();
+  if (action === "replay-list-refresh") void loadReplayList();
+  if (action === "replay-open") void openAiSpectatorReplay(button.dataset.replayId);
   if (action === "coach-back") appView = "game";
   if (action === "coach-deep-review") runDeepAiReview();
   if (action === "online-refresh") refreshRooms();
@@ -5491,6 +6463,7 @@ function coachDecisionCard(item) {
 
 enableLocalPresentationPreview();
 loadAiCheckpoint();
+loadAiGenerationCatalog();
 
 if (online.mode === "online" && online.roomId && online.playerToken) {
   connectOnlineEvents();
@@ -5514,12 +6487,12 @@ function enableLocalPresentationPreview() {
   game.phase = "action";
   game.turnNumber = 6;
   game.turnSequence = 11;
-  advancePresentation(presentationState, snapshotPresentationGame(game, effectiveMight), first.id);
+  advancePresentation(presentationState, snapshotPresentationGame(game, (card) => currentMight(game, card), first.id), first.id);
   if (preview === "impact") {
     first.score = 7;
     game.turnNumber = 7;
     game.turnSequence = 12;
-    const update = advancePresentation(presentationState, snapshotPresentationGame(game, effectiveMight), first.id);
+    const update = advancePresentation(presentationState, snapshotPresentationGame(game, (card) => currentMight(game, card), first.id), first.id);
     activeImpact = update.impact;
     staticImpactPreview = true;
     appView = "game";
@@ -5531,7 +6504,7 @@ function enableLocalPresentationPreview() {
   game.turnSequence = 12;
   game.winnerId = first.id;
   game.log.unshift(`${first.name} wins at 8 points.`);
-  advancePresentation(presentationState, snapshotPresentationGame(game, effectiveMight), first.id);
+  advancePresentation(presentationState, snapshotPresentationGame(game, (card) => currentMight(game, card), first.id), first.id);
   appView = "game";
   resultRevealReady = true;
   resultDismissed = false;
@@ -5548,26 +6521,69 @@ async function loadAiCheckpoint() {
   }
 }
 
+async function loadAiGenerationCatalog() {
+  aiGenerationCatalogState = "loading";
+  try {
+    const result = await fetchAiGenerations();
+    const generations = (result.generations || [])
+      .filter((entry) => Number.isInteger(Number(entry.generation)) && Number(entry.generation) >= 0)
+      .map((entry) => ({
+        ...entry,
+        generation: Number(entry.generation),
+        source: "server",
+        trainingDeckIds: Array.isArray(entry.trainingDeckIds) && entry.trainingDeckIds.length
+          ? [...entry.trainingDeckIds]
+          : [...(aiGenerationDescriptor(entry.generation)?.trainingDeckIds || AI_GENERATIONS[0].trainingDeckIds)]
+      }))
+      .sort((left, right) => left.generation - right.generation);
+    if (generations.length) availableAiGenerations = generations;
+    if (!availableAiGenerations.some((entry) => entry.generation === Number(settings.aiGeneration))) {
+      settings.aiGeneration = availableAiGenerations.find((entry) => entry.activeLearner)?.generation
+        ?? availableAiGenerations.at(-1)?.generation
+        ?? normalizeAiGeneration();
+      saveSettings();
+    }
+    aiGenerationCatalogState = "ready";
+    aiGenerationCatalogError = "";
+  } catch (error) {
+    aiGenerationCatalogState = "error";
+    aiGenerationCatalogError = locale() === LOCALES.KO
+      ? "학습 작업공간의 세대 목록을 불러오지 못해 번들 모델만 표시합니다."
+      : "Could not load the training workspace generations; only bundled models are shown.";
+  } finally {
+    if (appView === "menu") render();
+  }
+}
+
 async function ensureNeuralAiLoaded() {
-  if (neuralAiModel && neuralAiSession) return true;
+  const generation = selectedAiGenerationDescriptor();
+  if (neuralAiModel && neuralAiSession && neuralAiLoadedGeneration === generation.generation) return true;
   if (neuralAiLoadPromise) return neuralAiLoadPromise;
+  clearNeuralAiModel();
   neuralAiLoadState = "loading";
   neuralAiLoadError = "";
   render();
   neuralAiLoadPromise = (async () => {
     try {
       await nextPaint();
-      const response = await fetch(new URL("./ai/checkpoints/neural-champion.json", import.meta.url), { cache: "no-cache" });
-      if (!response.ok) throw new Error(`모델 파일을 읽을 수 없습니다 (HTTP ${response.status}).`);
-      const checkpoint = await response.json();
-      const { createNeuralSession, deserializeNeuralModel } = await import("./ai/neural/model.mjs");
+      const checkpoint = generation.source === "server"
+        ? await fetchAiGenerationCheckpoint(generation.generation)
+        : await fetch(new URL(generation.checkpoint, import.meta.url), { cache: "no-cache" }).then(async (response) => {
+          if (!response.ok) throw new Error(`모델 파일을 읽을 수 없습니다 (HTTP ${response.status}).`);
+          return response.json();
+        });
+      if (Number(checkpoint.generation) !== generation.generation) {
+        throw new Error(`선택한 ${generation.generation}세대와 모델 파일의 ${checkpoint.generation}세대가 일치하지 않습니다.`);
+      }
+      const { createNeuralSession, deserializeNeuralModel, estimateNeuralValue } = await import("./ai/neural/model.mjs");
       neuralAiModel = deserializeNeuralModel(checkpoint);
       neuralAiSession = createNeuralSession(neuralAiModel);
+      neuralValueEstimator = estimateNeuralValue;
+      neuralAiLoadedGeneration = generation.generation;
       neuralAiLoadState = "ready";
       return true;
     } catch (error) {
-      neuralAiModel = null;
-      neuralAiSession = null;
+      clearNeuralAiModel();
       neuralAiLoadState = "error";
       neuralAiLoadError = error instanceof Error ? error.message : String(error);
       reportUiException(error, "trained AI model load");
@@ -5578,6 +6594,23 @@ async function ensureNeuralAiLoaded() {
     }
   })();
   return neuralAiLoadPromise;
+}
+
+function clearNeuralAiModel() {
+  neuralAiModel = null;
+  neuralAiSession = null;
+  neuralValueEstimator = null;
+  neuralAiLoadedGeneration = null;
+}
+
+function selectAiGeneration(value) {
+  const generation = availableAiGenerations.find((entry) => entry.generation === Number(value));
+  if (!generation || generation.generation === settings.aiGeneration) return;
+  settings.aiGeneration = generation.generation;
+  saveSettings();
+  clearNeuralAiModel();
+  neuralAiLoadState = "idle";
+  neuralAiLoadError = "";
 }
 
 function nextPaint() {
@@ -5594,9 +6627,10 @@ async function runDeckAiRecommendation() {
 
 function neuralAiStatusText() {
   const korean = locale() === LOCALES.KO;
-  if (neuralAiLoadState === "loading") return korean ? "저장된 완성 모델을 불러오는 중입니다." : "Loading the saved trained model.";
-  if (neuralAiLoadState === "error") return korean ? `완성 모델을 사용할 수 없어 기본 AI로 실행합니다: ${localizedDynamicText(neuralAiLoadError, { fallback: "모델 파일을 불러오지 못했습니다." })} · 다음 AI 기능 실행 시 다시 불러옵니다.` : `Using the baseline AI because the trained model is unavailable: ${neuralAiLoadError} · The next AI feature will retry.`;
-  if (neuralAiLoadState === "idle") return korean ? "완성 모델은 AI 기능을 처음 사용할 때만 로드됩니다." : "The trained model loads only when an AI feature is first used.";
+  const generation = selectedAiGenerationDescriptor().generation;
+  if (neuralAiLoadState === "loading") return korean ? `${generation}세대 AI 모델을 불러오는 중입니다.` : `Loading generation ${generation} AI.`;
+  if (neuralAiLoadState === "error") return korean ? `${generation}세대 모델을 불러오지 못해 AI 대전을 시작할 수 없습니다: ${localizedDynamicText(neuralAiLoadError, { fallback: "모델 파일을 불러오지 못했습니다." })}` : `Generation ${generation} could not be loaded, so the AI match cannot start: ${neuralAiLoadError}`;
+  if (neuralAiLoadState === "idle") return korean ? `선택한 ${generation}세대 모델은 AI 대전을 시작할 때 로드됩니다.` : `The selected generation ${generation} model loads when an AI match starts.`;
   return korean
     ? `AI 세대 ${activeAiGeneration()} · 자가대전 ${activeAiGames()}경기 학습 · 순환형 학습 모델 준비됨`
     : `AI generation ${activeAiGeneration()} · ${activeAiGames()} self-play games · recurrent PPO ready`;
@@ -5607,11 +6641,11 @@ function activeCoachModel() {
 }
 
 function activeAiGeneration() {
-  return neuralAiModel?.generation || aiModel.generation || 0;
+  return neuralAiModel?.generation ?? aiModel.generation ?? 0;
 }
 
 function activeAiGames() {
-  return neuralAiModel?.gamesTrained || aiModel.gamesTrained || 0;
+  return neuralAiModel?.gamesTrained ?? aiModel.gamesTrained ?? 0;
 }
 
 window.addEventListener("error", (event) => {

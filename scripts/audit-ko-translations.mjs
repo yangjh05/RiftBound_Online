@@ -8,7 +8,7 @@ const rows = Object.values(cards).map((card) => ({
 
 const domainNames = {
   Body: "신체",
-  Calm: "인내",
+  Calm: "평정",
   Chaos: "혼돈",
   Fury: "격노",
   Mind: "정신",

@@ -2,7 +2,23 @@ import { cards } from "../src/cards.mjs";
 import { translateCardText } from "../src/i18n.mjs";
 import { CARD_KO_TRANSLATIONS } from "../src/cardKoTranslations.mjs";
 
-const forbiddenTerms = ["쇼다운", "매복", "탭:", "메인 덱", "버림 더미", "공격력", "체력치", "파워", "장비", "유언", "예지", "회수"];
+const forbiddenTerms = [
+  "쇼다운",
+  "매복",
+  "탭:",
+  "메인 덱",
+  "버림 더미",
+  "공격력",
+  "체력치",
+  "파워",
+  "장비",
+  "유언",
+  "예지",
+  "회수",
+  "인내",
+  "비어 있는 전장",
+  "빈 전장"
+];
 const requiredTerms = [
   { english: /\bPower\b/iu, korean: /힘/u, name: "Power/힘" },
   { english: /\bMight\b/iu, korean: /위력/u, name: "Might/위력" },
