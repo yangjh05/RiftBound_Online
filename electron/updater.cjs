@@ -11,6 +11,9 @@ const UPDATE_STATE_VERSION = 1;
 const DEFER_DURATION_MS = 24 * 60 * 60 * 1000;
 const PENDING_GRACE_MS = 5 * 60 * 1000;
 const HELPER_READY_TIMEOUT_MS = 30000;
+const UPDATE_CHECK_ATTEMPTS = 3;
+const UPDATE_CHECK_RETRY_DELAY_MS = 750;
+const UPDATE_CHECK_TIMEOUT_MS = 8000;
 
 async function startAutoUpdate({ app, dialog, win, logger = console, onStatus = () => {} }) {
   onStatus({ phase: "initializing", message: "업데이트 시스템을 준비하고 있습니다…" });
@@ -41,7 +44,15 @@ async function startAutoUpdate({ app, dialog, win, logger = console, onStatus = 
     }
 
     onStatus({ phase: "checking", message: "새로운 버전을 확인하고 있습니다…", detail: `현재 버전 ${current.version || "알 수 없음"}` });
-    const latest = await fetchLatestManifest(`${baseUrl}/api/update/latest`, publicKey);
+    const latest = await fetchLatestManifest(`${baseUrl}/api/update/latest`, publicKey, {
+      onRetry: ({ attempt, attempts }) => {
+        onStatus({
+          phase: "checking",
+          message: "업데이트 서버에 다시 연결하고 있습니다…",
+          detail: `${attempts}회 중 ${attempt + 1}회 시도`
+        });
+      }
+    });
     if (!isNewerBuild(current, latest)) {
       onStatus({ phase: "current", message: "최신 버전입니다.", detail: `버전 ${current.version}`, progress: 1 });
       return { status: "current", current, latest };
@@ -145,6 +156,15 @@ async function startAutoUpdate({ app, dialog, win, logger = console, onStatus = 
   } catch (error) {
     if (progressVisible && win && !win.isDestroyed?.()) win.setProgressBar(-1);
     logger.warn?.(`[Updater] ${error?.message || error}`);
+    if (isUpdateServiceUnavailableError(error)) {
+      onStatus({
+        phase: "unavailable",
+        message: "업데이트 서버에 연결할 수 없습니다.",
+        detail: "현재 버전으로 게임을 시작합니다.",
+        progress: 1
+      });
+      return { status: "unavailable", error };
+    }
     onStatus({ phase: "error", message: "업데이트 확인 중 문제가 발생했습니다.", detail: error?.message || String(error) });
     return { status: "error", error };
   }
@@ -155,6 +175,10 @@ function formatBytes(value) {
   if (!Number.isFinite(bytes) || bytes <= 0) return "크기 확인 중";
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function recoverPendingUpdate({ current, state, statePath, dialog, win, logger = console, now = Date.now() }) {
@@ -233,12 +257,34 @@ async function readBuildInfo(filePath) {
   return JSON.parse(await fsp.readFile(filePath, "utf8"));
 }
 
-async function fetchLatestManifest(url, publicKey) {
+async function fetchLatestManifest(url, publicKey, {
+  attempts = UPDATE_CHECK_ATTEMPTS,
+  timeoutMs = UPDATE_CHECK_TIMEOUT_MS,
+  retryDelayMs = UPDATE_CHECK_RETRY_DELAY_MS,
+  fetchImpl = fetch,
+  onRetry = () => {}
+} = {}) {
+  const totalAttempts = Math.max(1, Number.isSafeInteger(attempts) ? attempts : UPDATE_CHECK_ATTEMPTS);
+  let lastError = null;
+  for (let attempt = 1; attempt <= totalAttempts; attempt += 1) {
+    try {
+      return await fetchLatestManifestOnce(url, publicKey, { timeoutMs, fetchImpl });
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableUpdateError(error) || attempt >= totalAttempts) throw error;
+      onRetry({ attempt, attempts: totalAttempts, error });
+      if (retryDelayMs > 0) await delay(retryDelayMs * attempt);
+    }
+  }
+  throw lastError;
+}
+
+async function fetchLatestManifestOnce(url, publicKey, { timeoutMs, fetchImpl }) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 8000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { headers: UPDATE_HEADERS, signal: controller.signal, cache: "no-store" });
-    if (!response.ok) throw new Error(`Update check failed with HTTP ${response.status}.`);
+    const response = await fetchImpl(url, { headers: UPDATE_HEADERS, signal: controller.signal, cache: "no-store" });
+    if (!response.ok) throw updateHttpError(response.status);
     const manifest = await response.json();
     validateRemoteManifest(manifest);
     verifyManifestSignature(manifest, publicKey);
@@ -246,6 +292,32 @@ async function fetchLatestManifest(url, publicKey) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+function updateHttpError(status) {
+  const error = new Error(`Update check failed with HTTP ${status}.`);
+  error.code = `UPDATE_HTTP_${status}`;
+  error.retryable = status === 408 || status === 425 || status === 429 || status >= 500;
+  error.updateServiceUnavailable = status === 404 || error.retryable;
+  return error;
+}
+
+function isRetryableUpdateError(error) {
+  return Boolean(
+    error?.retryable
+    || error?.name === "AbortError"
+    || error instanceof TypeError
+    || error?.cause?.code
+  );
+}
+
+function isUpdateServiceUnavailableError(error) {
+  return Boolean(
+    error?.updateServiceUnavailable
+    || error?.name === "AbortError"
+    || error instanceof TypeError
+    || error?.cause?.code
+  );
 }
 
 function isNewerBuild(current, latest) {
@@ -522,6 +594,8 @@ module.exports = {
   fetchLatestManifest,
   isDeferredBuild,
   isNewerBuild,
+  isRetryableUpdateError,
+  isUpdateServiceUnavailableError,
   launchUpdateHelper,
   manifestSignaturePayload,
   powershellBootstrap,

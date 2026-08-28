@@ -74,8 +74,8 @@ async function runStartup() {
     const choice = await dialog.showMessageBox(updateWindow, {
       type: "warning",
       title: "업데이트 확인 실패",
-      message: "업데이트 서버에 연결하지 못했습니다.",
-      detail: `${friendlyUpdateError(result.error)}\n\n인터넷 연결을 확인한 뒤 다시 시도하거나 현재 버전으로 게임을 시작할 수 있습니다.`,
+      message: "업데이트 정보를 확인하지 못했습니다.",
+      detail: `${friendlyUpdateError(result.error)}\n\n업데이트 정보 또는 서명을 확인한 뒤 다시 시도하거나 현재 버전으로 게임을 시작할 수 있습니다.`,
       buttons: ["다시 시도", "현재 버전으로 시작"],
       defaultId: 0,
       cancelId: 1,

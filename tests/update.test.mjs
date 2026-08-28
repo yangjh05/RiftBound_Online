@@ -18,6 +18,8 @@ const {
   fetchLatestManifest,
   isDeferredBuild,
   isNewerBuild,
+  isRetryableUpdateError,
+  isUpdateServiceUnavailableError,
   launchUpdateHelper,
   manifestSignaturePayload,
   powershellBootstrap,
@@ -97,6 +99,42 @@ test("desktop updater downloads a server artifact and reports verified progress"
     await new Promise((resolve) => server.close(resolve));
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("desktop updater retries transient update-server failures", async () => {
+  const manifest = manifestFor(Buffer.from("retry payload"));
+  let requests = 0;
+  const server = http.createServer((_req, res) => {
+    requests += 1;
+    if (requests < 3) {
+      res.writeHead(503, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: false }));
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(manifest));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    const remote = await fetchLatestManifest(`http://127.0.0.1:${address.port}/api/update/latest`, publicKeyPem, {
+      retryDelayMs: 0
+    });
+    assert.equal(remote.buildId, manifest.buildId);
+    assert.equal(requests, 3);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("desktop updater distinguishes offline failures from manifest integrity failures", () => {
+  const offline = new TypeError("fetch failed", { cause: new Error("connection refused") });
+  assert.equal(isRetryableUpdateError(offline), true);
+  assert.equal(isUpdateServiceUnavailableError(offline), true);
+
+  const integrity = new Error("The update manifest signature verification failed.");
+  assert.equal(isRetryableUpdateError(integrity), false);
+  assert.equal(isUpdateServiceUnavailableError(integrity), false);
 });
 
 test("update server returns the atomic latest manifest and matching executable", async () => {
