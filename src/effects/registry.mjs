@@ -62,7 +62,8 @@ export const TARGET_PROVIDERS = Object.freeze({
   MOONFALL: "moonfall",
   BATTLEFIELDS: "battlefields",
   OPPONENTS: "opponents",
-  RUNES: "runes"
+  RUNES: "runes",
+  EXHAUSTED_NON_SPELL_OBJECTS: "exhaustedNonSpellObjects"
 });
 
 export const SPELL_TARGET_DECLARATIONS = Object.freeze({
@@ -254,7 +255,12 @@ export const SPELL_TARGET_DECLARATIONS = Object.freeze({
   },
   zenithBlade: {
     steps: [
-      { choiceEffect: "zenithBladeEnemy", provider: TARGET_PROVIDERS.BATTLEFIELD_UNITS, defaultScope: "enemyBattlefield" },
+      {
+        choiceEffect: "zenithBladeEnemy",
+        provider: TARGET_PROVIDERS.BATTLEFIELD_UNITS,
+        defaultScope: "enemyBattlefield",
+        captureTargetBattlefieldChoiceEffect: "zenithBladeDestination"
+      },
       { choiceEffect: "zenithBladeFriendly", provider: TARGET_PROVIDERS.ALL_UNITS, defaultScope: "friendly", optional: true }
     ]
   },
@@ -379,7 +385,7 @@ const effectDefinitions = [
   effect("death", "dealDamageAllHere", { sourceTypes: ["unit"], targetless: true }),
   effect("death", "playUnitToken", { sourceTypes: ["unit"], targetless: true }),
   effect("death", "gainXp", { sourceTypes: ["unit"], targetless: true }),
-  effect("death", "revealOpponentHand", { sourceTypes: ["unit"], targetless: true }),
+  effect("death", "revealOpponentHand", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.OPPONENTS }),
   effect("death", "recycleSelfReadyRunes", { sourceTypes: ["unit", "gear"], targetless: true }),
   effect("death", "drawOnFirstOtherFriendlyUnitDeath", { sourceTypes: ["unit"], targetless: true }),
   effect("death", "playRecruitOnOtherFriendlyNonRecruitDeath", { sourceTypes: ["unit"], targetless: true }),
@@ -414,7 +420,7 @@ const effectDefinitions = [
   effect("onMove", "buffMovedUnit", { sourceTypes: ["battlefield"], targetless: true, flow: "sync", continuation: "inline" }),
   effect("onMove", "drawWhenOpponentMovesToOtherBattlefield", { sourceTypes: ["unit"], targetless: true, flow: "sync", continuation: "inline" }),
   effect("onMove", "scoreOnNthMoveEachTurn", { sourceTypes: ["unit"], targetless: true, flow: "sync", continuation: "inline" }),
-  effect("onMove", "readyAnotherExhaustedFirstTimeEachTurn", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.ALL_UNITS, flow: "choice", continuation: "afterMove" }),
+  effect("onMove", "readyAnotherExhaustedFirstTimeEachTurn", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.EXHAUSTED_NON_SPELL_OBJECTS, flow: "choice", continuation: "afterMove" }),
   effect("onMove", "moveWithFriendlyFromSameBattlefield", { sourceTypes: ["unit"], targetless: true, flow: "choice", continuation: "afterMove", optionalTrigger: true }),
   effect("onPlay", "draw", { sourceTypes: ["unit", "gear"], targetless: true }),
   effect("onPlay", "drawPerFriendlyMightyUnit", { sourceTypes: ["unit"], targetless: true }),
@@ -436,8 +442,8 @@ const effectDefinitions = [
   effect("onPlay", "readySelf", { sourceTypes: ["unit"], targetless: true }),
   effect("onPlay", "readyUnit", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.ALL_UNITS }),
   effect("onPlay", "returnBattlefieldUnitToHand", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.BATTLEFIELD_UNITS }),
-  effect("onPlay", "returnTrashUnitToHand", { sourceTypes: ["unit"], targetless: true }),
-  effect("onPlay", "discardOpponentHand", { sourceTypes: ["unit"], targetless: true }),
+  effect("onPlay", "returnTrashUnitToHand", { sourceTypes: ["unit"], targetProvider: "friendlyTrashUnits" }),
+  effect("onPlay", "discardOpponentHand", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.OPPONENTS }),
   effect("onPlay", "returnUnitToBase", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.BATTLEFIELD_UNITS }),
   effect("onPlay", "stunUnit", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.TARGETABLE_UNITS }),
   effect("onPlay", "stunOrKillEnemy", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.TARGETABLE_UNITS }),
@@ -603,7 +609,7 @@ const effectDefinitions = [
   effect("conquer", "payEnergyReturnSelfToHand", { sourceTypes: ["unit"], targetless: true, flow: "choice", continuation: "triggerQueue", optionalTrigger: true, triggerCost: { kind: "energy" } }),
   effect("activated", "saveFriendlyUnitThisTurn", { sourceTypes: ["gear"], targetProvider: TARGET_PROVIDERS.ALL_UNITS }),
   effect("activated", "udyrChooseMode", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.ALL_UNITS }),
-  effect("activated", "forgeAttachEquipment", { sourceTypes: ["legend"], targetless: true, flow: "choice", continuation: "effectSequence" })
+  effect("activated", "forgeAttachEquipment", { sourceTypes: ["legend"], targetProvider: TARGET_PROVIDERS.ALL_GEAR, flow: "choice", continuation: "effectSequence" })
 ];
 
 export const EFFECT_DEFINITIONS = Object.freeze(Object.fromEntries(

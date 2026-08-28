@@ -1,6 +1,5 @@
 import { actionKey, enumerateLegalActions } from "./actions.mjs";
-import { ACTION_DIM, CARD_BINS, MAX_ACTIONS, STATE_DIM, encodeActionSet, encodeOpponentDeckTarget, encodeState } from "./neural/encoding.mjs";
-import { NEURAL_HIDDEN_SIZE } from "./neural/model.mjs";
+import { ACTION_DIM, CARD_BINS, MAX_ACTIONS, NEURAL_HIDDEN_SIZE, STATE_DIM, encodeActionSet, encodeOpponentDeckTarget, encodeState } from "./neural/encoding.mjs";
 
 export const HUMAN_SAMPLE_VERSION = 2;
 

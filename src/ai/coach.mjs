@@ -162,7 +162,7 @@ function analyzeDeckContribution(replay, model) {
 }
 
 function decisionCategory(action, game) {
-  if (["toggleMulliganCard", "confirmMulligan", "skipMulligan"].includes(action?.kind) || game.phase === "mulligan") return "mulligan";
+  if (["toggleMulliganCard", "confirmMulligan", "skipMulligan", "submitMulligan"].includes(action?.kind) || game.phase === "mulligan") return "mulligan";
   return "play";
 }
 
@@ -200,6 +200,10 @@ function actionLabel(game, action) {
   const destinationId = action.destination || action.destinationId;
   const destination = game.battlefields.find((field) => field.instanceId === destinationId);
   const destinationName = destination?.name || (destinationId === "base" ? "기지" : "");
+  if (action.kind === "submitMulligan") {
+    const names = (action.cardIds || []).map((id) => findCard(game, id)?.name).filter(Boolean);
+    return names.length ? `${names.join(", ")} 멀리건` : "현재 시작 패 유지";
+  }
   const labels = {
     confirmFirstPlayer: "선공 확인",
     rollFirstPlayer: "선후공 주사위 굴림",

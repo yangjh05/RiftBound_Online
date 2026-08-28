@@ -8,7 +8,9 @@ import { applyGameCommand } from "../server/commands.mjs";
 import { validateStableGameState } from "../scripts/semantic-oracle.mjs";
 import { referenceZone, resolveCleanupReference } from "../scripts/reference-rules.mjs";
 import { OFFICIAL_TOKEN_DEFINITIONS, officialTokenKinds } from "../src/rules/tokens.mjs";
-import { applyAiAction, enumerateLegalActions, planPaymentActions, resolveLegalAction } from "../src/ai/actions.mjs";
+import { applyAiAction, enumerateAiPolicyActions, enumerateLegalActions, planPaymentActions, resolveLegalAction } from "../src/ai/actions.mjs";
+import { choosePaymentPlan, enumeratePaymentPlans, executePaymentPlan, isMechanicalPaymentAction, resolvePlannedPayment } from "../src/ai/payment-planner.mjs";
+import { reactionReserveProfile } from "../src/ai/resource-strategy.mjs";
 import {
   activateCard,
   applyDamage,
@@ -477,9 +479,12 @@ test("activated ability availability enforces resource, non-resource, state, and
     const forgeOption = legalActivatedAbilityOptions(game, source.instanceId).find((option) => option.kind === "forge");
     assert.ok(forgeOption);
     assert.equal(activateCard(game, source.instanceId, forgeOption.id).ok, true);
-    assert.equal(game.pendingChoice?.effect, "forgeAttachGear");
+    assert.equal(game.pendingChoice?.effect, "declareActivatedTarget");
+    assert.equal(game.pendingChoice?.data?.targetEffect, "forgeAttachGear");
+    assert.equal(source.exhausted, false, "Forge does not pay its exhaust cost before both targets are declared");
     assert.equal(chooseEffectOption(game, equipment.instanceId).ok, true);
-    assert.equal(game.pendingChoice?.effect, "forgeAttachTarget");
+    assert.equal(game.pendingChoice?.effect, "declareActivatedTarget");
+    assert.equal(game.pendingChoice?.data?.targetEffect, "forgeAttachTarget");
     assert.equal(chooseEffectOption(game, "gate-forge-unit").ok, true);
     const unit = player.base.find((card) => card.instanceId === "gate-forge-unit");
     assert.equal(unit.attachments.some((card) => card.instanceId === equipment.instanceId), true);
@@ -753,10 +758,12 @@ test("Annie, Stubborn explicitly returns a chosen spell, not a unit, from trash"
   assert.equal(togglePaymentRune(game, player.runes[4].instanceId, "power").ok, true);
   assert.equal(confirmPayment(game).ok, true);
   assert.equal(game.pendingChoice?.effect, "returnTrashUnitToHand");
-  assert.equal(game.pendingChoice?.data.cardType, "spell");
+  assert.equal(game.pendingChoice?.data.declareTrigger, true);
   assert.deepEqual(game.pendingChoice?.options.map((option) => option.cardId), [spell.instanceId]);
 
   assert.equal(chooseEffectOption(game, spell.instanceId).ok, true);
+  assert.notEqual(game.pendingChoice?.effect, "returnTrashUnitToHand",
+    "the declared trash card is not chosen again while the trigger resolves");
   assert.equal(player.hand.some((card) => card.instanceId === spell.instanceId), true);
   assert.equal(player.trash.some((card) => card.instanceId === unit.instanceId), true);
 });
@@ -998,6 +1005,144 @@ test("AI exposes the Rune Power ability independently from its Energy ability", 
   assert.equal(player.runePool.energy.length, 0);
 });
 
+test("AI policy never pre-converts Basic Runes and still spends effect-generated resources during payment", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const basicRune = rune(DOMAINS.BODY, player.id, "policy-masked-basic-rune");
+  player.runes = [basicRune];
+  player.runeDeck = [];
+  player.runePool = { energy: [], power: [] };
+
+  const fullLegal = enumerateLegalActions(game, player.id);
+  assert.equal(fullLegal.some((action) => action.kind === "activateCard"
+    && action.cardId === basicRune.instanceId
+    && action.abilityId.endsWith(":basic-rune-energy")), true,
+  "Basic Rune conversion remains a legal human/game command");
+  assert.equal(enumerateAiPolicyActions(game, player.id).some((action) => action.kind === "activateCard"
+    && action.cardId === basicRune.instanceId), false,
+  "the AI cannot bank Rune resources without a declared cost");
+
+  const paidCard = instance({
+    ...cards.lonelyPoro,
+    id: "TEST-GENERATED-POOL-CARD",
+    cardNumber: "TEST-GENERATED-POOL-CARD/001",
+    collectorNumber: "TEST-GENERATED-POOL-CARD/001",
+    name: "Generated Pool Payment Test",
+    energy: 1,
+    power: [{ domain: DOMAINS.BODY, amount: 1 }]
+  }, player.id, "generated-pool-payment-card");
+  player.hand = [paidCard];
+  player.runePool = {
+    energy: [{ id: "effect-generated-energy", type: "energy", sourceName: "Test effect" }],
+    power: [{ id: "effect-generated-power", type: "power", domain: DOMAINS.BODY, sourceName: "Test effect" }]
+  };
+
+  assert.equal(beginPlayCard(game, paidCard.instanceId, "base").ok, true);
+  assert.equal(game.pendingPayment?.playerId, player.id);
+  assert.equal(enumerateAiPolicyActions(game, player.id).some((action) => action.kind === "activateCard"
+    && action.cardId === basicRune.instanceId), false,
+  "the AI payment policy uses direct Rune payment commands instead of banking resources first");
+  assert.equal(resolvePlannedPayment(game).ok, true);
+  assert.equal(game.pendingPayment, null);
+  assert.equal(player.runePool.energy.length, 0);
+  assert.equal(player.runePool.power.length, 0);
+  assert.equal(player.runes.some((candidate) => candidate.instanceId === basicRune.instanceId && !candidate.exhausted), true,
+  "generated resources are spent before touching an unnecessary ready Rune");
+  assert.equal(player.base.some((card) => card.instanceId === paidCard.instanceId), true);
+});
+
+test("AI masks pure ADD sources outside payment while preserving mixed strategic abilities", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const conduit = instance(cards.energyConduit, player.id, "masked-energy-conduit");
+  const mixed = instance({
+    ...cards.energyConduit,
+    id: "TEST-MIXED-RESOURCE-ABILITY",
+    cardNumber: "TEST-MIXED-RESOURCE-ABILITY/001",
+    collectorNumber: "TEST-MIXED-RESOURCE-ABILITY/001",
+    name: "Mixed Resource Ability",
+    effects: [
+      { timing: "activated", abilityId: "mixed", kind: "addEnergy", amount: 1, exhaust: true, abilityKeywords: ["Reaction"] },
+      { timing: "activated", abilityId: "mixed", kind: "drawCards", amount: 1, exhaust: true, abilityKeywords: ["Reaction"] }
+    ]
+  }, player.id, "mixed-resource-source");
+  player.base = [conduit, mixed];
+
+  const full = enumerateLegalActions(game, player.id);
+  const policy = enumerateAiPolicyActions(game, player.id);
+  assert.equal(full.some((action) => action.kind === "activateCard" && action.cardId === conduit.instanceId), true);
+  assert.equal(policy.some((action) => action.kind === "activateCard" && action.cardId === conduit.instanceId), false,
+    "a pure resource generator belongs to the mechanical payment planner");
+  assert.equal(policy.some((action) => action.kind === "activateCard" && action.cardId === mixed.instanceId), true,
+    "an ability with a non-resource effect remains a strategic AI choice");
+});
+
+test("reaction reserve profile tracks Energy readiness and matching Power domains", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const reaction = instance({
+    ...cards.retreat,
+    id: "TEST-RESERVE-REACTION",
+    cardNumber: "TEST-RESERVE-REACTION/001",
+    collectorNumber: "TEST-RESERVE-REACTION/001",
+    name: "Reserve Reaction",
+    energy: 1,
+    power: [{ domain: DOMAINS.BODY, amount: 1 }],
+    tags: ["Reaction"],
+    keywords: ["Reaction"]
+  }, player.id, "reserve-reaction");
+  const bodyRune = rune(DOMAINS.BODY, player.id, "reserve-body-rune");
+  player.hand = [reaction];
+  const calmRune = rune(DOMAINS.CALM, player.id, "reserve-calm-rune");
+  player.runes = [bodyRune];
+  assert.equal(reactionReserveProfile(game, player.id).affordableReactions, 0,
+    "one Rune cannot pay both Energy and Power in the same payment");
+  player.runes.push(calmRune);
+  assert.equal(reactionReserveProfile(game, player.id).affordableReactions, 1);
+  bodyRune.exhausted = true;
+  assert.equal(reactionReserveProfile(game, player.id).affordableReactions, 1,
+    "an exhausted matching Rune can provide Power while a ready Rune provides Energy");
+  calmRune.exhausted = true;
+  assert.equal(reactionReserveProfile(game, player.id).affordableReactions, 0,
+    "the Reaction still needs a distinct ready Energy source");
+  calmRune.exhausted = false;
+  bodyRune.exhausted = false;
+  bodyRune.domain = DOMAINS.CALM;
+  assert.equal(reactionReserveProfile(game, player.id).affordableReactions, 0,
+    "the reserve signal retains the Reaction's required Power domain");
+});
+
+test("AI payment uses generated Energy before a Basic Rune without neural allocation search", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const paidCard = instance({
+    ...cards.lonelyPoro,
+    id: "TEST-LEARNED-PAYMENT-CARD",
+    cardNumber: "TEST-LEARNED-PAYMENT-CARD/001",
+    collectorNumber: "TEST-LEARNED-PAYMENT-CARD/001",
+    name: "Learned Payment Choice",
+    energy: 1,
+    power: []
+  }, player.id, "learned-payment-card");
+  const readyRune = rune(DOMAINS.BODY, player.id, "learned-payment-rune");
+  player.hand = [paidCard];
+  player.runes = [readyRune];
+  player.runePool = {
+    energy: [{ id: "learned-payment-pool", type: "energy", sourceName: "Effect" }],
+    power: []
+  };
+
+  assert.equal(beginPlayCard(game, paidCard.instanceId, "base").ok, true);
+  const plan = choosePaymentPlan(game);
+  assert.equal(plan.actions[0].kind, "togglePaymentPoolEnergy",
+    "expiring generated Energy is spent before exhausting a durable Basic Rune");
+  assert.equal(plan.actions.some((action) => action.kind === "togglePaymentRune"), false);
+});
+
 test("recycling a Rune selected for Energy clears the stale selection and adds Power", () => {
   const game = createGame({ interactive: true, manualActionChainPriority: true });
   finishSetup(game);
@@ -1029,6 +1174,62 @@ test("recycling a Rune selected for Energy clears the stale selection and adds P
 
   assert.equal(togglePaymentRune(game, replacementRune.instanceId, "energy").ok, true);
   assert.equal(confirmPayment(game).ok, true, "the original payment remains recoverable after recycling");
+});
+
+test("AI payment planner compares complete engine-valid plans and executes payment as a macro", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const paidCard = instance({ ...cards.lonelyPoro, energy: 1, power: [] }, player.id, "planned-payment-card");
+  player.hand = [paidCard];
+  player.runes = [
+    rune(DOMAINS.BODY, player.id, "planned-body-rune"),
+    rune(DOMAINS.CALM, player.id, "planned-calm-rune")
+  ];
+
+  assert.equal(beginPlayCard(game, paidCard.instanceId, "base").ok, true);
+  const plans = enumeratePaymentPlans(game);
+  assert.equal(plans.length, 2);
+  assert.equal(plans.every((plan) => plan.actions.at(-1).kind === "confirmPayment"), true);
+  assert.equal(plans.every((plan) => plan.actions.every((action) => isMechanicalPaymentAction(action))), true);
+  const selected = choosePaymentPlan(game);
+  assert.ok(selected);
+  assert.equal(executePaymentPlan(game, selected).ok, true);
+  assert.equal(game.pendingPayment, null);
+  assert.equal(player.runes.filter((card) => card.exhausted).length, 1);
+});
+
+test("AI payment planner retains a complete greedy fallback when exhaustive search is capped", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const paidCard = instance({ ...cards.lonelyPoro, energy: 8, power: [] }, player.id, "large-planned-payment-card");
+  player.hand = [paidCard];
+  player.runes = Array.from({ length: 10 }, (_, index) => rune(DOMAINS.BODY, player.id, `large-payment-rune-${index}`));
+
+  assert.equal(beginPlayCard(game, paidCard.instanceId, "base").ok, true);
+  const selected = choosePaymentPlan(game, { maxNodes: 1 });
+  assert.equal(selected?.fallback, true);
+  assert.equal(executePaymentPlan(game, selected).ok, true);
+  assert.equal(game.pendingPayment, null);
+  assert.equal(player.runes.filter((card) => card.exhausted).length, 8);
+});
+
+test("AI payment planner rolls back a declaration that leaves its pending card unpayable", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const paidCard = instance({ ...cards.lonelyPoro, energy: 3, power: [] }, player.id, "cancelled-planned-payment-card");
+  player.hand = [paidCard];
+  player.runes = Array.from({ length: 3 }, (_, index) => rune(DOMAINS.BODY, player.id, `cancelled-payment-rune-${index}`));
+
+  assert.equal(beginPlayCard(game, paidCard.instanceId, "base").ok, true);
+  for (const resource of player.runes) resource.exhausted = true;
+  const resolved = resolvePlannedPayment(game);
+  assert.equal(resolved.ok, true);
+  assert.equal(resolved.cancelled, true);
+  assert.equal(game.pendingPayment, null);
+  assert.equal(player.hand.some((card) => card.instanceId === paidCard.instanceId), true);
 });
 
 test("the shared payment confirmation gate rejects every incomplete cost before Cast is enabled", () => {
@@ -1114,7 +1315,27 @@ test("Firestorm has no Cast action unless its full Energy and Fury Power cost ca
   assert.equal(game.pendingChoice?.effect, "declarePlayTarget");
 });
 
-test("spell-only Energy that can be added during payment keeps an otherwise payable Cast action", () => {
+test("repeated target play legality short-circuits without materializing every target combination", () => {
+  const game = createGame({ interactive: true, manualActionChainPriority: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const opponent = game.players.find((candidate) => candidate.id !== player.id);
+  const field = game.battlefields[0];
+  const rain = instance({
+    ...cards.icathianRain,
+    energy: 0,
+    power: []
+  }, player.id, "repeated-target-icathian-rain");
+  player.hand = [rain];
+  field.units = Array.from({ length: 16 }, (_, index) =>
+    instance(cards.lonelyPoro, opponent.id, `repeated-target-${index}`));
+
+  assert.deepEqual(legalCardPlayDestinations(game, rain.instanceId), ["base"]);
+  assert.equal(enumerateLegalActions(game, player.id).some((action) =>
+    action.kind === "beginPlayCard" && action.cardId === rain.instanceId), true);
+});
+
+test("AI payment planner replans after spell-only Energy receives its authoritative generated id", () => {
   const game = createGame({ interactive: true, manualActionChainPriority: true });
   finishSetup(game);
   const player = currentPlayer(game);
@@ -1137,6 +1358,11 @@ test("spell-only Energy that can be added during payment keeps an otherwise paya
   assert.deepEqual(legalCardPlayDestinations(game, firestorm.instanceId), ["base"]);
   assert.equal(enumerateLegalActions(game, player.id).some((action) =>
     action.kind === "beginPlayCard" && action.cardId === firestorm.instanceId), true);
+  assert.equal(beginPlayCard(game, firestorm.instanceId, "base").ok, true);
+  assert.equal(chooseEffectOption(game, game.pendingChoice.options[0].id).ok, true);
+  const paid = resolvePlannedPayment(game);
+  assert.equal(paid.ok, true);
+  assert.equal(game.pendingPayment, null);
 });
 
 test("Channel is one recorded action and printed exhausted Channel effects enter runes exhausted", () => {
@@ -2283,6 +2509,31 @@ test("multiple ready units can make one standard move to an empty battlefield", 
   assert.equal(passShowdown(game, opponent.id).ok, true);
   assert.equal(game.battlefields[0].controlledBy, player.id);
   assert.equal(player.score, 1);
+});
+
+test("a base unit and a Ganking battlefield unit can make one standard move together", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const baseUnit = instance(cards.lonelyPoro, player.id, "mixed-move-base-unit");
+  const gankingUnit = instance(cards.travelingMerchant, player.id, "mixed-move-ganking-unit");
+  gankingUnit.temporaryKeywords = ["Ganking"];
+  const source = game.battlefields[0];
+  const destination = game.battlefields[1];
+  player.base = [baseUnit];
+  source.units = [gankingUnit];
+  source.controlledBy = player.id;
+
+  assert.equal(enumerateLegalActions(game, player.id).some((action) =>
+    action.kind === "moveUnits"
+    && action.destinationId === destination.instanceId
+    && new Set(action.unitIds).size === 2
+    && action.unitIds.includes(baseUnit.instanceId)
+    && action.unitIds.includes(gankingUnit.instanceId)), true);
+  assert.equal(moveUnits(game, [baseUnit.instanceId, gankingUnit.instanceId], destination.instanceId).ok, true);
+  assert.deepEqual(destination.units.map((unit) => unit.instanceId), [baseUnit.instanceId, gankingUnit.instanceId]);
+  assert.equal(player.base.includes(baseUnit), false);
+  assert.equal(source.units.includes(gankingUnit), false);
 });
 
 test("a standard move must change every selected unit's location", () => {
@@ -3670,6 +3921,28 @@ test("multiple Deflect instances sum their values into one additional play cost"
   assert.equal(game.pendingPayment.powerCost.some((cost) => cost.domain === "Any" && cost.amount === 5), true);
 });
 
+test("Spirit's Refuge does not add a second Deflect instance to a unit that already has it", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const opponent = game.players.find((candidate) => candidate.id !== player.id);
+  const refuge = instance(cards.spiritsRefuge, opponent.id, "deflect-refuge");
+  const target = instance(cards.vexApathetic, opponent.id, "single-deflect-target");
+  target.buffs = 1;
+  opponent.base = [refuge, target];
+  player.hand = [instance(cards.stupefy, player.id, "single-deflect-spell")];
+  player.runes = [
+    rune(DOMAINS.MIND, player.id, "single-deflect-energy"),
+    rune(DOMAINS.MIND, player.id, "single-deflect-power"),
+    rune(DOMAINS.MIND, player.id, "single-deflect-spare")
+  ];
+
+  assert.equal(beginPlayCard(game, "single-deflect-spell", "base").ok, true);
+  assert.equal(chooseEffectOption(game, target.instanceId).ok, true);
+  assert.equal(game.pendingPayment.powerCost.reduce((sum, cost) => sum + cost.amount, 0), 1);
+  assert.deepEqual(game.pendingPayment.deflectTargetIds, [target.instanceId]);
+});
+
 test("manual payment can recycle the same rune used for Energy", () => {
   const game = createGame({ interactive: true });
   finishSetup(game);
@@ -3835,11 +4108,6 @@ test("Hidden can move the Chosen Champion from the Champion Zone and preserves i
   };
 
   assert.equal(beginPlayCard(game, champion.instanceId, field.instanceId).ok, true);
-  assert.equal(champion.zone, "chain");
-  assert.equal(player.championPlayed, false);
-  assert.equal(field.units.some((unit) => unit.instanceId === champion.instanceId), false);
-  assert.equal(passShowdown(game, game.showdown.priorityPlayerId).ok, true);
-  assert.equal(passShowdown(game, game.showdown.priorityPlayerId).ok, true);
   assert.equal(champion.zone, "played");
   assert.equal(player.championPlayed, true);
   assert.equal(field.hidden.length, 0);
@@ -4186,7 +4454,7 @@ test("Quick-Draw uses its shared play trigger to attach without activating Equip
 
   assert.equal(beginPlayCard(game, gear.instanceId, "base").ok, true);
   assert.equal(confirmPayment(game).ok, true);
-  assert.equal(player.base.some((card) => card.instanceId === gear.instanceId), false);
+  assert.equal(player.base.some((card) => card.instanceId === gear.instanceId), true);
   while (!game.pendingChoice && game.actionChain) {
     assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
   }
@@ -4757,6 +5025,76 @@ test("on-play triggers use the declared target and do not retarget at resolution
   assert.equal(opponent.base.some((card) => card.instanceId === "other-rake-gear"), true);
   assert.equal(opponent.trash.some((card) => card.instanceId === "declared-rake-gear"), false);
   assert.equal(opponent.trash.some((card) => card.instanceId === "other-rake-gear"), false);
+});
+
+test("duel, stun-or-kill, and opponent-hand on-play abilities declare their targets before finalizing", () => {
+  {
+    const game = createGame({ interactive: true });
+    finishSetup(game);
+    const player = currentPlayer(game);
+    const opponent = game.players.find((candidate) => candidate.id !== player.id);
+    const target = instance({ ...cards.vilemaw, might: 10 }, opponent.id, "snapvine-declared-enemy");
+    const snapvine = instance({ ...cards.carnivorousSnapvine, energy: 0, power: [] }, player.id, "declared-snapvine");
+    game.battlefields[0].units = [target];
+    game.battlefields[0].controlledBy = opponent.id;
+    player.hand = [snapvine];
+
+    assert.equal(beginPlayCard(game, snapvine.instanceId, "base").ok, true);
+    assert.equal(confirmPayment(game).ok, true);
+    assert.equal(game.pendingChoice?.effect, "onPlayDuelEnemy");
+    assert.equal(game.pendingChoice?.data?.declareTrigger, true);
+    assert.equal(chooseEffectOption(game, target.instanceId).ok, true);
+    for (let guard = 0; game.actionChain && !game.pendingChoice && guard < 8; guard += 1) {
+      assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
+    }
+    assert.notEqual(game.pendingChoice?.effect, "onPlayDuelEnemy");
+    assert.equal(target.damage, snapvine.might);
+  }
+
+  {
+    const game = createGame({ interactive: true });
+    finishSetup(game);
+    const player = currentPlayer(game);
+    const opponent = game.players.find((candidate) => candidate.id !== player.id);
+    const target = instance(cards.lonelyPoro, opponent.id, "chief-declared-enemy");
+    const chief = instance({ ...cards.solariChief, energy: 0, power: [] }, player.id, "declared-solari-chief");
+    opponent.base = [target];
+    player.hand = [chief];
+
+    assert.equal(beginPlayCard(game, chief.instanceId, "base").ok, true);
+    assert.equal(confirmPayment(game).ok, true);
+    assert.equal(game.pendingChoice?.effect, "stunOrKillEnemy");
+    assert.equal(game.pendingChoice?.data?.declareTrigger, true);
+    assert.equal(chooseEffectOption(game, target.instanceId).ok, true);
+    for (let guard = 0; game.actionChain && !game.pendingChoice && guard < 8; guard += 1) {
+      assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
+    }
+    assert.notEqual(game.pendingChoice?.effect, "stunOrKillEnemy");
+    assert.equal(target.stunned, true);
+  }
+
+  {
+    const game = createGame({ interactive: true });
+    finishSetup(game);
+    const player = currentPlayer(game);
+    const opponent = game.players.find((candidate) => candidate.id !== player.id);
+    const discarded = instance(cards.charm, opponent.id, "mindsplitter-revealed-card");
+    const mindsplitter = instance({ ...cards.mindsplitter, energy: 0, power: [] }, player.id, "declared-mindsplitter");
+    opponent.hand = [discarded];
+    player.hand = [mindsplitter];
+
+    assert.equal(beginPlayCard(game, mindsplitter.instanceId, "base").ok, true);
+    assert.equal(confirmPayment(game).ok, true);
+    assert.equal(game.pendingChoice?.effect, "discardOpponent");
+    assert.equal(game.pendingChoice?.data?.declareTrigger, true);
+    assert.deepEqual(game.pendingChoice.options.map((option) => option.cardId), [opponent.id]);
+    assert.equal(chooseEffectOption(game, opponent.id).ok, true);
+    for (let guard = 0; game.actionChain && !game.pendingChoice && guard < 8; guard += 1) {
+      assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
+    }
+    assert.equal(game.pendingChoice?.effect, "discardOpponentHand",
+      "the revealed hand card is chosen during resolution after the opponent target was declared");
+  }
 });
 
 test("en garde gives an additional might when the unit is alone there", () => {
@@ -6067,12 +6405,9 @@ test("non-combat showdown becomes combat when an opposing Action unit enters dur
   assert.equal(passShowdown(game, player.id).ok, true);
   assert.equal(playCard(game, actionInvader.instanceId, field.instanceId).ok, true);
   assert.equal(game.phase, "showdown");
-  assert.equal(field.units.some((unit) => unit.instanceId === actionInvader.instanceId), false);
-  assert.equal(passShowdown(game, game.showdown.priorityPlayerId).ok, true);
-  assert.equal(passShowdown(game, game.showdown.priorityPlayerId).ok, true);
+  assert.equal(field.units.some((unit) => unit.instanceId === actionInvader.instanceId), true);
   assert.equal(game.showdown.combat, true);
   assert.equal(game.showdown.defenderId, opponent.id);
-  assert.equal(field.units.some((unit) => unit.instanceId === actionInvader.instanceId), true);
 
   assert.equal(passShowdown(game, game.showdown.priorityPlayerId).ok, true);
   assert.equal(passShowdown(game, game.showdown.priorityPlayerId).ok, true);
@@ -6105,8 +6440,6 @@ test("a non-combat showdown upgrade checks attack triggers exactly at the new de
   assert.equal(game.showdown.combat, false);
   assert.equal(passShowdown(game, attacker.id).ok, true);
   assert.equal(playCard(game, invader.instanceId, field.instanceId).ok, true);
-  assert.equal(passShowdown(game, game.showdown.priorityPlayerId).ok, true);
-  assert.equal(passShowdown(game, game.showdown.priorityPlayerId).ok, true);
 
   assert.equal(game.showdown.combat, true);
   assert.equal(game.pendingChoice?.card?.instanceId, crackshot.instanceId,
@@ -6639,8 +6972,6 @@ test("declining a nested optional trigger cost resumes the interrupted action Ch
 
   assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
   assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
-  assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
-  assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
   assert.equal(game.pendingChoice?.effect, "declareOptionalTrigger");
   assert.equal(chooseEffectOption(game, "use-optional-trigger").ok, true);
   assert.equal(game.pendingChoice?.effect, "declareTriggerCost");
@@ -6927,7 +7258,7 @@ test("Reaction cards and abilities use the Priority player instead of the turn p
   assert.equal(game.actionChain.chain.some((item) => item.card?.instanceId === reaction.instanceId && item.playerId === opponent.id), true);
 });
 
-test("Shen Kinkou remains on the Chain after Finalize until both players pass", () => {
+test("Shen Kinkou enters immediately on Finalize without waiting for Chain passes", () => {
   const game = createGame({ interactive: true, manualActionChainPriority: true });
   finishSetup(game);
   const turnPlayer = currentPlayer(game);
@@ -6958,11 +7289,9 @@ test("Shen Kinkou remains on the Chain after Finalize until both players pass", 
 
   assert.equal(confirmPayment(game).ok, true);
   assert.equal(pendingShen.status, "finalized");
-  assert.equal(opponent.base.some((card) => card.instanceId === shen.instanceId), false);
-  assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
-  assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
   assert.equal(opponent.base.some((card) => card.instanceId === shen.instanceId), true,
-    "a Unit enters the board only after its finalized Chain item resolves");
+    "a Unit enters the board as its finalized Chain item resolves");
+  assert.equal(game.actionChain.chain.some((item) => item.card?.instanceId === shen.instanceId), false);
 });
 
 test("spell-only generated Power can pay spells but not unit costs", () => {
@@ -8730,28 +9059,227 @@ test("portal rescue replays a friendly unit to base ignoring its cost", () => {
   assert.equal(unit.exhausted, true);
 });
 
-test("miss fortune captain readies another exhausted friendly card only on her first move each turn", () => {
+test("miss fortune captain can ready another exhausted non-spell object on either side only on her first move each turn", () => {
   const game = createGame({ interactive: true });
   finishSetup(game);
   const player = currentPlayer(game);
+  const opponent = game.players.find((candidate) => candidate.id !== player.id);
   const field = game.battlefields[0];
   const missFortune = instance(cards.missFortuneCaptain, player.id, "explicit-miss-fortune");
   const ally = instance(cards.lonelyPoro, player.id, "miss-fortune-ally");
+  const enemy = instance(cards.lonelyPoro, opponent.id, "miss-fortune-enemy");
+  const enemyGear = instance(cards.guardianAngel, opponent.id, "miss-fortune-enemy-gear");
+  const enemyRune = rune(DOMAINS.MIND, opponent.id, "miss-fortune-enemy-rune");
   ally.exhausted = true;
+  enemy.exhausted = true;
+  enemyGear.exhausted = true;
+  enemyRune.exhausted = true;
+  opponent.legend.exhausted = true;
   field.controlledBy = player.id;
   player.base = [missFortune, ally];
+  opponent.base = [enemy, enemyGear];
+  opponent.runes = [enemyRune];
 
   assert.equal(moveUnit(game, "explicit-miss-fortune", field.instanceId).ok, true);
   assert.equal(game.pendingChoice.effect, "readyAnotherExhausted");
-  assert.equal(chooseEffectOption(game, "miss-fortune-ally").ok, true);
-  assert.equal(ally.exhausted, false);
+  const optionIds = new Set(game.pendingChoice.options.map((option) => option.cardId).filter(Boolean));
+  assert.equal(optionIds.has("explicit-miss-fortune"), false, "Miss Fortune cannot choose herself");
+  assert.equal(optionIds.has("miss-fortune-ally"), true);
+  assert.equal(optionIds.has("miss-fortune-enemy"), true);
+  assert.equal(optionIds.has("miss-fortune-enemy-gear"), true);
+  assert.equal(optionIds.has("miss-fortune-enemy-rune"), true);
+  assert.equal(optionIds.has(opponent.legend.instanceId), true);
+  assert.equal(chooseEffectOption(game, "miss-fortune-enemy-rune").ok, true);
+  assert.equal(enemyRune.exhausted, false);
   assert.equal(field.units.some((unit) => unit.instanceId === "explicit-miss-fortune"), true);
 
   missFortune.exhausted = false;
-  ally.exhausted = true;
   assert.equal(moveUnit(game, "explicit-miss-fortune", "base").ok, true);
   assert.equal(game.pendingChoice, null);
   assert.equal(ally.exhausted, true);
+});
+
+test("Dazzling Aurora lets its controller choose any legal location for the revealed unit", () => {
+  const game = createGame({ interactive: true, manualActionChainPriority: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const field = game.battlefields[0];
+  const aurora = instance(cards.dazzlingAurora, player.id, "destination-choice-aurora");
+  const controller = instance(cards.lonelyPoro, player.id, "destination-choice-controller");
+  const skippedSpell = instance(cards.flash, player.id, "destination-choice-skipped-spell");
+  const revealedUnit = instance(cards.lonelyPoro, player.id, "destination-choice-unit");
+  field.controlledBy = player.id;
+  field.units = [controller];
+  for (const otherField of game.battlefields.slice(1)) otherField.controlledBy = null;
+  player.base = [aurora];
+  player.mainDeck = [skippedSpell, revealedUnit];
+
+  assert.equal(endTurn(game).ok, true);
+  let passes = 0;
+  while (!game.pendingChoice && game.actionChain && passes < 12) {
+    assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
+    passes += 1;
+  }
+
+  assert.equal(game.pendingChoice?.effect, "playEffectUnitDestination");
+  assert.deepEqual(new Set(game.pendingChoice.options.map((option) => option.destination)), new Set(["base", field.instanceId]));
+  assert.equal(chooseEffectOption(game, field.instanceId).ok, true);
+
+  passes = 0;
+  while (game.actionChain && !game.pendingChoice && !game.pendingPayment && passes < 12) {
+    assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
+    passes += 1;
+  }
+  assert.equal(field.units.some((unit) => unit.instanceId === revealedUnit.instanceId), true);
+  assert.equal(player.base.some((unit) => unit.instanceId === revealedUnit.instanceId), false);
+  assert.equal(player.mainDeck.at(-1)?.instanceId, skippedSpell.instanceId,
+    "the other revealed card is recycled to the Main Deck");
+});
+
+test("Dazzling Aurora preserves Accelerate as an optional additional cost", () => {
+  const game = createGame({ interactive: true, manualActionChainPriority: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const aurora = instance(cards.dazzlingAurora, player.id, "accelerate-aurora");
+  const missFortune = instance(cards.missFortuneCaptain, player.id, "aurora-miss-fortune");
+  const bodyRune = rune(DOMAINS.BODY, player.id, "aurora-accelerate-rune");
+  player.base = [aurora];
+  player.mainDeck = [missFortune];
+  player.runes = [bodyRune];
+
+  assert.equal(endTurn(game).ok, true);
+  for (let guard = 0; !game.pendingPayment && game.actionChain && guard < 12; guard += 1) {
+    assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
+  }
+
+  assert.equal(game.pendingPayment?.source, "effectPlay");
+  assert.equal(game.pendingPayment?.cardId, missFortune.instanceId);
+  assert.equal(game.pendingPayment?.energyCost, 0, "Dazzling Aurora ignores only the unit's base cost");
+  const accelerate = game.pendingPayment.optionalPowerEffects.find((effect) => effect.kind === "accelerate");
+  assert.ok(accelerate);
+  assert.equal(toggleOptionalPaymentEffect(game, accelerate.id).ok, true);
+  assert.equal(game.pendingPayment.energyCost, 1);
+  assert.deepEqual(game.pendingPayment.powerCost, [{ domain: DOMAINS.BODY, amount: 1 }]);
+  assert.equal(togglePaymentRune(game, bodyRune.instanceId, "energy").ok, true);
+  assert.equal(togglePaymentRune(game, bodyRune.instanceId, "power").ok, true);
+  assert.equal(confirmPayment(game).ok, true);
+
+  for (let guard = 0; game.actionChain && !game.pendingChoice && !game.pendingPayment && guard < 12; guard += 1) {
+    assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
+  }
+  assert.equal(player.base.find((card) => card.instanceId === missFortune.instanceId)?.exhausted, false);
+});
+
+test("Dazzling Aurora preserves an optional additional Power effect and resolves it only when paid", () => {
+  const game = createGame({ interactive: true, manualActionChainPriority: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const aurora = instance(cards.dazzlingAurora, player.id, "optional-cost-aurora");
+  const keeper = instance(cards.clockworkKeeper, player.id, "aurora-clockwork-keeper");
+  const drawn = instance(cards.lonelyPoro, player.id, "aurora-clockwork-draw");
+  const calmRune = rune(DOMAINS.CALM, player.id, "aurora-clockwork-rune");
+  player.base = [aurora];
+  player.mainDeck = [keeper, drawn];
+  player.runes = [calmRune];
+
+  assert.equal(endTurn(game).ok, true);
+  for (let guard = 0; !game.pendingPayment && game.actionChain && guard < 12; guard += 1) {
+    assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
+  }
+
+  assert.equal(game.pendingPayment?.source, "effectPlay");
+  assert.equal(game.pendingPayment?.cardId, keeper.instanceId);
+  assert.equal(game.pendingPayment?.energyCost, 0);
+  const drawCost = game.pendingPayment.optionalPowerEffects.find((effect) => effect.kind === "optionalPowerDraw");
+  assert.ok(drawCost);
+  assert.equal(toggleOptionalPaymentEffect(game, drawCost.id).ok, true);
+  assert.deepEqual(game.pendingPayment.powerCost, [{ domain: DOMAINS.CALM, amount: 1 }]);
+  assert.equal(togglePaymentRune(game, calmRune.instanceId, "power").ok, true);
+  assert.equal(confirmPayment(game).ok, true);
+
+  for (let guard = 0; game.actionChain && !game.pendingChoice && !game.pendingPayment && guard < 12; guard += 1) {
+    assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
+  }
+  assert.equal(player.hand.some((card) => card.instanceId === drawn.instanceId), true);
+});
+
+test("Zenith Blade requires only its enemy target and lets its controller decline the friendly move", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const opponent = game.players.find((candidate) => candidate.id !== player.id);
+  const field = game.battlefields[0];
+  const friendly = instance(cards.lonelyPoro, player.id, "zenith-friendly");
+  const enemy = instance(cards.ravenbloomStudent, opponent.id, "zenith-enemy");
+  const zenithBlade = instance({ ...cards.zenithBlade, energy: 0, power: [] }, player.id, "optional-zenith-blade");
+  player.base = [friendly];
+  player.hand = [zenithBlade];
+  field.units = [enemy];
+  field.controlledBy = opponent.id;
+
+  assert.equal(beginPlayCard(game, zenithBlade.instanceId, "base").ok, true);
+  assert.equal(game.pendingChoice?.effect, "declarePlayTarget");
+  assert.deepEqual(game.pendingChoice.options.map((option) => option.cardId), [enemy.instanceId]);
+  assert.equal(chooseEffectOption(game, enemy.instanceId).ok, true);
+  assert.equal(game.pendingChoice?.effect, "declarePlayTarget");
+  assert.equal(game.pendingChoice.options.some((option) => option.cardId === friendly.instanceId), true);
+  assert.equal(game.pendingChoice.options.some((option) => option.id === "declare-finish"), true);
+  assert.equal(chooseEffectOption(game, "declare-finish").ok, true);
+  assert.deepEqual(game.pendingPayment?.declaredTargets, [
+    { effect: "zenithBladeEnemy", targetId: enemy.instanceId }
+  ]);
+  assert.equal(confirmPayment(game).ok, true);
+
+  for (let guard = 0; game.actionChain && !game.pendingChoice && !game.pendingPayment && guard < 12; guard += 1) {
+    assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
+  }
+  assert.equal(enemy.stunned, true);
+  assert.equal(player.base.some((unit) => unit.instanceId === friendly.instanceId), true);
+  assert.equal(field.units.some((unit) => unit.instanceId === friendly.instanceId), false);
+  assert.equal(game.pendingChoice, null);
+});
+
+test("Zenith Blade locks the enemy battlefield on finalization and resolves its two targets independently", () => {
+  const game = createGame({ interactive: true, manualActionChainPriority: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const opponent = game.players.find((candidate) => candidate.id !== player.id);
+  const field = game.battlefields[0];
+  const friendly = instance(cards.lonelyPoro, player.id, "locked-zenith-friendly");
+  const enemy = instance(cards.ravenbloomStudent, opponent.id, "locked-zenith-enemy");
+  const zenithBlade = instance({ ...cards.zenithBlade, energy: 0, power: [] }, player.id, "locked-zenith-blade");
+  player.base = [friendly];
+  player.hand = [zenithBlade];
+  field.units = [enemy];
+  field.controlledBy = opponent.id;
+
+  assert.equal(beginPlayCard(game, zenithBlade.instanceId, "base").ok, true);
+  assert.equal(chooseEffectOption(game, enemy.instanceId).ok, true);
+  assert.equal(chooseEffectOption(game, friendly.instanceId).ok, true);
+  assert.deepEqual(game.pendingPayment?.declaredTargets, [
+    { effect: "zenithBladeEnemy", targetId: enemy.instanceId },
+    { effect: "zenithBladeFriendly", targetId: friendly.instanceId }
+  ]);
+  assert.deepEqual(game.pendingPayment?.declaredChoices.find((choice) =>
+    choice.effect === "zenithBladeDestination"), {
+    effect: "zenithBladeDestination",
+    unitId: enemy.instanceId,
+    destinationId: field.instanceId,
+    derivedFromTargetBattlefield: true
+  });
+  assert.equal(confirmPayment(game).ok, true);
+
+  field.units = [];
+  opponent.base.push(enemy);
+  for (let guard = 0; game.actionChain && !game.pendingChoice && !game.pendingPayment && guard < 12; guard += 1) {
+    assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
+  }
+
+  assert.equal(enemy.stunned, false, "the enemy target is illegal after leaving its battlefield");
+  assert.equal(field.units.some((unit) => unit.instanceId === friendly.instanceId), true,
+    "the independently legal friendly target still moves to the battlefield locked on finalization");
+  assert.equal(player.base.some((unit) => unit.instanceId === friendly.instanceId), false);
+  assert.equal(game.pendingChoice, null, "resolution never asks for a replacement target");
 });
 
 test("Miss Fortune Captain enters ready only when her Body Accelerate cost is selected and paid", () => {
@@ -9091,9 +9619,6 @@ test("Volibear legend trigger opens an action chain and asks before exhausting",
 
   assert.equal(beginPlayCard(game, mighty.instanceId, "base").ok, true);
   assert.equal(confirmPayment(game).ok, true);
-  assert.equal(game.pendingChoice, null);
-  assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
-  assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
   assert.equal(game.pendingChoice.effect, "declareOptionalTrigger");
   assert.equal(game.actionChain?.chain.length || 0, 0);
   assert.equal(chooseEffectOption(game, "use-optional-trigger").ok, true);
@@ -9824,8 +10349,36 @@ test("vanguard helm buffs another friendly unit when a buffed friendly unit dies
 
   assert.equal(playCard(game, "helm-boardwipe", "base").ok, true);
   assert.equal(game.pendingChoice.effect, "buffUnit");
+  assert.equal(game.pendingChoice.data.declareTrigger, true,
+    "Vanguard Helm declares its target before the triggered ability finalizes");
   assert.equal(chooseEffectOption(game, "helm-ally").ok, true);
   assert.equal(ally.buffs, 1);
+});
+
+test("adaptatron declares the gear it may kill before its conquer trigger finalizes", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const opponent = game.players.find((candidate) => candidate.id !== player.id);
+  const adaptatron = instance(cards.adaptatron, player.id, "declared-adaptatron");
+  const gear = instance(cards.guardianAngel, player.id, "adaptatron-declared-gear");
+  const field = game.battlefields[0];
+  field.units = [];
+  field.controlledBy = opponent.id;
+  player.base = [adaptatron, gear];
+
+  assert.equal(moveUnits(game, [adaptatron.instanceId], field.instanceId).ok, true);
+  for (let guard = 0; game.showdown && !game.pendingChoice && guard < 8; guard += 1) {
+    assert.equal(passShowdown(game, game.showdown.priorityPlayerId).ok, true);
+  }
+
+  assert.equal(game.pendingChoice?.effect, "trashGear");
+  assert.equal(game.pendingChoice?.data?.declareTrigger, true);
+  assert.equal(player.base.some((card) => card.instanceId === gear.instanceId), true,
+    "the gear remains in play while the triggered ability is still Pending");
+  assert.equal(chooseEffectOption(game, gear.instanceId).ok, true);
+  assert.equal(player.trash.some((card) => card.instanceId === gear.instanceId), true);
+  assert.equal(adaptatron.buffs, 1);
 });
 
 test("wildclaw shaman spends a friendly buff to buff and ready itself", () => {
@@ -10599,8 +11152,6 @@ test("a spell replayed from trash is recycled exactly once after its Chain resol
   player.runes = Array.from({ length: 4 }, (_, index) => rune(DOMAINS.CHAOS, player.id, `trash-replay-rune-${index}`));
 
   assert.equal(playCard(game, fizz.instanceId, "base").ok, true);
-  assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
-  assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
   assert.equal(game.pendingChoice?.effect, "declareOptionalTrigger");
   assert.equal(chooseEffectOption(game, "use-optional-trigger").ok, true);
   assert.equal(game.pendingChoice?.effect, "playTrashSpell");
@@ -10778,12 +11329,36 @@ test("holding a battlefield can score the winning point", () => {
   field.units = [instance(cards.lonelyPoro, player.id, "holder")];
   field.controlledBy = player.id;
   player.score = 7;
+  const handSize = player.hand.length;
+  const runeCount = player.runes.length;
 
   startTurn(game);
 
   assert.equal(player.score, 8);
   assert.equal(game.phase, "complete");
   assert.equal(game.winnerId, player.id);
+  assert.equal(player.hand.length, handSize, "the winning point ends the game before the draw step");
+  assert.equal(player.runes.length, runeCount, "the winning point ends the game before channeling runes");
+  assert.equal(game.actionChain, null);
+  assert.equal(game.pendingChoice, null);
+});
+
+test("reaching the victory score while tied does not win", () => {
+  const game = createGame();
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const opponent = game.players.find((candidate) => candidate.id !== player.id);
+  const field = game.battlefields[0];
+  field.units = [instance(cards.lonelyPoro, player.id, "tied-holder")];
+  field.controlledBy = player.id;
+  player.score = 7;
+  opponent.score = 8;
+
+  startTurn(game);
+
+  assert.equal(player.score, 8);
+  assert.notEqual(game.phase, "complete");
+  assert.equal(game.winnerId, undefined);
 });
 
 test("aspirant's climb increases the points needed to win", () => {
@@ -11253,6 +11828,34 @@ test("Flash declares up to two friendly battlefield units before payment", () =>
   assert.equal(player.base.some((unit) => unit.instanceId === "flash-second-target"), true);
 });
 
+test("Hextech Ray declares its target before payment and never asks again during resolution", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const opponent = game.players.find((candidate) => candidate.id !== player.id);
+  const target = instance(cards.lonelyPoro, opponent.id, "hextech-ray-declared-target");
+  const spell = instance({ ...cards.hextechRay, energy: 0, power: [] }, player.id, "hextech-ray-declaration");
+  game.battlefields[0].units = [target];
+  game.battlefields[0].controlledBy = opponent.id;
+  player.hand = [spell];
+
+  assert.equal(beginPlayCard(game, spell.instanceId, "base").ok, true);
+  assert.equal(game.pendingChoice?.effect, "declarePlayTarget");
+  assert.deepEqual(game.pendingChoice.options.map((option) => option.cardId), [target.instanceId]);
+  assert.equal(chooseEffectOption(game, target.instanceId).ok, true);
+  assert.deepEqual(game.pendingPayment?.declaredTargets, [
+    { effect: "damageUnit", targetId: target.instanceId }
+  ]);
+
+  assert.equal(confirmPayment(game).ok, true);
+  assert.equal(game.pendingChoice, null);
+  for (let guard = 0; game.actionChain && guard < 8; guard += 1) {
+    assert.equal(game.pendingChoice, null, "Hextech Ray does not reopen target selection while resolving");
+    assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
+  }
+  assert.equal(opponent.trash.some((card) => card.instanceId === target.instanceId), true);
+});
+
 test("Meditation chooses and pays its optional exhaust cost before resolving", () => {
   const game = createGame({ interactive: true });
   finishSetup(game);
@@ -11410,6 +12013,45 @@ test("non-showdown chain returns to the turn player when the chain empties", () 
   assert.equal(game.actionChain, null);
   assert.equal(game.phase, "action");
   assert.equal(game.currentPlayerId, player.id);
+});
+
+test("passing on an opponent card records only public response-window evidence", () => {
+  const game = createGame({ interactive: true, manualActionChainPriority: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const opponent = game.players.find((candidate) => candidate.id !== player.id);
+  const source = instance(cards.firestorm, player.id, "response-observation-source");
+  opponent.hand = [instance(cards.retreat, opponent.id, "unknown-response-card")];
+  opponent.runes = [rune(DOMAINS.MIND, opponent.id, "response-observation-rune")];
+  game.phase = "action";
+  game.currentPlayerId = opponent.id;
+  game.actionChain = {
+    turnPlayerId: player.id,
+    playerIds: [player.id, opponent.id],
+    priorityPlayerId: opponent.id,
+    consecutivePasses: 0,
+    chainSequence: 1,
+    chain: [{
+      id: "response-observation-item",
+      itemType: "card",
+      card: source,
+      playerId: player.id,
+      destination: "base",
+      playOptions: { declarationsComplete: true },
+      status: "finalized"
+    }]
+  };
+
+  assert.equal(passShowdown(game, opponent.id).ok, true);
+
+  const observation = game.responseObservations?.at(-1);
+  assert.equal(observation?.outcome, "pass");
+  assert.equal(observation?.sourcePlayerId, player.id);
+  assert.equal(observation?.responderId, opponent.id);
+  assert.equal(observation?.sourceCardNumber, cards.firestorm.cardNumber);
+  assert.equal(observation?.responderHandCount, 1);
+  assert.deepEqual(observation?.responderRunes, [{ domain: DOMAINS.MIND, exhausted: false }]);
+  assert.equal("cardNumber" in observation, false, "the event never records the responder's hidden cards");
 });
 
 test("non-showdown chain gives Priority to the newest remaining item's controller", () => {

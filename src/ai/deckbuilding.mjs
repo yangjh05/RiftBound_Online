@@ -1,6 +1,7 @@
 import { cards } from "../cards.mjs";
 import { profileDeck } from "./belief.mjs";
 import { cardAllowedInPool } from "../card-pools.mjs";
+import { championMatchesLegend } from "../engine/setup.mjs";
 
 const ALL_MAIN_CARDS = Object.values(cards).filter((card) => ["unit", "spell", "gear"].includes(card.type));
 const ALL_BATTLEFIELDS = Object.values(cards).filter((card) => card.type === "battlefield");
@@ -53,7 +54,7 @@ export function mutateCardPackage(deck, model, random = Math.random, packageSize
   const legendTags = new Set((next.legend?.tags || []).filter((tag) => !NON_IDENTITY_TAGS.has(tag)));
   const candidates = ALL_MAIN_CARDS.filter((card) => cardAllowed(card, domains, legendTags) && cardAllowedForModel(card, model));
   const removable = next.main.map((card, index) => ({ card, index }))
-    .filter(({ card }) => !isOnlyChampion(next.main, card));
+    .filter(({ card }) => !isOnlyChampion(next.main, card, next.legend));
   if (!removable.length || !candidates.length) return next;
   removable.sort((left, right) => learnedCardScore(model, left.card) - learnedCardScore(model, right.card));
   const removePool = removable.slice(0, Math.max(1, Math.ceil(removable.length * 0.35)));
@@ -177,7 +178,7 @@ export function recommendDeckChanges(deck, model, limit = 3) {
   const counts = countCards(deck.main);
   const signatureTotal = deck.main.filter(isSignature).length;
   const removable = [...new Map(deck.main.map((card) => [card.cardNumber, card])).values()]
-    .filter((card) => !isOnlyChampion(deck.main, card))
+    .filter((card) => !isOnlyChampion(deck.main, card, deck.legend))
     .sort((left, right) => learnedCardScore(model, left) - learnedCardScore(model, right));
   const additions = ALL_MAIN_CARDS.filter((card) => cardAllowed(card, domains, legendTags) && cardAllowedForModel(card, model) && (counts.get(card.cardNumber) || 0) < 3
       && (!isSignature(card) || signatureTotal < 3))
@@ -247,7 +248,7 @@ export function buildMatchupDeckPlan(deck, opponentProfile, model, limit = 5) {
 export function buildSideboardPlan(deck, model, limit = 5) {
   if (!deck?.sideboard?.length) return [];
   const main = [...new Map(deck.main.map((card) => [card.cardNumber, card])).values()]
-    .filter((card) => !isOnlyChampion(deck.main, card))
+    .filter((card) => !isOnlyChampion(deck.main, card, deck.legend))
     .sort((left, right) => packageAdditionScore(model, deck.main, left) - packageAdditionScore(model, deck.main, right));
   const side = [...new Map(deck.sideboard.map((card) => [card.cardNumber, card])).values()]
     .sort((left, right) => packageAdditionScore(model, deck.main, right) - packageAdditionScore(model, deck.main, left));
@@ -279,9 +280,9 @@ function isSignature(card) {
   return Boolean(card?.tags?.includes("Signature") || card?.tags?.includes("Signature Spell"));
 }
 
-function isOnlyChampion(main, card) {
-  if (!card.isChampion && !card.tags?.includes("Champion")) return false;
-  return main.filter((candidate) => candidate.isChampion || candidate.tags?.includes("Champion")).length <= 1;
+function isOnlyChampion(main, card, legend) {
+  if (!championMatchesLegend(card, legend)) return false;
+  return main.filter((candidate) => championMatchesLegend(candidate, legend)).length <= 1;
 }
 
 function countCards(cardsToCount) {

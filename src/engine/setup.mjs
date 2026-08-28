@@ -46,6 +46,10 @@ function createPlayer(id, deck, instantiate) {
     availableBattlefields: deck.battlefields.map((field) => instantiate(field, id)),
     selectedBattlefieldId: null,
     mainDeck: startingMainDeckCards(deck, deck.legend).map((card) => instantiate(card, id)),
+    // Private player knowledge: cards this player knowingly put on the bottom
+    // through mulligan or recycle, tied to the exact object incarnation.
+    mulliganBottomKnowledge: [],
+    bottomDeckKnowledgeSequence: 0,
     runeDeck: deck.runes.map((card) => instantiate(card, id)),
     hand: [],
     base: [],

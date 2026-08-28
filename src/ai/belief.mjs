@@ -1,11 +1,19 @@
-import { decklists } from "../cards.mjs";
+import { cards, decklists } from "../cards.mjs";
+import { isInherentReaction } from "../rules/keywords.mjs";
 import { observeGame } from "./observation.mjs";
+
+const CARD_BY_NUMBER = new Map(Object.values(cards).map((card) => [card.cardNumber, card]));
+
+const DEFAULT_DECK_PROFILES = Object.freeze(Object.fromEntries(
+  Object.values(decklists).map((deck) => [deck.id, Object.freeze(profileDeck(deck))])
+));
 
 export function inferOpponentDeckBelief(game, viewerId, model = {}) {
   const observation = observeGame(game, viewerId);
   if (!observation) return emptyBelief();
   const profiles = Object.values(model.deckProfiles || defaultDeckProfiles());
   const observed = observedOpponentCards(observation);
+  const responseEvidence = opponentResponseEvidence(observation);
   const legendNumber = observation.opponent.legend?.cardNumber;
   const candidates = profiles.filter((profile) => !legendNumber || profile.legendCardNumber === legendNumber);
   const scored = (candidates.length ? candidates : profiles).map((profile) => ({
@@ -21,13 +29,18 @@ export function inferOpponentDeckBelief(game, viewerId, model = {}) {
     probability: weights[index] / total,
     profile: item.profile
   })).sort((left, right) => right.probability - left.probability);
-  const cardProbabilities = aggregateRemainingCards(posterior, observed, observation.opponent.handCount);
+  const cardProbabilities = conditionCardsOnResponsePasses(
+    aggregateRemainingCards(posterior, observed, observation.opponent.handCount),
+    responseEvidence,
+    observation.turnSequence
+  );
   return {
     posterior,
     cardProbabilities,
     observedCards: Object.fromEntries(observed),
     entropy: -posterior.reduce((sum, item) => sum + item.probability * Math.log(Math.max(1e-9, item.probability)), 0),
     confidence: posterior[0]?.probability >= 0.75 ? "high" : posterior[0]?.probability >= 0.45 ? "medium" : "low",
+    responseEvidence: summarizeResponseEvidence(responseEvidence, observation.turnSequence),
     aggregate: aggregateProfiles(posterior)
   };
 }
@@ -93,15 +106,104 @@ function aggregateRemainingCards(posterior, observed, handCount) {
 function observedOpponentCards(observation) {
   const counts = new Map();
   const opponentId = observation.opponent.id;
-  const cards = [
+  const observedCards = [
     ...observation.opponent.base,
     ...observation.opponent.trash,
     ...observation.opponent.banished,
     ...observation.opponent.hand,
+    ...(observation.chainCards || []).filter((card) => card.controllerId === opponentId || card.ownerId === opponentId),
     ...observation.battlefields.flatMap((field) => field.units.filter((card) => card.controllerId === opponentId))
   ];
-  for (const card of cards) if (card.cardNumber) counts.set(card.cardNumber, (counts.get(card.cardNumber) || 0) + 1);
+  for (const card of observedCards) if (card.cardNumber) counts.set(card.cardNumber, (counts.get(card.cardNumber) || 0) + 1);
   return counts;
+}
+
+function opponentResponseEvidence(observation) {
+  return (observation.responseObservations || []).filter((event) =>
+    event.outcome === "pass"
+    && event.sourcePlayerId === observation.self.id
+    && event.responderId === observation.opponent.id
+  );
+}
+
+function conditionCardsOnResponsePasses(cardProbabilities, evidence, currentTurnSequence) {
+  if (!evidence.length) return cardProbabilities;
+  const recent = evidence.slice(-6);
+  return cardProbabilities.map((item) => {
+    const card = CARD_BY_NUMBER.get(item.cardNumber);
+    if (!card || !isInherentReaction(card)) return item;
+    let probability = clamp01(item.probability);
+    let evidenceStrength = 0;
+    for (const event of recent) {
+      if (!reactionWasPubliclyAffordable(card, event)) continue;
+      const age = Math.max(0, (currentTurnSequence || 0) - (event.turnSequence || 0));
+      const freshness = Math.exp(-0.32 * age);
+      const severity = reactionInformationValue(card);
+      const useChance = Math.min(0.68, (0.16 + 0.36 * clamp01(event.probeStrength)) * severity * freshness);
+      const denominator = Math.max(1e-6, 1 - probability * useChance);
+      probability = clamp01(probability * (1 - useChance) / denominator);
+      evidenceStrength += useChance;
+    }
+    return { ...item, probability, passEvidenceStrength: evidenceStrength };
+  }).sort((left, right) => right.probability - left.probability);
+}
+
+function reactionWasPubliclyAffordable(card, event) {
+  const requirements = (card.power || []).flatMap((requirement) => Array.from(
+    { length: Math.max(0, Number(requirement.amount) || 0) },
+    () => normalizedDomain(requirement.domain || requirement.color || requirement.type || "Any")
+  ));
+  const runes = (event.responderRunes || []).map((rune) => ({
+    domain: normalizedDomain(rune.domain),
+    ready: !rune.exhausted
+  }));
+  const pooledPower = (event.responderPoolPowerDomains || []).map((domain) => ({
+    domain: normalizedDomain(domain),
+    ready: false,
+    pooled: true
+  }));
+  const resources = [...pooledPower, ...runes];
+  let readyRunesUsedForPower = 0;
+  for (const requirement of requirements) {
+    let index = resources.findIndex((resource) => resource.domain === requirement && !resource.used);
+    if (index < 0) index = resources.findIndex((resource) => isAnyDomain(resource.domain) && !resource.used);
+    if (index < 0 && isAnyDomain(requirement)) index = resources.findIndex((resource) => !resource.used);
+    if (index < 0) return false;
+    resources[index].used = true;
+    if (resources[index].ready) readyRunesUsedForPower += 1;
+  }
+  const readyRunes = runes.filter((rune) => rune.ready).length;
+  const energyCapacity = Math.max(0, readyRunes - readyRunesUsedForPower) + (event.responderPoolEnergy || 0);
+  return energyCapacity >= Math.max(0, Number(card.energy) || 0);
+}
+
+function reactionInformationValue(card) {
+  const kinds = (card.effects || []).map((effect) => String(effect.kind || "").toLowerCase());
+  if (kinds.some((kind) => /kill|destroy|banish|counter|prevent/.test(kind))) return 1;
+  if (kinds.some((kind) => /damage|stun|return|recall|move|might|buff|shield/.test(kind))) return 0.82;
+  return 0.62;
+}
+
+function summarizeResponseEvidence(evidence, currentTurnSequence) {
+  const recent = evidence.filter((event) => (currentTurnSequence || 0) - (event.turnSequence || 0) <= 4);
+  return {
+    observedPasses: evidence.length,
+    recentPasses: recent.length,
+    strength: recent.reduce((sum, event) => sum + clamp01(event.probeStrength), 0),
+    lastSourceCardNumber: evidence.at(-1)?.sourceCardNumber || null
+  };
+}
+
+function normalizedDomain(domain) {
+  return String(domain || "Any").toLowerCase();
+}
+
+function isAnyDomain(domain) {
+  return ["", "any", "generic"].includes(normalizedDomain(domain));
+}
+
+function clamp01(value) {
+  return Math.max(0, Math.min(1, Number(value) || 0));
 }
 
 function aggregateProfiles(posterior) {
@@ -116,7 +218,7 @@ function aggregateProfiles(posterior) {
 }
 
 function defaultDeckProfiles() {
-  return Object.fromEntries(Object.values(decklists).map((deck) => [deck.id, profileDeck(deck)]));
+  return DEFAULT_DECK_PROFILES;
 }
 
 export function profileDeck(deck) {
@@ -139,4 +241,4 @@ export function profileDeck(deck) {
   };
 }
 
-function emptyBelief() { return { posterior: [], cardProbabilities: [], observedCards: {}, entropy: 0, confidence: "low", aggregate: { unitRatio: 0, spellRatio: 0, gearRatio: 0, reactionRatio: 0, averageEnergy: 0 } }; }
+function emptyBelief() { return { posterior: [], cardProbabilities: [], observedCards: {}, entropy: 0, confidence: "low", responseEvidence: { observedPasses: 0, recentPasses: 0, strength: 0, lastSourceCardNumber: null }, aggregate: { unitRatio: 0, spellRatio: 0, gearRatio: 0, reactionRatio: 0, averageEnergy: 0 } }; }

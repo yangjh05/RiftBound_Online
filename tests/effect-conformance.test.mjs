@@ -728,9 +728,19 @@ test("dynamic static Might modifiers are applied from units, legends, trash, buf
     const first = plainUnit(player.id, "sett-buffed-1");
     const second = plainUnit(player.id, "sett-buffed-2");
     first.buffs = 1;
+    game.battlefields = [battlefield("sett-field", [first], player.id)];
+
+    game.battlefields[0].units.push(sett);
+    assert.equal(currentMight(game, sett), sett.might + 1, "Sett sees a buffed unit that was already here");
+
+    game.battlefields[0].units.push(second);
+    assert.equal(currentMight(game, sett), sett.might + 1, "an unbuffed unit entering does not change Sett's Might");
+
     second.buffs = 1;
-    player.base = [sett, first, second];
     assert.equal(currentMight(game, sett), sett.might + 2);
+
+    first.buffs = 0;
+    assert.equal(currentMight(game, sett), sett.might + 1, "later buff-state changes are reflected immediately");
   }
 
   {
@@ -1299,6 +1309,60 @@ test("attack and defend trigger resolvers apply their declared damage, Might, an
   }
 });
 
+test("Leona, Determined uses her declared attack target without asking again at resolution", () => {
+  const game = ruleGame({ interactive: true });
+  const player = game.players[0];
+  const opponent = game.players[1];
+  const leona = instance(cards.leonaDetermined, player.id, "declared-leona-determined");
+  const first = plainUnit(opponent.id, "declared-leona-first", 20);
+  const second = plainUnit(opponent.id, "declared-leona-second", 20);
+  player.base = [leona];
+  game.battlefields = [battlefield("declared-leona-field", [first, second], opponent.id)];
+
+  assert.equal(moveUnits(game, [leona.instanceId], "declared-leona-field").ok, true);
+  assert.equal(game.pendingChoice?.data?.targetEffect, "stunUnit");
+  const declaredTarget = game.pendingChoice.options.find((option) => option.cardId === second.instanceId);
+  assert.ok(declaredTarget);
+  assert.equal(chooseEffectOption(game, declaredTarget.id).ok, true);
+  assert.equal(game.pendingChoice, null);
+  assert.equal(second.stunned, false, "declaring a target must not resolve the trigger");
+
+  assert.equal(passShowdown(game, game.showdown.priorityPlayerId).ok, true);
+  assert.equal(passShowdown(game, game.showdown.priorityPlayerId).ok, true);
+
+  assert.equal(game.pendingChoice, null, "resolution must not ask for the target a second time");
+  assert.equal(first.stunned, false);
+  assert.equal(second.stunned, true);
+});
+
+test("Leona, Determined pays Qiyana's Deflect only once when declaring her attack target", () => {
+  const game = ruleGame({ interactive: true });
+  const player = game.players[0];
+  const opponent = game.players[1];
+  const leona = instance(cards.leonaDetermined, player.id, "deflect-leona-determined");
+  const qiyana = instance(cards.qiyanaVictorious, opponent.id, "deflect-qiyana-victorious");
+  const firstPower = rune(DOMAINS.ORDER, player.id, "leona-deflect-power-1");
+  const secondPower = rune(DOMAINS.ORDER, player.id, "leona-deflect-power-2");
+  player.base = [leona];
+  player.runes = [firstPower, secondPower];
+  game.battlefields = [battlefield("leona-deflect-field", [qiyana], opponent.id)];
+
+  assert.equal(moveUnits(game, [leona.instanceId], "leona-deflect-field").ok, true);
+  const declaredTarget = game.pendingChoice?.options.find((option) => option.cardId === qiyana.instanceId);
+  assert.ok(declaredTarget);
+  assert.equal(chooseEffectOption(game, declaredTarget.id).ok, true);
+  assert.equal(game.pendingChoice?.effect, "payDeflect");
+  assert.equal(chooseEffectOption(game, firstPower.instanceId).ok, true);
+  assert.equal(player.runes.length, 1, "target declaration pays one Deflect Power");
+
+  assert.equal(passShowdown(game, game.showdown.priorityPlayerId).ok, true);
+  assert.equal(passShowdown(game, game.showdown.priorityPlayerId).ok, true);
+
+  assert.equal(game.pendingChoice, null, "trigger resolution does not request Deflect a second time");
+  assert.equal(player.runes.length, 1);
+  assert.equal(qiyana.stunned, true);
+});
+
 test("move, conquer, and conquer-here effects preserve their event-specific outcomes", () => {
   {
     const game = ruleGame({ interactive: false });
@@ -1517,6 +1581,7 @@ test("Deathknell, discard, stun, and stunned-kill triggers resolve from the shar
     const enemy = plainUnit(opponent.id, "eclipse-stun-enemy", 8);
     herald.exhausted = true;
     player.base = [herald];
+    player.mainDeck = [plainSpell(player.id, "eclipse-draw-card")];
     game.battlefields = [battlefield("eclipse-stun-field", [enemy], opponent.id)];
     const backOff = instance(cards.backOff, player.id, "eclipse-back-off");
     backOff.declaredPlayTargets = [{ effect: "stunUnit", targetId: enemy.instanceId }];
@@ -1535,6 +1600,7 @@ test("Deathknell, discard, stun, and stunned-kill triggers resolve from the shar
     const ally = plainUnit(player.id, "leona-buff-ally");
     const enemy = plainUnit(opponent.id, "leona-stun-enemy", 8);
     player.base = [ally, leona];
+    player.mainDeck = [plainSpell(player.id, "leona-draw-card")];
     game.battlefields = [battlefield("leona-stun-field", [enemy], opponent.id)];
     const backOff = instance(cards.backOff, player.id, "leona-back-off");
     backOff.declaredPlayTargets = [{ effect: "stunUnit", targetId: enemy.instanceId }];

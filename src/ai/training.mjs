@@ -1,5 +1,5 @@
 import { createGame } from "../engine.mjs";
-import { activeActorId, applyAiAction, enumerateLegalActions } from "./actions.mjs";
+import { activeActorId, applyAiAction, enumerateAiPolicyActions } from "./actions.mjs";
 import { mutateDeck, updateDeckLearning } from "./deckbuilding.mjs";
 import { observeGame, stateFeatures } from "./observation.mjs";
 import { actionProbabilities, choosePolicyAction, createModel, DEFAULT_AI_MODEL } from "./policy.mjs";
@@ -35,7 +35,7 @@ export function runSelfPlayTraining(options = {}) {
     let actions = 0;
     while (game.phase !== "complete" && actions < maxActions) {
       const actorId = activeActorId(game);
-      const legal = enumerateLegalActions(game, actorId);
+      const legal = enumerateAiPolicyActions(game, actorId);
       if (!actorId || !legal.length) break;
       const distribution = actionProbabilities(game, actorId, legal, model, options.temperature || 0.85);
       const selected = sampleDistribution(distribution, random);
@@ -79,7 +79,7 @@ export function evaluateModel(candidate, champion, decks, options = {}) {
       const actorId = activeActorId(game);
       const actorSeat = game.players.findIndex((player) => player.id === actorId);
       const model = actorSeat === candidateSeat ? candidate : champion;
-      const legal = enumerateLegalActions(game, actorId);
+      const legal = enumerateAiPolicyActions(game, actorId);
       const selected = choosePolicyAction(game, actorId, legal, model, { greedy: false, temperature: 0.25, random });
       if (!selected || !applyAiAction(game, selected.action, actorId)?.ok) break;
     }
