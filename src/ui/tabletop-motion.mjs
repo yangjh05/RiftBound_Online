@@ -92,17 +92,15 @@ export function buildTabletopTransfers(previousLocations, currentLocations) {
   return ordered;
 }
 
-function stateMotionTransform(exhausted, zone = "") {
-  const exhaustedScale = zone === "attachment" ? 0.68 : 0.76;
-  return exhausted ? `rotate(90deg) scale(${exhaustedScale})` : "rotate(0deg) scale(1)";
+function stateMotionTransform(exhausted) {
+  return exhausted ? "rotate(90deg)" : "rotate(0deg)";
 }
 
 export function tabletopStateMotionKeyframes(transfer) {
   if (!STATE_MOTION_KINDS.has(transfer?.kind)) return [];
-  const zone = String(transfer?.to?.zone || transfer?.from?.zone || "");
   return [
-    { transform: stateMotionTransform(Boolean(transfer?.from?.exhausted), zone) },
-    { transform: stateMotionTransform(Boolean(transfer?.to?.exhausted), zone) }
+    { transform: stateMotionTransform(Boolean(transfer?.from?.exhausted)) },
+    { transform: stateMotionTransform(Boolean(transfer?.to?.exhausted)) }
   ];
 }
 
@@ -347,6 +345,18 @@ function transferPlayerId(transfer) {
   return String(transfer?.to?.playerId || transfer?.from?.playerId || "");
 }
 
+function transferClaimSets(existingTransfers) {
+  const sourceIds = new Set();
+  const destinationIds = new Set();
+  for (const transfer of Array.isArray(existingTransfers) ? existingTransfers : []) {
+    const sourceId = String(transfer?.fromCardId || transfer?.id || "");
+    const destinationId = String(transfer?.toCardId || transfer?.id || "");
+    if (sourceId) sourceIds.add(sourceId);
+    if (destinationId) destinationIds.add(destinationId);
+  }
+  return { sourceIds, destinationIds };
+}
+
 function faceDownHandAliasEntries(previousLocations, currentLocations, playerId) {
   const previous = locationMap(previousLocations);
   const current = locationMap(currentLocations);
@@ -377,9 +387,23 @@ export function buildBurnOutDrawTransfers(
     if (currentBurnOuts > previousBurnOuts) burnOutPlayerIds.add(String(playerId));
   }
 
-  const reconciled = (Array.isArray(existingTransfers) ? existingTransfers : []).map((transfer) => {
+  const inputTransfers = Array.isArray(existingTransfers) ? existingTransfers : [];
+  const unambiguousVisibleDraws = new Set();
+  for (const playerId of burnOutPlayerIds) {
+    const candidates = inputTransfers.filter((transfer) => transferPlayerId(transfer) === playerId
+      && transfer?.from?.zone === "trash"
+      && transfer?.to?.zone === "hand");
+    // A render snapshot does not retain the engine's private draw-event ids.
+    // When more than one Trash card reaches hand alongside Burn Out, a direct
+    // recovery and a recycled draw are indistinguishable, so keep both honest
+    // transfers instead of relabelling the recovery as a draw.
+    if (candidates.length === 1) unambiguousVisibleDraws.add(candidates[0]);
+  }
+
+  const reconciled = inputTransfers.map((transfer) => {
     const playerId = transferPlayerId(transfer);
     if (!burnOutPlayerIds.has(playerId)
+      || !unambiguousVisibleDraws.has(transfer)
       || transfer?.from?.zone !== "trash"
       || transfer?.to?.zone !== "hand") return transfer;
     return {
@@ -451,7 +475,9 @@ export function buildPrivateHandChainTransfers(
   const previous = locationMap(previousLocations);
   const current = locationMap(currentLocations);
   const previousItemIds = new Set((Array.isArray(previousChainItems) ? previousChainItems : []).map((item) => item?.id).filter(Boolean));
-  const claimedDestinationIds = new Set((Array.isArray(existingTransfers) ? existingTransfers : []).map((transfer) => transfer?.toCardId || transfer?.id).filter(Boolean));
+  const claims = transferClaimSets(existingTransfers);
+  const claimedSourceIds = claims.sourceIds;
+  const claimedDestinationIds = claims.destinationIds;
   const candidatesByPlayer = new Map();
 
   for (const item of (Array.isArray(currentChainItems) ? currentChainItems : [])) {
@@ -476,6 +502,7 @@ export function buildPrivateHandChainTransfers(
       .filter(([id, location]) => String(id).startsWith(prefix)
         && location?.zone === "hand"
         && String(location?.playerId || "") === playerId
+        && !claimedSourceIds.has(String(id))
         && !current.has(id))
       .map(([id, location]) => ({ id: String(id), location }))
       .sort((left, right) => Number(left.location?.index || 0) - Number(right.location?.index || 0) || left.id.localeCompare(right.id));
@@ -496,6 +523,7 @@ export function buildPrivateHandChainTransfers(
         name: "",
         order: Number(candidate.order || 0)
       });
+      claimedSourceIds.add(placeholder.id);
       claimedDestinationIds.add(candidate.cardId);
     }
   }
@@ -510,9 +538,9 @@ export function buildPrivateHandBoardTransfers(
 ) {
   const previous = locationMap(previousLocations);
   const current = locationMap(currentLocations);
-  const claimedDestinationIds = new Set((Array.isArray(existingTransfers) ? existingTransfers : [])
-    .map((transfer) => transfer?.toCardId || transfer?.id)
-    .filter(Boolean));
+  const claims = transferClaimSets(existingTransfers);
+  const claimedSourceIds = claims.sourceIds;
+  const claimedDestinationIds = claims.destinationIds;
   const playerIds = new Set([...previous.values(), ...current.values()]
     .map((location) => String(location?.playerId || ""))
     .filter(Boolean));
@@ -526,23 +554,29 @@ export function buildPrivateHandBoardTransfers(
         && location?.zone === "hand"
         && String(location?.playerId || "") === playerId
         && location.faceVisible === false
+        && !claimedSourceIds.has(String(id))
         && !current.has(id))
       .map(([id, location]) => ({ id: String(id), location }))
       .sort((left, right) => Number(left.location?.index || 0) - Number(right.location?.index || 0)
         || left.id.localeCompare(right.id));
     if (!placeholders.length) continue;
 
-    const destinations = [...current.entries()]
+    const arrivals = [...current.entries()]
       .filter(([id, location]) => !previous.has(id)
         && !claimedDestinationIds.has(id)
-        && isBoardZone(location?.zone)
-        && ["unit", "gear"].includes(String(location?.cardType || ""))
-        && location.faceVisible === true
         && String(location?.playerId || "") === playerId)
-      .map(([id, location]) => ({ id: String(id), location }))
+      .map(([id, location]) => ({ id: String(id), location }));
+    const destinations = arrivals
+      .filter(({ location }) => isBoardZone(location?.zone)
+        && ["unit", "gear"].includes(String(location?.cardType || ""))
+        && location.faceVisible === true)
       .sort((left, right) => Number(left.location?.index || 0) - Number(right.location?.index || 0)
         || left.id.localeCompare(right.id));
-    if (destinations.length !== placeholders.length) continue;
+    // A resolved private hand card may arrive together with tokens it created.
+    // Only synthesize when every unclaimed arrival can itself be the played
+    // Unit/Gear; any Trash/Chain/deck/extra arrival makes the pairing causally
+    // ambiguous and must fail closed.
+    if (arrivals.length !== placeholders.length || destinations.length !== placeholders.length) continue;
 
     for (let index = 0; index < destinations.length; index += 1) {
       const source = placeholders[index];
@@ -560,6 +594,7 @@ export function buildPrivateHandBoardTransfers(
         order: Number(destination.location?.index || 0),
         synthetic: true
       });
+      claimedSourceIds.add(source.id);
       claimedDestinationIds.add(destination.id);
     }
   }
@@ -578,7 +613,9 @@ export function buildPrivateHiddenChainTransfers(
   const previous = locationMap(previousLocations);
   const current = locationMap(currentLocations);
   const previousItemIds = new Set((Array.isArray(previousChainItems) ? previousChainItems : []).map((item) => item?.id).filter(Boolean));
-  const claimedDestinationIds = new Set((Array.isArray(existingTransfers) ? existingTransfers : []).map((transfer) => transfer?.toCardId || transfer?.id).filter(Boolean));
+  const claims = transferClaimSets(existingTransfers);
+  const claimedSourceIds = claims.sourceIds;
+  const claimedDestinationIds = claims.destinationIds;
   const candidatesByOrigin = new Map();
 
   for (const item of (Array.isArray(currentChainItems) ? currentChainItems : [])) {
@@ -609,6 +646,7 @@ export function buildPrivateHiddenChainTransfers(
       .filter(([id, location]) => String(id).startsWith(prefix)
         && location?.zone === aliasZone
         && String(location?.playerId || "") === sourcePlayerId
+        && !claimedSourceIds.has(String(id))
         && !current.has(id))
       .map(([id, location]) => ({ id: String(id), location }))
       .sort((left, right) => Number(left.location?.index || 0) - Number(right.location?.index || 0) || left.id.localeCompare(right.id));
@@ -629,6 +667,7 @@ export function buildPrivateHiddenChainTransfers(
         name: "",
         order: Number(destination.order || 0)
       });
+      claimedSourceIds.add(source.id);
       claimedDestinationIds.add(destination.cardId);
     }
   }
@@ -643,7 +682,9 @@ export function buildPrivateDeckTransfers(
 ) {
   const previous = locationMap(previousLocations);
   const current = locationMap(currentLocations);
-  const claimedDestinationIds = new Set((Array.isArray(existingTransfers) ? existingTransfers : []).map((transfer) => transfer?.toCardId || transfer?.id).filter(Boolean));
+  const claims = transferClaimSets(existingTransfers);
+  const claimedSourceIds = claims.sourceIds;
+  const claimedDestinationIds = claims.destinationIds;
   const playerIds = new Set([...previous.values(), ...current.values()].map((location) => String(location?.playerId || "")).filter(Boolean));
   const transfers = [];
 
@@ -651,7 +692,10 @@ export function buildPrivateDeckTransfers(
     if (playerId === String(viewerPlayerId || "")) continue;
     const deckPrefix = `redacted-main-${playerId}-`;
     const departedDeckCards = [...previous.entries()]
-      .filter(([id, location]) => String(id).startsWith(deckPrefix) && location?.zone === "mainDeck" && !current.has(id))
+      .filter(([id, location]) => String(id).startsWith(deckPrefix)
+        && location?.zone === "mainDeck"
+        && !claimedSourceIds.has(String(id))
+        && !current.has(id))
       .map(([id, location]) => ({ id: String(id), location }))
       .sort((left, right) => Number(left.location?.index || 0) - Number(right.location?.index || 0) || left.id.localeCompare(right.id));
     if (!departedDeckCards.length) continue;
@@ -683,6 +727,7 @@ export function buildPrivateDeckTransfers(
         name: "",
         order: Number(destination.location?.index || 0)
       });
+      claimedSourceIds.add(source.id);
       claimedDestinationIds.add(destination.id);
     }
   }

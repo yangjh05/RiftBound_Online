@@ -53,11 +53,14 @@ test("permanent and temporary Might are not double-counted", () => {
   assert.equal(statuses.some((status) => status.kind === "lastingMight"), false);
 });
 
-test("selecting a card opens the inspector and both detail views render status UI", async () => {
+test("card selection keeps the board visible until Card Info is explicitly opened", async () => {
   const source = await readFile(new URL("../src/app.mjs", import.meta.url), "utf8");
   assert.match(source, /function cardStatusBadges\(card\)/u);
   assert.match(source, /function cardStatusPanel\(card/u);
-  assert.match(source, /inspectorOpen = true;/u);
+  const selectionHandler = source.match(/function setUiSelectedCard\(cardId\) \{[\s\S]*?\n\}/u)?.[0] || "";
+  assert.doesNotMatch(selectionHandler, /inspectorOpen|toggleTabletopSheet/u);
+  assert.match(source, /if \(kind === "inspector"\) inspectorOpen = true;/u);
+  assert.match(source, /data-action="toggle-inspector"/u);
   assert.match(source, /cardStatusPanel\(card, \{ compact: true \}\)/u);
   assert.match(source, /\$\{cardStatusPanel\(card\)\}/u);
 });

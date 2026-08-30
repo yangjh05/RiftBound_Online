@@ -660,6 +660,8 @@ function normalizedDomZone(zone) {
   }[zone] || String(zone || "");
 }
 
+const TABLETOP_CARD_ASPECT_RATIO = 5 / 7;
+
 function motionLocationKey(location, { includeLocation = true } = {}) {
   if (!location) return "";
   return [
@@ -695,8 +697,58 @@ function tabletopCardNodePriority(node) {
   return 20;
 }
 
+function tabletopDomLocation(node) {
+  if (!(node instanceof Element)) return null;
+  const seat = node.closest("[data-player-id]");
+  const zoneNode = node.matches("[data-zone]") ? node : node.closest("[data-zone]");
+  return {
+    playerId: node.dataset.motionPlayerId || node.dataset.playerId || seat?.dataset.playerId || "",
+    zone: normalizedDomZone(node.dataset.motionZone || node.dataset.zone || zoneNode?.dataset.zone),
+    locationId: node.dataset.motionLocationId
+      || node.dataset.locationId
+      || node.dataset.battlefieldId
+      || zoneNode?.dataset.locationId
+      || zoneNode?.dataset.battlefieldId
+      || ""
+  };
+}
+
+function tabletopNodeMatchesLocation(node, location) {
+  if (!location) return false;
+  const nodeLocation = tabletopDomLocation(node);
+  if (!nodeLocation || nodeLocation.zone !== normalizedDomZone(location.zone)) return false;
+  if (location.playerId && nodeLocation.playerId && String(location.playerId) !== String(nodeLocation.playerId)) return false;
+  if (location.locationId && nodeLocation.locationId && String(location.locationId) !== String(nodeLocation.locationId)) return false;
+  return true;
+}
+
+function tabletopCardSurfaceRect(rect) {
+  if (!rect) return null;
+  const width = Number(rect.width);
+  const height = Number(rect.height);
+  const left = Number(rect.left);
+  const top = Number(rect.top);
+  if (![width, height, left, top].every(Number.isFinite) || width < 2 || height < 2) return null;
+  const centerX = left + width / 2;
+  const centerY = top + height / 2;
+  let cardWidth = width;
+  let cardHeight = height;
+  if (cardWidth / cardHeight > TABLETOP_CARD_ASPECT_RATIO) cardWidth = cardHeight * TABLETOP_CARD_ASPECT_RATIO;
+  else cardHeight = cardWidth / TABLETOP_CARD_ASPECT_RATIO;
+  const cardLeft = centerX - cardWidth / 2;
+  const cardTop = centerY - cardHeight / 2;
+  return {
+    top: cardTop,
+    right: cardLeft + cardWidth,
+    bottom: cardTop + cardHeight,
+    left: cardLeft,
+    width: cardWidth,
+    height: cardHeight
+  };
+}
+
 function captureTabletopGeometry() {
-  const geometry = { cardRects: new Map(), zoneRects: new Map() };
+  const geometry = { cardRects: new Map(), zoneRects: new Map(), anchorRects: new Map() };
   const root = app?.querySelector?.(".tabletop-layout");
   if (!root) return geometry;
 
@@ -714,14 +766,24 @@ function captureTabletopGeometry() {
     if (node.closest(".tabletop-overlay-root")) continue;
     const rect = tabletopRect(node);
     if (!rect) continue;
-    const seat = node.closest("[data-player-id]");
-    const location = {
-      playerId: node.dataset.playerId || seat?.dataset.playerId || "",
-      zone: normalizedDomZone(node.dataset.zone),
-      locationId: node.dataset.locationId || node.dataset.battlefieldId || ""
-    };
+    const location = tabletopDomLocation(node);
+    if (!location?.zone) continue;
     geometry.zoneRects.set(motionLocationKey(location, { includeLocation: false }), rect);
     if (location.locationId) geometry.zoneRects.set(motionLocationKey(location), rect);
+  }
+
+  for (const node of root.querySelectorAll("[data-motion-anchor]")) {
+    if (node.closest(".tabletop-overlay-root")) continue;
+    const rect = tabletopRect(node);
+    const location = tabletopDomLocation(node);
+    if (!rect || !location?.zone) continue;
+    geometry.anchorRects.set(motionLocationKey(location, { includeLocation: false }), rect);
+    if (location.locationId) geometry.anchorRects.set(motionLocationKey(location), rect);
+    const cardId = String(node.dataset.motionCardId || "");
+    if (!cardId) continue;
+    const priority = 120;
+    const previous = geometry.cardRects.get(cardId);
+    if (!previous || previous.priority < priority) geometry.cardRects.set(cardId, { rect, priority });
   }
   return geometry;
 }
@@ -729,16 +791,26 @@ function captureTabletopGeometry() {
 function geometryRectForTransfer(geometry, transfer, endpoint) {
   const location = transfer?.[endpoint];
   if (!location || !geometry) return null;
-  const preferZone = ["mainDeck", "runeDeck"].includes(location.zone)
-    || (endpoint === "to" && ["trash", "banished", "mainDeck", "runeDeck"].includes(location.zone));
+  const zone = normalizedDomZone(location.zone);
+  const preferAnchor = ["chain", "trash", "banished", "mainDeck", "runeDeck"].includes(zone);
   const endpointCardId = endpoint === "from" ? transfer.fromCardId || transfer.id : transfer.toCardId || transfer.id;
   const cardRect = geometry.cardRects?.get(endpointCardId)?.rect || null;
+  const anchorRect = geometry.anchorRects?.get(motionLocationKey(location))
+    || geometry.anchorRects?.get(motionLocationKey(location, { includeLocation: false }))
+    || geometry.anchorRects?.get(motionLocationKey({ ...location, playerId: "" }))
+    || geometry.anchorRects?.get(motionLocationKey({ ...location, playerId: "" }, { includeLocation: false }))
+    || null;
   const zoneRect = geometry.zoneRects?.get(motionLocationKey(location))
     || geometry.zoneRects?.get(motionLocationKey(location, { includeLocation: false }))
     || geometry.zoneRects?.get(motionLocationKey({ ...location, playerId: "" }))
     || geometry.zoneRects?.get(motionLocationKey({ ...location, playerId: "" }, { includeLocation: false }))
     || null;
-  return preferZone ? zoneRect || cardRect : cardRect || zoneRect;
+  const preferredRect = zone === "chain"
+    ? cardRect || anchorRect || zoneRect
+    : preferAnchor
+      ? anchorRect || cardRect || zoneRect
+      : cardRect || anchorRect || zoneRect;
+  return tabletopCardSurfaceRect(preferredRect);
 }
 
 function tabletopMotionReduced() {
@@ -749,25 +821,11 @@ function presentationMotionDuration(duration) {
   return tabletopMotionReduced() ? Math.min(40, Math.max(1, Number(duration) || 1)) : duration;
 }
 
-function tabletopTransferArc(kind, distance) {
-  const base = Math.min(120, Math.max(24, distance * 0.2));
-  if (kind === "play") return Math.max(72, base);
-  if (kind === "flow" || kind === "banish") return Math.max(58, base * 0.8);
-  if (kind === "draw") return Math.max(46, base * 0.7);
-  if (kind === "move") return Math.max(36, base * 0.55);
-  if (kind === "burn" || kind === "defeat") return Math.max(24, base * 0.36);
-  return Math.max(28, base * 0.45);
-}
-
 function tabletopTransferRotations(transfer) {
-  const sourceExhausted = Boolean(transfer?.from?.exhausted);
-  const destinationExhausted = Boolean(transfer?.to?.exhausted);
-  if (["burn", "discard", "defeat", "resolve"].includes(transfer.kind)) {
-    return { start: sourceExhausted ? 90 : 0, end: transfer.kind === "burn" ? 16 : 0 };
-  }
-  if (transfer.kind === "flow" || transfer.kind === "banish") return { start: sourceExhausted ? 90 : 0, end: -8 };
-  if (transfer.kind === "draw") return { start: -5, end: 0 };
-  return { start: sourceExhausted ? 90 : 0, end: destinationExhausted ? 90 : 0 };
+  return {
+    start: transfer?.from?.exhausted ? 90 : 0,
+    end: transfer?.to?.exhausted ? 90 : 0
+  };
 }
 
 function createTabletopFlight(transfer, start) {
@@ -778,6 +836,7 @@ function createTabletopFlight(transfer, start) {
   flight.style.top = `${start.top}px`;
   flight.style.width = `${start.width}px`;
   flight.style.height = `${start.height}px`;
+  flight.style.aspectRatio = String(TABLETOP_CARD_ASPECT_RATIO);
   if (transfer.faceVisible && transfer.image) {
     const image = document.createElement("img");
     image.src = transfer.image;
@@ -798,7 +857,7 @@ function createTabletopFlight(transfer, start) {
 }
 
 function runTabletopTransferAnimations(transfers, previousGeometry) {
-  if (!Array.isArray(transfers) || !transfers.length || !app.querySelector(".tabletop-layout")) return;
+  if (!Array.isArray(transfers) || !transfers.length || !app?.querySelector?.(".tabletop-layout")) return;
   const currentGeometry = captureTabletopGeometry();
   const reduced = tabletopMotionReduced();
   let drawIndex = 0;
@@ -813,18 +872,29 @@ function runTabletopTransferAnimations(transfers, previousGeometry) {
     const dy = (end.top + end.height / 2) - (start.top + start.height / 2);
     const distance = Math.hypot(dx, dy);
     if (distance < 3 && Math.abs(end.width - start.width) < 2 && Math.abs(end.height - start.height) < 2) continue;
-    const destinationCardId = transfer.toCardId || transfer.id;
-    const destinationCardNode = [...app.querySelectorAll("[data-card-id]")]
-      .find((node) => node.dataset.cardId === destinationCardId && tabletopCardNodePriority(node) >= 0 && tabletopRect(node));
-    const destinationZoneNode = [...app.querySelectorAll("[data-zone]")].find((node) => {
-      if (node.closest(".tabletop-overlay-root") || normalizedDomZone(node.dataset.zone) !== transfer.to.zone) return false;
-      const seatId = node.dataset.playerId || node.closest("[data-player-id]")?.dataset.playerId || "";
-      return !transfer.to.playerId || !seatId || seatId === transfer.to.playerId;
-    });
-    const destinationNode = destinationCardNode || destinationZoneNode || null;
+    const destinationCardId = String(transfer?.toCardId || transfer?.id || "");
+    const destinationCardNode = destinationCardId ? [...app.querySelectorAll("[data-card-id]")]
+      .filter((node) => String(node.dataset.cardId || "") === destinationCardId
+        && tabletopCardNodePriority(node) >= 0
+        && tabletopRect(node))
+      .sort((left, right) => tabletopCardNodePriority(right) - tabletopCardNodePriority(left))[0] || null : null;
+    const destinationAnchors = [...app.querySelectorAll("[data-motion-anchor]")]
+      .filter((node) => !node.closest(".tabletop-overlay-root") && tabletopRect(node));
+    const destinationAnchorNode = (destinationCardId
+      ? destinationAnchors.find((node) => String(node.dataset.motionCardId || "") === destinationCardId)
+      : null)
+      || destinationAnchors.find((node) => tabletopNodeMatchesLocation(node, transfer?.to))
+      || null;
+    const destinationZoneNode = [...app.querySelectorAll("[data-zone]")]
+      .find((node) => !node.closest(".tabletop-overlay-root")
+        && tabletopRect(node)
+        && tabletopNodeMatchesLocation(node, transfer?.to))
+      || null;
+    const destinationVisualNode = destinationAnchorNode || destinationCardNode;
+    const destinationNode = destinationVisualNode || destinationZoneNode;
     const delay = transfer.kind === "draw" ? drawIndex++ * TABLETOP_DRAW_STAGGER_MS : 0;
     const revealDestination = () => {
-      destinationCardNode?.classList.remove("tabletop-transfer-pending");
+      destinationVisualNode?.classList.remove("tabletop-transfer-pending");
       if (!destinationNode) return;
       destinationNode.classList.add("tabletop-transfer-arrival", `arrival-${transfer.kind}`);
       window.setTimeout(() => destinationNode.classList.remove("tabletop-transfer-arrival", `arrival-${transfer.kind}`), 360);
@@ -833,7 +903,7 @@ function runTabletopTransferAnimations(transfers, previousGeometry) {
       revealDestination();
       continue;
     }
-    destinationCardNode?.classList.add("tabletop-transfer-pending");
+    destinationVisualNode?.classList.add("tabletop-transfer-pending");
 
     if (!layer) {
       layer = document.createElement("div");
@@ -842,25 +912,16 @@ function runTabletopTransferAnimations(transfers, previousGeometry) {
     }
     const flight = createTabletopFlight(transfer, start);
     layer.appendChild(flight);
-    const scaleX = Math.max(0.18, end.width / Math.max(1, start.width));
-    const scaleY = Math.max(0.18, end.height / Math.max(1, start.height));
-    const arc = tabletopTransferArc(transfer.kind, distance);
+    const scale = Math.min(4, Math.max(0.18, end.width / Math.max(1, start.width)));
     const rotations = tabletopTransferRotations(transfer);
-    const middleScaleX = 1 + (scaleX - 1) * 0.55;
-    const middleScaleY = 1 + (scaleY - 1) * 0.55;
     const fadeEnd = ["burn", "discard", "defeat", "resolve", "flow", "banish", "recycle"].includes(transfer.kind) ? 0.2 : 0.94;
     const animation = flight.animate([
       {
-        transform: `translate3d(0,0,0) scale(1,1) rotate(${rotations.start}deg)`,
+        transform: `translate3d(0,0,0) scale(1) rotate(${rotations.start}deg)`,
         opacity: 0.96
       },
       {
-        offset: 0.58,
-        transform: `translate3d(${dx * 0.58}px,${dy * 0.58 - arc}px,0) scale(${middleScaleX},${middleScaleY}) rotate(${rotations.start + (rotations.end - rotations.start) * 0.58}deg)`,
-        opacity: 1
-      },
-      {
-        transform: `translate3d(${dx}px,${dy}px,0) scale(${scaleX},${scaleY}) rotate(${rotations.end}deg)`,
+        transform: `translate3d(${dx}px,${dy}px,0) scale(${scale}) rotate(${rotations.end}deg)`,
         opacity: fadeEnd
       }
     ], {
@@ -875,7 +936,7 @@ function runTabletopTransferAnimations(transfers, previousGeometry) {
       cleaned = true;
       flight.remove();
       if (arrive) revealDestination();
-      else destinationCardNode?.classList.remove("tabletop-transfer-pending");
+      else destinationVisualNode?.classList.remove("tabletop-transfer-pending");
       if (layer && !layer.childElementCount) layer.remove();
     };
     animation.addEventListener("finish", () => cleanup(true), { once: true });
@@ -3782,8 +3843,6 @@ function setUiSelectedCard(cardId) {
   selectCard(game, cardId);
   if (game.selectedCardId !== before || game.selectedCardId === cardId) {
     if (isOnlineGame()) onlineSelectedCardId = game.selectedCardId;
-    closeTabletopSheets("inspector");
-    inspectorOpen = true;
   }
 }
 
@@ -6615,43 +6674,6 @@ function isVisibleSelectableCard(cardId) {
   return Boolean(card && !card.redacted && cardVisibleToCurrentViewer(cardId));
 }
 
-function showdownPanel() {
-  const showdown = game.showdown;
-  const field = game.battlefields.find((candidate) => candidate.instanceId === showdown.battlefieldId);
-  const chain = [...(showdown.chain || [])].filter(chainItemVisibleInTree).reverse();
-  return `
-    <section class="showdown-panel">
-      <div class="section-head">
-        <div>
-          <h2>${t("showdown", locale())}: ${field ? battlefieldName(field) : t("battlefield", locale())}</h2>
-          <span>${chain.length ? t("resolveChainFirst", locale()) : t("passToFight", locale())}</span>
-        </div>
-        <button class="primary" data-action="pass-showdown" ${viewerCanAct() ? "" : "disabled"}>${t("pass", locale())}</button>
-      </div>
-      <div class="chain-row">
-        ${chain.map((item, index) => chainCard(item, index)).join("") || `<p class="empty">${t("chainEmpty", locale())}</p>`}
-      </div>
-    </section>
-  `;
-}
-
-function chainCard(item, index) {
-  const player = game.players.find((candidate) => candidate.id === item?.playerId);
-  const card = item?.card || findVisibleCard(item?.trigger?.sourceCardId);
-  const cardId = card?.instanceId || "";
-  const motionClass = cardId && uiMotion.chained.has(cardId)
-    ? (hasKeyword(card, "Ambush") ? "ambush-chain" : (card.tags?.includes("Reaction") ? "reaction-chain" : "chain-enter"))
-    : "";
-  const itemId = item?.id || `${cardId || "chain"}-${index}`;
-  return `
-    <button type="button" class="chain-card ${motionClass} ${inspectedChainItemId === itemId ? "is-inspected" : ""}" data-action="inspect-chain-effect" data-chain-item-id="${escapeHtml(itemId)}" data-card-id="${cardId}" title="${t("target", locale())}">
-      <strong>${t(index === 0 ? "next" : "queued", locale())}</strong>
-      <span>${chainItemTitle(item)}</span>
-      <small>${player ? playerName(player) : ""} / ${localizedDynamicText(t(item?.status || "finalized", locale()))}</small>
-    </button>
-  `;
-}
-
 function chainZonePanel() {
   const counteredItems = [...effectAnimations.countered.values()];
   const items = currentChainTreeItems();
@@ -6676,7 +6698,7 @@ function chainZonePanel() {
       </div>
       <div id="chain-zone-content" class="chain-zone-content" data-scroll-key="chain-zone-content" ${chainZoneCollapsed ? "hidden" : ""}>
         <div class="chain-stack" data-scroll-key="chain-stack">
-          ${counteredItems.map(counteredChainZoneItem).join("")}${items.map((item, index) => chainZoneItem(item, items.length - index)).join("") || `<p class="empty">${t("noChainItem", locale())}</p>`}
+          ${counteredItems.map(counteredChainZoneItem).join("")}${items.map((item, index) => chainZoneItem(item, items.length - index, { active: index === 0 })).join("") || `<p class="empty">${t("noChainItem", locale())}</p>`}
         </div>
         ${inspectedChainTargetPanel(items, responding)}
       </div>
@@ -6685,9 +6707,9 @@ function chainZonePanel() {
 }
 
 function currentChainTreeItems() {
-  const chain = game.actionChain || game.showdown;
+  const chain = game?.actionChain || game?.showdown;
   const chainItems = chain ? [...normalizeUiChain(Array.isArray(chain.chain) ? chain.chain : [])].reverse() : [];
-  const activeTriggerChoice = game.pendingChoice?.data?.triggerId && decisionVisibleToViewer(game.pendingChoice)
+  const activeTriggerChoice = game?.pendingChoice?.data?.triggerId && decisionVisibleToViewer(game.pendingChoice)
     ? game.pendingChoice
     : null;
   const triggerItems = [
@@ -6703,16 +6725,32 @@ function currentChainTreeItems() {
       },
       status: "resolving"
     }] : []),
-    ...(Array.isArray(game.triggerQueue) ? game.triggerQueue : []).filter(Boolean).map((trigger, index) => ({
+    ...(Array.isArray(game?.triggerQueue) ? game.triggerQueue : []).filter(Boolean).map((trigger, index) => ({
       id: trigger.id || `queued-trigger-${index}`,
       itemType: "trigger",
       playerId: trigger.playerId,
-      card: findVisibleCard(trigger.sourceCardId),
+      card: findVisibleCard(trigger.sourceCardId) || triggerSnapshotCard(trigger),
       trigger,
       status: trigger.status || "pending"
     }))
   ];
   return [...chainItems, ...triggerItems];
+}
+
+function triggerSnapshotCard(trigger) {
+  const snapshot = trigger?.sourceCardSnapshot;
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot) || snapshot.redacted) return null;
+  return snapshot;
+}
+
+function chainItemSourceCard(item) {
+  if (!item || typeof item !== "object") return null;
+  const live = item?.trigger?.sourceCardId ? findVisibleCard(item.trigger.sourceCardId) : null;
+  if (live && !live.redacted) return live;
+  const snapshot = triggerSnapshotCard(item.trigger);
+  if (item?.itemType === "trigger" && snapshot) return snapshot;
+  if (item?.card && typeof item.card === "object" && !item.card.redacted) return item.card;
+  return snapshot;
 }
 
 function syncInspectedChainTargets() {
@@ -6735,7 +6773,8 @@ function inspectedChainTargetPanel(items, responding) {
     : null;
   if (!item && !responding) return "";
   const targets = item ? chainItemTargetIds(item) : [];
-  const sourceCardId = item?.card?.instanceId || item?.trigger?.sourceCardId || "";
+  const sourceCard = chainItemSourceCard(item);
+  const sourceCardId = sourceCard?.instanceId || item?.trigger?.sourceCardId || "";
   return `
     <aside class="chain-context-panel ${item ? "showing-targets" : ""}" aria-live="polite">
       ${item ? `
@@ -6801,35 +6840,75 @@ function chainItemVisibleInTree(item) {
   return chainItemVisibleToViewer(item, viewerPlayerId());
 }
 
-function chainZoneItem(item, order) {
-  const player = game.players.find((candidate) => candidate.id === item.playerId);
-  const targets = chainItemTargetIds(item).map(targetLabel).filter(Boolean);
+function chainZoneItem(item = {}, order = 0, { active = false } = {}) {
+  const playerId = String(item?.playerId || "");
+  const player = (Array.isArray(game?.players) ? game.players : []).find((candidate) => candidate?.id === item?.playerId);
+  const targets = chainItemTargetIds(item).map(targetLabel).filter(Boolean).map(escapeHtml);
   const source = chainItemSourceTitle(item);
   const effectText = chainItemEffectText(item);
-  const previewCardId = item.card?.instanceId || item.trigger?.sourceCardId || "";
+  const previewCard = chainItemSourceCard(item);
+  const previewCardId = String(previewCard?.instanceId || item?.trigger?.sourceCardId || "");
+  const snapshotPreview = previewCard === triggerSnapshotCard(item?.trigger);
+  const previewVisible = Boolean(previewCard?.image
+    && !previewCard.redacted
+    && (snapshotPreview || cardVisibleToCurrentViewer(previewCardId)));
+  const itemId = String(item?.id || `${previewCardId || "chain"}-${order}`);
+  const status = String(item?.status || "pending");
+  const statusClass = status.replace(/[^a-z0-9_-]/gi, "").toLowerCase() || "pending";
   const itemClass = [
     "chain-zone-item",
-    uiMotion.chained.has(item.card?.instanceId) ? "chain-zone-new" : "",
-    inspectedChainItemId === item.id ? "is-inspected" : "",
-    item.status ? `status-${item.status}` : ""
+    active ? "chain-zone-active" : "chain-zone-queued",
+    inspectedChainItemId === itemId ? "is-inspected" : "",
+    `status-${statusClass}`
   ].filter(Boolean).join(" ");
+  const effectMarkup = effectText.summary || effectText.detail
+    ? active
+      ? `<p class="chain-active-effect-text">${effectText.summary ? `<strong class="chain-selected-ability">${escapeHtml(effectText.summary)}</strong>${effectText.detail ? "<br />" : ""}` : ""}${effectText.detail ? `<span>${escapeHtml(effectText.detail)}</span>` : ""}</p>`
+      : `<p class="chain-zone-effect">${effectText.summary ? `<strong class="chain-selected-ability">${escapeHtml(effectText.summary)}</strong>${effectText.detail ? "<br />" : ""}` : ""}${effectText.detail ? `<span>${escapeHtml(effectText.detail)}</span>` : ""}</p>`
+    : "";
   return `
-    <button type="button" class="${itemClass}" data-action="inspect-chain-effect" data-chain-item-id="${escapeHtml(item.id)}" data-card-id="${previewCardId}" title="${t("target", locale())}">
-      <b>[${order}] ${playerPerspectiveLabel(item.playerId)}</b>
-      <strong>${chainItemTitle(item)}</strong>
-      <span>${t("source", locale())}: ${source}</span>
-      ${targets.length ? `<small>${t("target", locale())}: ${targets.join(", ")}</small>` : ""}
-      ${effectText ? `<p class="chain-zone-effect">${escapeHtml(effectText)}</p>` : ""}
-      <em>${localizedDynamicText(t(item.status || "pending", locale()))}</em>
+    <button type="button" class="${itemClass}" data-action="inspect-chain-effect" data-chain-item-id="${escapeHtml(itemId)}" data-card-id="${escapeHtml(previewCardId)}" title="${escapeHtml(t("target", locale()))}">
+      <span class="chain-card-motion-anchor" data-motion-anchor data-motion-zone="chain" data-motion-player-id="${escapeHtml(playerId)}" data-motion-card-id="${escapeHtml(previewCardId)}" aria-hidden="true">
+        ${previewVisible ? `<img class="chain-card-motion-art" src="${escapeHtml(previewCard.image)}" alt="" width="42" height="59" loading="lazy" />` : `<i class="chain-card-motion-back">R</i>`}
+      </span>
+      <span class="chain-zone-copy">
+        <span class="chain-zone-meta"><b>[${escapeHtml(order)}] ${escapeHtml(playerPerspectiveLabel(player?.id || playerId))}</b><em>${escapeHtml(localizedDynamicText(t(status, locale())))}</em></span>
+        <strong>${escapeHtml(chainItemTitle(item))}</strong>
+        <span class="chain-zone-source">${escapeHtml(t("source", locale()))}: ${escapeHtml(source)}</span>
+        <span class="chain-zone-target">${escapeHtml(t("target", locale()))}: ${targets.length ? targets.join(", ") : escapeHtml(t("noTargetDeclared", locale()))}</span>
+        ${effectMarkup}
+      </span>
     </button>
   `;
 }
 
 function chainItemEffectText(item) {
-  const source = item?.itemType === "trigger"
-    ? findVisibleCard(item.trigger?.sourceCardId) || item.card
-    : item?.card;
-  return source ? cardText(source) : (triggerKindLabel(item?.trigger) || "");
+  const source = chainItemSourceCard(item);
+  const detail = source ? cardText(source) : (triggerKindLabel(item?.trigger) || "");
+  if (item?.itemType !== "activated") return { summary: "", detail };
+  const labels = [...new Set((Array.isArray(item.specs) ? item.specs : [])
+    .filter((spec) => spec && typeof spec === "object")
+    .map((spec) => activatedChainSpecLabel(spec))
+    .filter(Boolean))];
+  const summary = labels.length
+    ? `${t("ability", locale())}: ${labels.join(" · ")}`
+    : t("ability", locale());
+  return { summary, detail };
+}
+
+function activatedChainSpecLabel(spec) {
+  const abilityId = typeof spec?.abilityId === "string" ? spec.abilityId.trim() : "";
+  const kind = typeof spec?.kind === "string" ? spec.kind.trim() : "";
+  const identifier = abilityId && !/^(?:ability|effect)-\d+$/i.test(abilityId) ? abilityId : kind || abilityId;
+  if (!identifier) return "";
+  const readable = identifier
+    .split(":").at(-1)
+    .replace(/[_-]+/g, " ")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^./, (character) => character.toUpperCase());
+  return localizedDynamicText(readable, { fallback: readable });
 }
 
 function realtimeFeedbackOverlay() {
@@ -6858,18 +6937,19 @@ function responsePromptInfo() {
   return {
     title: `${playerPerspectiveLabel(latest.playerId)} ${t(latest.itemType === "activated" ? "activatedVerb" : latest.itemType === "trigger" ? "triggeredVerb" : "playedVerb", locale())} ${chainItemTitle(latest)}`,
     detail: targets.length ? `${t("target", locale())}: ${targets.join(", ")}` : t("noTargetDeclared", locale()),
-    cardId: latest.card?.instanceId
+    cardId: chainItemSourceCard(latest)?.instanceId
   };
 }
 
 function responsePrompt(info) {
+  const passState = passControlState();
   return `
     <div class="response-prompt">
-      <strong>${info.title}</strong>
-      <span>${info.detail}</span>
+      <strong>${escapeHtml(info?.title || t("responseWindow", locale()))}</strong>
+      <span>${escapeHtml(info?.detail || t("responseHint", locale()))}</span>
+      ${passState ? `<small class="chain-pass-progress">${escapeHtml(passState.progressText)}</small>` : ""}
       <div class="actions inline">
         <button class="primary" data-action="toggle-hand">${handOpen ? t("hideHand", locale()) : t("playReaction", locale())}</button>
-        <button data-action="pass-showdown">${t("pass", locale())}</button>
       </div>
     </div>
   `;
@@ -6877,7 +6957,8 @@ function responsePrompt(info) {
 
 function chainItemTitle(item) {
   if (!item) return t("effect", locale());
-  if (item.itemType === "trigger") return item.card ? cardName(item.card) : (item.trigger?.label || triggerLabel(item.trigger) || t("triggeredAbility", locale()));
+  const source = chainItemSourceCard(item);
+  if (item.itemType === "trigger") return source ? cardName(source) : (item.trigger?.label || triggerLabel(item.trigger) || t("triggeredAbility", locale()));
   if (item.itemType === "activated") return `${item.card ? cardName(item.card) : t("selectedCard", locale())} ${t("ability", locale())}`;
   return item.card ? cardName(item.card) : t("selectedCard", locale());
 }
@@ -6885,7 +6966,7 @@ function chainItemTitle(item) {
 function chainItemSourceTitle(item) {
   if (!item) return t("effect", locale());
   if (item.itemType === "trigger") {
-    const source = findVisibleCard(item.trigger?.sourceCardId);
+    const source = chainItemSourceCard(item);
     return source ? cardName(source) : (triggerKindLabel(item.trigger) || t("triggeredAbility", locale()));
   }
   return item.card ? cardName(item.card) : t("effect", locale());
@@ -7239,7 +7320,7 @@ function tableCardPile({ zone, player, cards, label, action = "", title = "", ca
     : ({ "main-deck": "Deck", "rune-deck": "Rune", trash: "Trash", banished: "Banish" }[zone] || label);
   return `
     <${tag} class="table-card-pile pile-${zone} ${cardBack ? "face-down" : "face-up"} ${compact ? "compact" : ""}" data-zone="${zone}" data-count="${list.length}" data-effect="${effect}" ${actionAttributes} ${titleAttribute} aria-label="${escapeHtml(`${label} ${list.length}`)}">
-      <span class="pile-cards" aria-hidden="true">
+      <span class="pile-cards" data-motion-anchor data-motion-zone="${escapeHtml(zone)}" data-motion-player-id="${escapeHtml(playerId)}" aria-hidden="true">
         <i></i><i></i>
         ${top?.image ? `<img src="${escapeHtml(top.image)}" alt="" loading="lazy" />` : `<b>${cardBack ? "R" : zone === "banished" ? "◇" : "—"}</b>`}
       </span>
@@ -7734,10 +7815,11 @@ function unitMightCue(card) {
 }
 
 function primaryCardStateBadges(card) {
-  const states = [];
-  if (card?.exhausted) states.push(t("exhausted", locale()));
-  if (card?.stunned) states.push(t("stunned", locale()));
-  if (!states.length) states.push(t("readyState", locale()));
+  const korean = locale() === LOCALES.KO;
+  const states = [card?.exhausted
+    ? (korean ? "탈진" : t("exhausted", locale()))
+    : (korean ? "준비" : t("readyState", locale()))];
+  if (card?.stunned) states.push(korean ? "기절" : t("stunned", locale()));
   return states.map((state) => `<em class="primary-card-state">${escapeHtml(state)}</em>`).join("");
 }
 
@@ -7786,7 +7868,7 @@ function baseToken(card, location, owner, motion, attachments, flashed) {
         <b>${mainBadge}</b>
         ${primaryCardStateBadges(card)}
         ${card.damage ? `<em>${card.damage} ${t("damageShort", locale())}</em>` : ""}
-        ${attachments.length ? `<em>${attachments.length} ${t("attachedGear", locale())}</em>` : ""}
+        ${attachments.length ? `<em>${locale() === LOCALES.KO ? `도구 ${attachments.length}` : `Gear ${attachments.length}`}</em>` : ""}
         ${cardStatusBadges(card)}
       </div>
       ${ownerChip(owner, card.ownerId)}
@@ -7926,12 +8008,9 @@ function chainTargetClass(cardId) {
   return cardId && inspectedChainTargetIds.has(cardId) ? "chain-effect-target" : "";
 }
 
-function motionCardClass(card, zone) {
-  if (!card) return "";
-  if (zone === "hand" && uiMotion.drawn.has(card.instanceId)) return "draw-enter";
-  if (zone === "board" && uiMotion.entered.has(card.instanceId)) {
-    return hasKeyword(card, "Ambush") ? "ambush-enter" : "board-enter";
-  }
+function motionCardClass() {
+  // Geometry-based flights own position and scale changes. Re-applying legacy
+  // entry transforms here makes the destination card animate a second time.
   return "";
 }
 
@@ -7971,10 +8050,71 @@ function moveButtons(card) {
   return buttons.join("");
 }
 
+function passParticipantIds(chain, { actionChain = false } = {}) {
+  if (!chain || typeof chain !== "object") return [];
+  const declared = actionChain
+    ? (Array.isArray(chain.playerIds) && chain.playerIds.length ? chain.playerIds : [chain.turnPlayerId])
+    : [chain.attackerId, chain.defenderId];
+  const ids = [...new Set(declared.map((id) => String(id || "")).filter(Boolean))];
+  if (ids.length) return ids;
+  return [...new Set((Array.isArray(game?.players) ? game.players : [])
+    .map((candidate) => String(candidate?.id || ""))
+    .filter(Boolean))];
+}
+
+function passControlState() {
+  const actionChain = game?.actionChain || null;
+  const showdown = game?.phase === "showdown" ? game?.showdown || null : null;
+  const chain = actionChain || showdown;
+  if (!chain) return null;
+  const isActionChain = Boolean(actionChain);
+  const items = Array.isArray(chain.chain) ? chain.chain.filter(Boolean) : [];
+  const required = Math.max(1, passParticipantIds(chain, { actionChain: isActionChain }).length);
+  const rawPassed = Number(chain.consecutivePasses);
+  const passed = Math.min(required, Math.max(0, Number.isFinite(rawPassed) ? Math.trunc(rawPassed) : 0));
+  const completesCycle = passed + 1 >= required;
+  const korean = locale() === LOCALES.KO;
+  let label = korean ? "우선권 넘기기" : "Pass Priority";
+
+  if (items.length) {
+    label = completesCycle
+      ? (korean ? "패스 · 효과 해결" : "Pass & Resolve")
+      : (korean ? "체인 패스" : "Pass Chain");
+  } else if (isActionChain) {
+    label = completesCycle
+      ? (korean ? "반응 창 종료" : "Close Response")
+      : (korean ? "반응 패스" : "Pass Response");
+  } else {
+    label = completesCycle
+      ? chain.combat === false
+        ? (korean ? "결전 종료 · 진행" : "End · Continue")
+        : (korean ? "결전 종료 · 전투" : "End · Combat")
+      : (korean ? "포커스 패스" : "Pass Focus");
+  }
+
+  const progressText = korean
+    ? `패스 ${passed}/${required}${items.length ? ` · 효과 ${items.length}` : ""}`
+    : `Pass ${passed}/${required}${items.length ? ` · ${items.length} effect${items.length === 1 ? "" : "s"}` : ""}`;
+  return { label, progressText, passed, required, completesCycle, itemCount: items.length };
+}
+
+function passControlButton({ disabled = false } = {}) {
+  const state = passControlState();
+  if (!state) return "";
+  const inaccessible = Boolean(disabled || game?.pendingChoice || game?.pendingPayment || !viewerCanAct());
+  const accessibleLabel = `${state.label} · ${state.progressText}`;
+  return `
+    <button type="button" class="primary pass-control" data-action="pass-showdown" ${inaccessible ? "disabled" : ""} aria-label="${escapeHtml(accessibleLabel)}" title="${escapeHtml(accessibleLabel)}">
+      <span>${escapeHtml(state.label)}</span>
+      <small>${escapeHtml(state.progressText)}</small>
+    </button>
+  `;
+}
+
 function actionBar(player, card) {
   if (game.phase === "first-player" || game.phase === "champion-select" || game.phase === "battlefield-select" || game.phase === "mulligan") return "";
-  const disabled = game.pendingPayment || game.pendingChoice;
-  const cardCount = player.hand.length;
+  const disabled = Boolean(game?.pendingPayment || game?.pendingChoice);
+  const cardCount = Array.isArray(player?.hand) ? player.hand.length : 0;
   const showdown = game.phase === "showdown" ? showdownBarSummary() : null;
   const actionChain = game.actionChain ? actionChainBarSummary() : null;
   const chainSummary = showdown || actionChain;
@@ -7991,13 +8131,13 @@ function actionBar(player, card) {
           <span>${waiting ? t("waitingForOpponent", locale()) : rejection?.detail || responseInfo?.detail || chainSummary?.detail || (disabled ? t("finishDialog", locale()) : t("selectCardHint", locale()))}</span>
         </div>
         <div class="actions inline action-command-list" data-scroll-key="action-${escapeHtml(card?.instanceId || "global")}">
-          ${waiting ? `<button disabled>${t("noAction", locale())}</button>` : responseInfo ? `<button class="primary" data-action="toggle-hand">${handOpen ? t("hideHand", locale()) : t("playReaction", locale())}</button><button data-action="pass-showdown">${t("pass", locale())}</button>` : quickActions.join("") || `<button disabled>${t("noAction", locale())}</button>`}
+          ${waiting ? `<button disabled>${t("noAction", locale())}</button>` : responseInfo ? `<button class="primary" data-action="toggle-hand">${handOpen ? t("hideHand", locale()) : t("playReaction", locale())}</button>` : quickActions.join("") || `<button disabled>${t("noAction", locale())}</button>`}
         </div>
         <div class="bar-controls table-action-rail">
           <button data-action="toggle-inspector" ${card ? "" : "disabled"}>${t("cardInfo", locale())}</button>
           <button class="primary" data-action="toggle-hand">${handOpen ? t("hideHand", locale()) : `${t("hand", locale())} ${cardCount}`}</button>
           ${chainSummary
-            ? `<button class="primary" data-action="pass-showdown" ${waiting ? "disabled" : ""}>${t("pass", locale())}</button>`
+            ? passControlButton({ disabled: waiting || disabled })
             : `<button data-action="end-turn" ${game.phase !== "action" || waiting || disabled ? "disabled" : ""}>${t("endTurn", locale())}</button>`}
         </div>
       </section>
@@ -8019,7 +8159,7 @@ function actionBar(player, card) {
         <button data-action="toggle-inspector">${t("cardInfo", locale())}</button>
         <button class="primary" data-action="toggle-hand">${handOpen ? t("hideHand", locale()) : `${t("hand", locale())} ${cardCount}`}</button>
         ${chainSummary
-          ? `<button class="primary" data-action="pass-showdown" ${!viewerCanAct() ? "disabled" : ""}>${t("pass", locale())}</button>`
+          ? passControlButton({ disabled })
           : `<button data-action="end-turn" ${game.phase !== "action" || !viewerCanAct() ? "disabled" : ""}>${t("endTurn", locale())}</button>`}
       </div>
     </section>
@@ -8043,9 +8183,10 @@ function globalActionButtons(player, selectedCard = null) {
 }
 
 function showdownBarSummary() {
-  if (game.phase !== "showdown" || !game.showdown) return null;
-  const field = game.battlefields.find((candidate) => candidate.instanceId === game.showdown.battlefieldId);
-  const chainCount = game.showdown.chain.length;
+  if (game?.phase !== "showdown" || !game?.showdown) return null;
+  const field = (Array.isArray(game.battlefields) ? game.battlefields : [])
+    .find((candidate) => candidate?.instanceId === game.showdown.battlefieldId);
+  const chainCount = Array.isArray(game.showdown.chain) ? game.showdown.chain.filter(Boolean).length : 0;
   return {
     label: t("showdown", locale()),
     title: `${t("showdown", locale())}: ${field ? battlefieldName(field) : t("battlefield", locale())}`,
@@ -8054,7 +8195,7 @@ function showdownBarSummary() {
 }
 
 function actionChainBarSummary() {
-  const chainCount = game.actionChain?.chain.length || 0;
+  const chainCount = Array.isArray(game?.actionChain?.chain) ? game.actionChain.chain.filter(Boolean).length : 0;
   return {
     label: t("chain", locale()),
     title: t("responseWindow", locale()),
@@ -8722,7 +8863,12 @@ app.addEventListener("click", (event) => {
       fullCardOpen = Boolean(fullCardPreviewCard);
     }
     if (action === "view-chain-card") {
-      fullCardPreviewCard = findVisibleCard(button.dataset.cardId);
+      const previewId = String(button.dataset.cardId || "");
+      const snapshotItem = currentChainTreeItems().find((item) => {
+        const source = chainItemSourceCard(item);
+        return source?.instanceId === previewId || item?.trigger?.sourceCardId === previewId;
+      });
+      fullCardPreviewCard = findVisibleCard(previewId) || chainItemSourceCard(snapshotItem);
       fullCardOpen = Boolean(fullCardPreviewCard);
     }
     if (action === "close-full-card") {

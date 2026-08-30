@@ -357,7 +357,10 @@ function expectFaceUpFlight(result, kind) {
   expect(result.flight.animation).not.toBeNull();
   expect(result.flight.animation.duration).toBe(280);
   expect(String(result.flight.animation.easing).replaceAll(" ", "")).toBe("cubic-bezier(0.22,0.9,0.2,1)");
-  expect(result.flight.animation.keyframes).toHaveLength(3);
+  expect(result.flight.animation.keyframes).toHaveLength(2);
+  for (const keyframe of result.flight.animation.keyframes) {
+    expect(keyframe.transform).not.toMatch(/scale\([^)]*,[^)]*\)/u);
+  }
   expect(result.flight.animation.keyframes.at(-1).transform).toMatch(/translate3d\((?!0(?:px)?,\s*0(?:px)?)/u);
   expect(result.destination).not.toBeNull();
   expect(result.badText).toBe(false);

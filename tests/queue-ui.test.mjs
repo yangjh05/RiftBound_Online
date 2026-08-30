@@ -5,10 +5,13 @@ import { readFile } from "node:fs/promises";
 const appSource = await readFile(new URL("../src/app.mjs", import.meta.url), "utf8");
 const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
 
-test("processing queue renders localized effect text directly in each item", () => {
+test("processing queue renders the exact activated ability before the full localized card text", () => {
   assert.match(appSource, /class="chain-zone-effect"/);
   assert.match(appSource, /function chainItemEffectText\(item\)/);
-  assert.match(appSource, /return source \? cardText\(source\)/);
+  assert.match(appSource, /item\?\.itemType !== "activated"/);
+  assert.match(appSource, /Array\.isArray\(item\.specs\)/);
+  assert.match(appSource, /function activatedChainSpecLabel\(spec\)/);
+  assert.match(appSource, /class="chain-selected-ability"/);
 });
 
 test("processing queue items wrap readable text instead of forcing one-line ellipsis", () => {
@@ -23,10 +26,12 @@ test("Pending hand plays are visible only to their player until Finalize", () =>
   assert.match(appSource, /item\?\.destination/);
 });
 
-test("private opponent resolutions do not render response controls", () => {
+test("private opponent resolutions never expose an enabled duplicate response control", () => {
   assert.match(appSource, /function responsePromptInfo\(\)/);
   assert.match(appSource, /!viewerCanAct\(\)/);
-  assert.match(appSource, /data-action="pass-showdown" \$\{viewerCanAct\(\) \? "" : "disabled"\}/);
+  assert.match(appSource, /function passControlButton\(\{ disabled = false \} = \{\}\)/);
+  assert.match(appSource, /game\?\.pendingChoice \|\| game\?\.pendingPayment \|\| !viewerCanAct\(\)/);
+  assert.equal((appSource.match(/data-action="pass-showdown"/g) || []).length, 1);
 });
 
 test("repeated damage choices display their progress and whether targets can repeat", () => {

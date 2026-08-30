@@ -56,8 +56,8 @@ test("same-location exhausted changes become explicit exhaust and ready state tr
   const current = new Map([["unit-a", spent]]);
   assert.deepEqual(buildTabletopTransfers(previous, current).map((transfer) => transfer.kind), ["exhaust"]);
   assert.deepEqual(tabletopStateMotionKeyframes(buildTabletopTransfers(previous, current)[0]), [
-    { transform: "rotate(0deg) scale(1)" },
-    { transform: "rotate(90deg) scale(0.76)" }
+    { transform: "rotate(0deg)" },
+    { transform: "rotate(90deg)" }
   ]);
 });
 
@@ -128,10 +128,10 @@ test("state motion targets card, rune, and attachment orientation layers and cle
   assert.equal(runs.length, 4);
   assert.equal(cardLayer.calls[0].options.duration, TABLETOP_STATE_MOTION_DURATION_MS);
   assert.equal(cardLayer.calls[0].options.easing, TABLETOP_STATE_MOTION_EASING);
-  assert.equal(cardLayer.calls[0].keyframes.at(-1).transform, "rotate(90deg) scale(0.76)");
-  assert.equal(identityLayer.calls[0].keyframes.at(-1).transform, "rotate(90deg) scale(0.76)");
-  assert.equal(runeLayer.calls[0].keyframes.at(-1).transform, "rotate(0deg) scale(1)");
-  assert.equal(attachmentLayer.calls[0].keyframes.at(-1).transform, "rotate(90deg) scale(0.68)");
+  assert.equal(cardLayer.calls[0].keyframes.at(-1).transform, "rotate(90deg)");
+  assert.equal(identityLayer.calls[0].keyframes.at(-1).transform, "rotate(90deg)");
+  assert.equal(runeLayer.calls[0].keyframes.at(-1).transform, "rotate(0deg)");
+  assert.equal(attachmentLayer.calls[0].keyframes.at(-1).transform, "rotate(90deg)");
   assert.equal(nodes.every((node) => node.dataset.tabletopStateMotionMarker), true);
   assert.equal(cardLayer.dataset.tabletopStateMotion, "exhaust");
   assert.equal(runeLayer.dataset.tabletopStateMotion, "ready");
@@ -201,6 +201,35 @@ test("Burn Out recasts a visible trash-to-hand move as a privacy-preserving deck
   assert.equal(result[0].faceVisible, true);
   assert.equal(result[0].image, card.image);
   assert.equal(result[0].name, card.name);
+});
+
+test("Burn Out leaves mixed Trash recoveries unclassified when the recycled draw is ambiguous", () => {
+  const recovered = {
+    id: "direct-recovery",
+    kind: "transfer",
+    from: at("trash", "", { faceVisible: true, index: 0 }),
+    to: at("hand", "", { faceVisible: true, index: 0 }),
+    faceVisible: true,
+    order: 0
+  };
+  const recycledDraw = {
+    id: "recycled-draw",
+    kind: "transfer",
+    from: at("trash", "", { faceVisible: true, index: 1 }),
+    to: at("hand", "", { faceVisible: true, index: 1 }),
+    faceVisible: true,
+    order: 1
+  };
+  const result = buildBurnOutDrawTransfers(
+    [recovered, recycledDraw],
+    new Map([["p1", { burnOuts: 0, handIds: new Set() }]]),
+    new Map([["p1", { burnOuts: 1, handIds: new Set([recovered.id, recycledDraw.id]) }]]),
+    new Map([[recovered.id, recovered.from], [recycledDraw.id, recycledDraw.from]]),
+    new Map([[recovered.id, recovered.to], [recycledDraw.id, recycledDraw.to]])
+  );
+  assert.deepEqual(result.map((transfer) => transfer.kind), ["transfer", "transfer"]);
+  assert.equal(result.some((transfer) => transfer.burnOut), false);
+  assert.deepEqual(result.map((transfer) => transfer.from.zone), ["trash", "trash"]);
 });
 
 test("Burn Out synthesizes only an exact set of newly added face-down opponent hand aliases", () => {
@@ -346,6 +375,21 @@ test("private hand-to-board synthesis fails closed for ambiguous, hidden, own-se
     { playerId: "p2", cardType: "battlefield", zone: "battlefield", locationId: "new-battlefield", index: 0, faceVisible: true }
   ]]), "p1"), []);
   assert.deepEqual(buildPrivateHandBoardTransfers(onePlaceholder, oneDestination, "p1", [{ id: "public-unit" }]), []);
+
+  const spellAndTokenArrivals = new Map([
+    ["resolved-spell", { playerId: "p2", cardType: "spell", zone: "trash", index: 0, faceVisible: true }],
+    ["spell-created-token", { playerId: "p2", cardType: "unit", zone: "base", locationId: "base", index: 0, faceVisible: true }]
+  ]);
+  assert.deepEqual(buildPrivateHandBoardTransfers(onePlaceholder, spellAndTokenArrivals, "p1"), [],
+    "a private spell resolving beside its token must not make the token look like the played hand card");
+
+  assert.deepEqual(buildPrivateHandBoardTransfers(onePlaceholder, oneDestination, "p1", [{
+    id: "public-chain-card",
+    fromCardId: "redacted-pending-hand-p2-0",
+    toCardId: "public-chain-card",
+    from: { playerId: "p2", zone: "hand" },
+    to: { playerId: "p2", zone: "chain" }
+  }]), [], "one private source alias cannot launch both a Chain and board flight");
 });
 
 test("opaque opponent deck aliases still produce private draw and burn flights", () => {
@@ -369,6 +413,18 @@ test("opaque deck synthesis refuses ambiguous unmatched movements", () => {
   ]);
   const current = new Map([["redacted-hand-p2-0", { playerId: "p2", zone: "hand", index: 0, faceVisible: false }]]);
   assert.deepEqual(buildPrivateDeckTransfers(previous, current, "p1"), []);
+
+  const claimedSource = [{
+    id: "effect-chain-card",
+    fromCardId: "redacted-main-p2-0",
+    toCardId: "effect-chain-card",
+    from: { playerId: "p2", zone: "mainDeck" },
+    to: { playerId: "p1", zone: "chain" }
+  }];
+  const oneDeckAlias = new Map([["redacted-main-p2-0", previous.get("redacted-main-p2-0")]]);
+  const oneHandAlias = new Map([["redacted-hand-p2-0", current.get("redacted-hand-p2-0")]]);
+  assert.deepEqual(buildPrivateDeckTransfers(oneDeckAlias, oneHandAlias, "p1", claimedSource), [],
+    "one opaque deck alias cannot launch both a Chain and draw flight");
 });
 
 test("opaque hand and deck aliases animate effect-played cards onto the Chain without revealing the flight", () => {

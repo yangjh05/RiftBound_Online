@@ -1046,9 +1046,11 @@ async function assertPersistentTable(page, fixture) {
     await expect(seat.locator(`[data-card-id="${player.unitId}"]`)).toHaveAttribute("data-exhausted", String(player.unitExhausted));
     await expect(seat.locator(`[data-card-id="${player.unitId}"]`)).toHaveAttribute("data-stunned", String(player.unitStunned));
     const primaryStates = seat.locator(`[data-card-id="${player.unitId}"] .primary-card-state`);
-    await expect(primaryStates).toHaveCount(Number(player.unitExhausted) + Number(player.unitStunned) || 1);
-    if (player.unitExhausted && player.unitStunned) {
-      await expect(primaryStates.filter({ hasText: /탈진|Exhausted/iu })).toHaveCount(1);
+    await expect(primaryStates).toHaveCount(1 + Number(player.unitStunned));
+    await expect(primaryStates.filter({
+      hasText: player.unitExhausted ? /탈진|Exhausted/iu : /준비|Ready/iu
+    })).toHaveCount(1);
+    if (player.unitStunned) {
       await expect(primaryStates.filter({ hasText: /기절|Stunned/iu })).toHaveCount(1);
     }
     await expect(seat.locator(`[data-card-id="${player.gearId}"]`)).toHaveCount(1);
@@ -1146,6 +1148,8 @@ test("tabletop board retains every persistent zone, count, card state, and game 
   await ownUnit.click({ timeout: 5_000 });
   await expect.poll(() => page.evaluate(() => window.__riftboundGame.selectedCardId)).toBe(ownFixture.unitId);
   await expect(page.locator(".context-action-dock .action-context")).toContainText("Regression Unit");
+  await page.locator('.table-action-rail [data-action="toggle-inspector"]:not([disabled])').click();
+  await expect(inspector).toBeVisible();
   await expect(inspector.locator('[data-action="toggle-attachments"]')).toBeVisible();
   await inspector.locator('[data-action="toggle-attachments"]').click();
   await expect(inspector.locator(`[data-card="${ownFixture.gearId}"]`)).toBeVisible();
@@ -1504,8 +1508,16 @@ test("primary turn and showdown controls dispatch through the rebuilt action rai
   })).not.toBe(turnBefore);
 
   await installShowdownFixture(page);
-  await page.locator('.table-action-rail [data-action="pass-showdown"]:enabled').click();
+  const passControl = page.locator('.table-action-rail [data-action="pass-showdown"]:enabled');
+  await expect(passControl).toHaveCount(1);
+  const priorityBeforePass = await page.evaluate(() => window.__riftboundGame.showdown?.priorityPlayerId);
+  await passControl.click();
   await expect.poll(() => page.evaluate(() => window.__riftboundGame.showdown?.consecutivePasses)).toBe(1);
+  await expect.poll(() => page.evaluate(() => window.__riftboundGame.showdown?.priorityPlayerId)).not.toBe(priorityBeforePass);
+  await expect(page.locator('.table-action-rail [data-action="pass-showdown"]:enabled')).toHaveCount(1);
+  await expect(page.locator('.table-action-rail [data-action="pass-showdown"]')).toContainText(/1\/2/u);
+  await page.locator('.table-action-rail [data-action="pass-showdown"]:enabled').click();
+  await expect.poll(() => page.evaluate(() => window.__riftboundGame.showdown)).toBeNull();
   await assertNoRuntimeOrUndefinedErrors(page, runtimeFailures);
 });
 

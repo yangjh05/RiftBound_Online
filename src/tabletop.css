@@ -2488,6 +2488,667 @@
   }
 }
 
+/* Final state-orientation contract: readiness changes only the in-plane card
+   angle. The physical card footprint never shrinks or flips through depth. */
+.tabletop-layout .identity-button.exhausted > .identity-orientation-layer,
+.tabletop-layout .rune-card-chip.spent .rune-orientation-layer,
+.tabletop-layout .unit-token.exhausted .card-exhaust-layer,
+.tabletop-layout .image-card.exhausted .card-exhaust-layer,
+.tabletop-layout :is(
+  .attached-gear.exhausted,
+  .attached-gear[data-exhausted="true"],
+  .attached-gear-card.exhausted,
+  .attached-gear-card[data-exhausted="true"]
+) > .attachment-orientation-layer {
+  transform: rotate(90deg);
+}
+
+/* A horizontal shelf must not acquire an implicit vertical scrollbar. Cards
+   in field lanes size from the lane height, so their HUD and portrait remain
+   fully inside the available row at every desktop width. */
+.tabletop-layout .base-row,
+.tabletop-layout .field-lane-track {
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+}
+
+.tabletop-layout .field-lane-track { align-items: center; }
+
+.tabletop-layout .field-lane-track > :is(.unit-token, .image-card) {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 0;
+  max-width: 86px;
+  height: calc(100% - 6px);
+  max-height: 120px;
+  aspect-ratio: 0.714;
+}
+
+/* Readability floor for persistent board labels and direct-manipulation HUDs. */
+.tabletop-layout .board-band > .side-label,
+.tabletop-layout .battlefield-caption,
+.tabletop-layout .persistent-hand .section-head :is(h2, span, b),
+.tabletop-layout .opponent-hand > .zone-caption,
+.tabletop-layout .empty-hand-count,
+.tabletop-layout .move-select-chip {
+  font-size: 11px;
+  line-height: 1.1;
+}
+
+.tabletop-layout .move-select-chip {
+  min-width: 24px;
+  width: 24px;
+  min-height: 24px;
+  height: 24px;
+}
+
+.tabletop-layout .chain-active-effect-text {
+  min-height: 112px;
+  max-height: none;
+  overflow: visible;
+}
+
+/* The desktop chain is a docked utility panel. It reserves its own column, so
+   neither the battlefield nor the permanent hand sits underneath it. */
+@media (min-width: 1200px) {
+  .tabletop-layout:has(.chain-pod) {
+    --tt-sheet-reserve: 420px;
+  }
+
+  .tabletop-layout .chain-pod {
+    position: fixed;
+    z-index: 90;
+    top: 66px;
+    right: calc(var(--tt-action-rail) + 8px);
+    bottom: auto;
+    left: auto;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 7px;
+    width: 404px;
+    height: auto;
+    max-height: calc(100dvh - var(--tt-hand-height) - var(--tt-command-height) - 90px);
+    overflow: hidden;
+    padding: 8px;
+    transform: none;
+  }
+
+  .tabletop-layout .chain-zone-content {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 9px;
+    width: 100%;
+    min-height: 0;
+    max-height: none;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .tabletop-layout .chain-stack {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    gap: 8px;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .tabletop-layout .chain-zone-item {
+    display: grid;
+    grid-template-columns: 54px minmax(0, 1fr);
+    align-items: start;
+    gap: 9px;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    height: auto;
+    overflow: visible;
+    padding: 9px;
+  }
+
+  .tabletop-layout .chain-zone-countered > * { grid-column: 1 / -1; }
+
+  .tabletop-layout .chain-context-panel {
+    min-width: 0;
+    max-height: none;
+    overflow: visible;
+  }
+
+  /* If a chain asks for a blocking declaration, both tools share the utility
+     column vertically instead of covering one another. */
+  .tabletop-layout:has(.chain-pod) .floating-panels.has-blocking-decision {
+    top: min(480px, 52dvh);
+  }
+}
+
+.tabletop-layout .chain-zone-copy {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+}
+
+.tabletop-layout .chain-zone-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+  min-width: 0;
+}
+
+.tabletop-layout .chain-zone-meta :is(b, em),
+.tabletop-layout :is(.chain-zone-source, .chain-zone-target) {
+  color: #c7e3ef;
+  font-size: var(--tt-font-meta);
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.tabletop-layout .chain-zone-meta em {
+  flex: 0 0 auto;
+  color: #8ddcff;
+  font-style: normal;
+}
+
+.tabletop-layout .chain-card-motion-back {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  border: 1px solid rgba(105, 202, 239, 0.45);
+  border-radius: inherit;
+  background:
+    linear-gradient(145deg, rgba(13, 64, 85, 0.96), rgba(5, 23, 38, 0.98)),
+    repeating-linear-gradient(45deg, transparent 0 6px, rgba(109, 205, 240, 0.12) 6px 8px);
+  color: #d9f6ff;
+  font-size: 19px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.tabletop-layout .pass-control {
+  display: grid;
+  align-content: center;
+  gap: 3px;
+  min-width: 0;
+  text-align: left;
+}
+
+.tabletop-layout .pass-control > span {
+  font-size: var(--tt-font-small);
+  font-weight: 900;
+  line-height: 1.15;
+}
+
+.tabletop-layout .pass-control > small {
+  color: #d5edf6;
+  font-size: var(--tt-font-meta);
+  font-weight: 800;
+  line-height: 1.15;
+  white-space: normal;
+}
+
+/* A battlefield unit is a card plus a compact state ledger. Keeping the
+   ledger beside the art gives every 11px status a real column instead of
+   forcing long Korean labels through a 45px overlay on the card face. */
+.tabletop-layout .field-lane-track > .unit-token.field-token {
+  flex: 0 0 198px;
+  width: 198px;
+  min-width: 198px;
+  max-width: 198px;
+  height: calc(100% + 4px);
+  max-height: 120px;
+  aspect-ratio: auto;
+  overflow: visible;
+  padding-right: 132px;
+  box-sizing: border-box;
+}
+
+.tabletop-layout .unit-token.field-token > .card-exhaust-layer {
+  inset: 0 auto 0 0;
+  width: auto;
+  height: 100%;
+  aspect-ratio: 0.714;
+}
+
+.tabletop-layout .unit-token.field-token > .card-state-hud.unit-stats {
+  inset: 2px 2px 2px auto;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+  align-items: stretch;
+  gap: 2px;
+  width: 126px;
+  max-width: 126px;
+  max-height: none;
+  overflow: visible;
+  padding: 2px;
+  border: 1px solid rgba(108, 191, 225, 0.34);
+  border-radius: 6px;
+  background: rgba(2, 13, 23, 0.88);
+  box-sizing: border-box;
+}
+
+.tabletop-layout .card-state-hud.unit-stats > :is(b, em),
+.tabletop-layout .unit-token.field-token .unit-state-badge {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 16px;
+  height: auto;
+  padding: 1px 2px;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+  text-align: center;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.tabletop-layout .unit-token.field-token .unit-state-badges {
+  position: static;
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px;
+  width: 100%;
+  min-width: 0;
+  overflow: visible;
+}
+
+.tabletop-layout .unit-token.field-token > .owner-chip {
+  max-width: calc(100% - 136px);
+}
+
+.tabletop-layout .unit-token.field-token > .move-select-chip {
+  right: auto;
+  left: 59px;
+}
+
+.tabletop-layout .unit-token.field-token > .attachment-strip {
+  right: 128px;
+}
+
+@media (max-width: 760px) {
+  .tabletop-layout .field-lane-track > .unit-token.field-token {
+    flex-basis: 182px;
+    width: 182px;
+    min-width: 182px;
+    max-width: 182px;
+    padding-right: 124px;
+  }
+
+  .tabletop-layout .unit-token.field-token > .card-state-hud.unit-stats {
+    width: 118px;
+    max-width: 118px;
+  }
+
+  .tabletop-layout .unit-token.field-token > .move-select-chip { left: 49px; }
+  .tabletop-layout .unit-token.field-token > .attachment-strip { right: 120px; }
+}
+
+/* Final visual-QA seal ---------------------------------------------------
+   This block intentionally remains the true end of the file. */
+.tabletop-layout .location-band {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 13px 3px 3px;
+}
+
+.tabletop-layout .battlefield-mat {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: hidden;
+}
+
+.tabletop-layout .battlefield.location-column {
+  grid-template-rows: minmax(0, 1fr) clamp(54px, 28%, 84px) minmax(0, 1fr);
+  gap: 4px;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  padding: 3px;
+}
+
+.tabletop-layout .battlefield.location-column .field-lane {
+  display: block;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 1px;
+}
+
+.tabletop-layout .battlefield.location-column .field-lane-track {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 1px;
+}
+
+.tabletop-layout .field-lane-track > :is(.unit-token, .image-card) {
+  height: calc(100% - 2px);
+}
+
+.tabletop-layout .field-lane-track > .unit-token.field-token {
+  height: calc(100% - 2px);
+}
+
+.tabletop-layout .base-row {
+  align-items: center;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 7px;
+  scroll-padding-inline: 7px;
+}
+
+.tabletop-layout .base-row > :is(.unit-token, .image-card) {
+  flex: 0 0 84px;
+  width: 84px;
+  min-width: 84px;
+  max-width: 84px;
+  height: auto;
+  max-height: calc(100% - 4px);
+  aspect-ratio: 0.714;
+}
+
+.tabletop-layout .base-token .unit-token-body > strong {
+  overflow: visible;
+  font-size: 11px;
+  line-height: 1.08;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.tabletop-layout .rune-card-caption,
+.tabletop-layout .rune-card-chip strong,
+.tabletop-layout .rune-recycle-ready,
+.tabletop-layout .rune-summary,
+.tabletop-layout .rune-count {
+  font-size: 11px;
+}
+
+@media (min-width: 761px) and (max-height: 820px) {
+  .tabletop-layout {
+    --tt-opponent-row: 96px;
+    --tt-player-row: 112px;
+    --tt-shelf-card-width: 50px;
+    --tt-rune-card-width: 46px;
+  }
+
+  .tabletop-layout .table-seat,
+  .tabletop-layout .table-seat.bottom {
+    padding-top: 12px;
+    padding-bottom: 3px;
+  }
+
+  .tabletop-layout .pile-cards,
+  .tabletop-layout .table-card-pile.compact .pile-cards {
+    width: 50px;
+    min-width: 50px;
+  }
+
+  .tabletop-layout .rune-card-chip {
+    flex-basis: 46px;
+    width: 46px;
+    min-width: 46px;
+  }
+
+  .tabletop-layout .base-row > :is(.unit-token, .image-card) {
+    flex-basis: 52px;
+    width: 52px;
+    min-width: 52px;
+    max-width: 52px;
+  }
+}
+
+@media (min-width: 1200px) and (max-width: 1499px) {
+  .tabletop-layout.inspector-open,
+  .tabletop-layout:has(.floating-panels > .graveyard-panel),
+  .tabletop-layout:has(.floating-panels > .banished-panel),
+  .tabletop-layout:has(.floating-panels > .intel-panel),
+  .tabletop-layout:has(.floating-panels > .payment-panel),
+  .tabletop-layout:has(.floating-panels > .choice-panel),
+  .tabletop-layout:has(.log-drawer),
+  .tabletop-layout:has(.chain-pod) {
+    --tt-sheet-reserve: clamp(304px, 24vw, 352px);
+  }
+
+  .tabletop-layout .floating-panels :is(
+    .graveyard-panel,
+    .banished-panel,
+    .intel-panel,
+    .payment-panel,
+    .choice-panel
+  ),
+  .tabletop-layout .floating-panels.has-blocking-decision,
+  .tabletop-layout .inspector.inspector-panel,
+  .tabletop-layout .log-drawer,
+  .tabletop-layout .chain-pod {
+    width: calc(var(--tt-sheet-reserve) - 16px);
+    max-width: calc(var(--tt-sheet-reserve) - 16px);
+  }
+
+  .tabletop-layout:is(
+    .inspector-open,
+    :has(.log-drawer),
+    :has(.chain-pod),
+    :has(.floating-panels > .graveyard-panel),
+    :has(.floating-panels > .banished-panel),
+    :has(.floating-panels > .intel-panel),
+    :has(.floating-panels > .payment-panel),
+    :has(.floating-panels > .choice-panel)
+  ) .table-seat,
+  .tabletop-layout:is(
+    .inspector-open,
+    :has(.log-drawer),
+    :has(.chain-pod),
+    :has(.floating-panels > .graveyard-panel),
+    :has(.floating-panels > .banished-panel),
+    :has(.floating-panels > .intel-panel),
+    :has(.floating-panels > .payment-panel),
+    :has(.floating-panels > .choice-panel)
+  ) .table-seat.bottom {
+    grid-template-columns:
+      minmax(180px, 1.05fr)
+      minmax(150px, 0.8fr)
+      minmax(160px, 1fr)
+      minmax(190px, 1.1fr);
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .tabletop-layout:is(
+    .inspector-open,
+    :has(.log-drawer),
+    :has(.chain-pod),
+    :has(.floating-panels > .graveyard-panel),
+    :has(.floating-panels > .banished-panel),
+    :has(.floating-panels > .intel-panel),
+    :has(.floating-panels > .payment-panel),
+    :has(.floating-panels > .choice-panel)
+  ) .battlefield-mat:not(.has-extra-battlefields) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-auto-columns: minmax(0, 1fr);
+    grid-auto-flow: row;
+    overflow-x: hidden;
+  }
+
+  .tabletop-layout:is(
+    .inspector-open,
+    :has(.log-drawer),
+    :has(.chain-pod),
+    :has(.floating-panels > .graveyard-panel),
+    :has(.floating-panels > .banished-panel),
+    :has(.floating-panels > .intel-panel),
+    :has(.floating-panels > .payment-panel),
+    :has(.floating-panels > .choice-panel)
+  ) .battlefield.location-column {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .tabletop-layout:is(
+    .inspector-open,
+    :has(.log-drawer),
+    :has(.chain-pod),
+    :has(.floating-panels > .graveyard-panel),
+    :has(.floating-panels > .banished-panel),
+    :has(.floating-panels > .intel-panel),
+    :has(.floating-panels > .payment-panel),
+    :has(.floating-panels > .choice-panel)
+  ) .location-band[data-count="1"] .battlefield-mat {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tabletop-layout .payment-body {
+    grid-template-columns: 64px minmax(0, 1fr);
+    gap: 7px;
+  }
+
+  .tabletop-layout .payment-card-preview .card-art { width: 62px; }
+}
+
+@media (min-width: 1200px) {
+  .tabletop-layout .floating-panels .payment-panel {
+    grid-template-rows: max-content minmax(0, 1fr);
+    min-height: 0;
+  }
+
+  .tabletop-layout .payment-body {
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .tabletop-layout .payment-cost-area {
+    height: 100%;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
+
+  .tabletop-layout .pay-runes {
+    display: flex;
+    align-items: stretch;
+    min-height: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 7px;
+    scroll-padding-inline: 4px;
+  }
+
+  .tabletop-layout .pay-rune {
+    flex: 0 0 102px;
+    width: 102px;
+    min-width: 102px;
+  }
+
+  .tabletop-layout:has(.chain-pod):has(.floating-panels.has-blocking-decision) {
+    --tt-chain-split-height: clamp(156px, 24dvh, 210px);
+  }
+
+  .tabletop-layout:has(.chain-pod):has(.floating-panels.has-blocking-decision) .chain-pod {
+    height: var(--tt-chain-split-height);
+    max-height: var(--tt-chain-split-height);
+  }
+
+  .tabletop-layout:has(.chain-pod):has(.floating-panels.has-blocking-decision) .floating-panels.has-blocking-decision {
+    top: calc(66px + var(--tt-chain-split-height) + 8px + 0px);
+  }
+}
+
+/* Mid-size desktop tables still keep both battlefields in view while a
+   utility sheet is open. A 404px sheet is comfortable at 1440px+, but at
+   1200-1399px it needlessly forces the playmat into a horizontal carousel. */
+@media (min-width: 1200px) and (max-width: 1399px) {
+  .tabletop-layout.inspector-open,
+  .tabletop-layout:has(.floating-panels > .graveyard-panel),
+  .tabletop-layout:has(.floating-panels > .banished-panel),
+  .tabletop-layout:has(.floating-panels > .intel-panel),
+  .tabletop-layout:has(.floating-panels > .payment-panel),
+  .tabletop-layout:has(.floating-panels > .choice-panel),
+  .tabletop-layout:has(.log-drawer),
+  .tabletop-layout:has(.chain-pod) {
+    --tt-sheet-reserve: clamp(304px, 26.25vw, 336px);
+  }
+
+  .tabletop-layout .floating-panels :is(
+    .graveyard-panel,
+    .banished-panel,
+    .intel-panel,
+    .payment-panel,
+    .choice-panel
+  ),
+  .tabletop-layout .floating-panels.has-blocking-decision,
+  .tabletop-layout .inspector.inspector-panel,
+  .tabletop-layout .log-drawer,
+  .tabletop-layout .chain-pod {
+    width: calc(var(--tt-sheet-reserve) - 16px);
+  }
+
+  .tabletop-layout:is(.inspector-open, :has(.log-drawer), :has(.chain-pod)) .battlefield-mat,
+  .tabletop-layout:has(.floating-panels > :is(
+    .graveyard-panel,
+    .banished-panel,
+    .intel-panel,
+    .payment-panel,
+    .choice-panel
+  )) .battlefield-mat {
+    grid-auto-columns: minmax(370px, 1fr);
+  }
+
+  .tabletop-layout:is(.inspector-open, :has(.log-drawer), :has(.chain-pod)) .battlefield.location-column,
+  .tabletop-layout:has(.floating-panels > :is(
+    .graveyard-panel,
+    .banished-panel,
+    .intel-panel,
+    .payment-panel,
+    .choice-panel
+  )) .battlefield.location-column {
+    min-width: 370px;
+  }
+}
+
+@media (min-width: 761px) and (max-height: 820px) {
+  .tabletop-layout {
+    --tt-shelf-card-width: 56px;
+    --tt-rune-card-width: 48px;
+  }
+
+  .tabletop-layout .table-seat,
+  .tabletop-layout .table-seat.bottom {
+    grid-template-columns:
+      clamp(180px, 15vw, 230px)
+      clamp(170px, 15vw, 220px)
+      minmax(170px, 1fr)
+      clamp(210px, 19vw, 290px);
+  }
+
+  .tabletop-layout .battlefield.location-column {
+    grid-template-rows: minmax(68px, 1fr) 86px minmax(68px, 1fr);
+  }
+
+  .tabletop-layout .battlefield.location-column .field-center {
+    grid-template-columns: clamp(132px, 29%, 180px) minmax(0, 1fr);
+  }
+}
+
 @media (max-width: 1024px) and (max-height: 600px) {
   .tabletop-layout.inspector-open {
     height: calc(var(--app-height, 100dvh) - 52px - env(safe-area-inset-top));
@@ -3245,5 +3906,2402 @@
 @media (prefers-reduced-motion: reduce) {
   .tabletop-layout .tabletop-transfer-arrival {
     animation-duration: 1ms !important;
+  }
+}
+
+/*
+ * Authoritative tabletop geometry.
+ *
+ * The legacy game skin remains loaded for setup and non-tabletop screens. This
+ * final block explicitly resets the legacy grid coordinates that otherwise
+ * collapse identity cards and place the battlefield title over its artwork.
+ */
+.tabletop-layout {
+  --tt-action-rail: 96px;
+  --tt-command-height: 62px;
+  --tt-hand-height: 180px;
+  --tt-opponent-row: 160px;
+  --tt-player-row: 184px;
+  --tt-sheet-reserve: 0px;
+  --tt-hand-card-width: 102px;
+  --tt-shelf-card-width: 72px;
+  --tt-rune-card-width: 62px;
+  --tt-font-meta: 11px;
+  --tt-font-small: 12px;
+  --tt-font-body: 13px;
+  --tt-font-title: 14px;
+}
+
+.tabletop-layout.inspector-open,
+.tabletop-layout:has(.floating-panels > .graveyard-panel),
+.tabletop-layout:has(.floating-panels > .banished-panel),
+.tabletop-layout:has(.floating-panels > .intel-panel),
+.tabletop-layout:has(.log-drawer) {
+  --tt-sheet-reserve: 400px;
+}
+
+.tabletop-topbar .titlebox h1 { font-size: clamp(16px, 1.1vw, 19px); }
+.tabletop-topbar .status-kicker,
+.tabletop-topbar .status-detail,
+.tabletop-topbar .score-name,
+.tabletop-topbar .turnbox > span,
+.tabletop-topbar .turnbox button { font-size: 11px; }
+.tabletop-topbar .score-cell { font-size: 11px; }
+
+.tabletop-layout .board-panel {
+  inset: 0 calc(var(--tt-action-rail) + var(--tt-sheet-reserve)) calc(var(--tt-hand-height) + var(--tt-command-height) + 8px) 0;
+  grid-template-rows: var(--tt-opponent-row) minmax(0, 1fr) var(--tt-player-row);
+  gap: 6px;
+  padding: 6px 8px;
+  transition: right 180ms ease;
+}
+
+.tabletop-layout .table-command-layer {
+  right: calc(var(--tt-action-rail) + var(--tt-sheet-reserve));
+  height: calc(var(--tt-hand-height) + var(--tt-command-height));
+  transition: right 180ms ease;
+}
+
+.tabletop-layout .table-seat,
+.tabletop-layout .table-seat.bottom {
+  grid-template-columns:
+    clamp(250px, 16vw, 300px)
+    clamp(210px, 13vw, 250px)
+    minmax(260px, 1fr)
+    clamp(290px, 20vw, 340px);
+  align-items: stretch;
+  gap: 8px;
+  padding: 18px 5px 6px;
+}
+
+.tabletop-layout .table-seat {
+  grid-template-areas: "identity piles base resources";
+}
+
+.tabletop-layout .table-seat.bottom {
+  grid-template-areas: "resources base piles identity";
+}
+
+/* Identity cards keep a real portrait footprint beside, rather than above,
+   the summary. Explicit stretching cancels legacy .player-identity alignment. */
+.tabletop-layout .tabletop-identity-dock {
+  display: grid;
+  grid-template-columns: calc(var(--tt-shelf-card-width) * 2 + 8px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  align-items: stretch;
+  align-content: stretch;
+  gap: 10px;
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  overflow: visible;
+}
+
+.tabletop-layout .physical-identity-cards {
+  align-self: stretch;
+  align-items: stretch;
+  gap: 8px;
+  width: calc(var(--tt-shelf-card-width) * 2 + 8px);
+  height: 100%;
+  min-height: 0;
+  overflow: visible;
+}
+
+.tabletop-layout .identity-zone {
+  grid-template-rows: 17px minmax(0, 1fr);
+  align-content: end;
+  align-items: end;
+  width: var(--tt-shelf-card-width);
+  height: 100%;
+  min-height: 0;
+}
+
+.tabletop-layout .identity-zone > .zone-caption {
+  align-self: center;
+  width: 100%;
+  font-size: var(--tt-font-meta);
+  line-height: 1;
+  text-align: center;
+}
+
+.tabletop-layout .identity-button,
+.tabletop-layout .empty-card-slot,
+.tabletop-layout .champion-away-reference {
+  align-self: end;
+  width: var(--tt-shelf-card-width);
+  height: auto;
+  min-width: var(--tt-shelf-card-width);
+  min-height: 0;
+  aspect-ratio: 0.714;
+  border-radius: 7px;
+}
+
+.tabletop-layout .identity-button > .identity-orientation-layer {
+  inset: 0;
+  max-width: none;
+  padding: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+}
+
+.tabletop-layout .identity-button > .identity-state-label {
+  right: 4px;
+  bottom: 4px;
+  left: 4px;
+  max-width: none;
+  padding: 3px 4px;
+  border-radius: 4px;
+  font-size: var(--tt-font-meta);
+  line-height: 1.1;
+}
+
+.tabletop-layout .player-summary {
+  align-self: center;
+  align-content: center;
+  gap: 5px;
+  width: 100%;
+  max-height: none;
+  overflow: visible;
+}
+
+.tabletop-layout .player-summary h2 {
+  font-size: var(--tt-font-title);
+  line-height: 1.15;
+}
+
+.tabletop-layout .player-stats {
+  gap: 4px;
+  min-height: 24px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.tabletop-layout .player-stats > * {
+  min-height: 23px;
+  padding: 3px 7px;
+  font-size: var(--tt-font-meta);
+  line-height: 1.1;
+}
+
+.tabletop-layout .player-summary .champion-control {
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: 28px;
+  height: auto;
+  padding: 3px 5px 3px 7px;
+}
+
+.tabletop-layout .player-summary .champion-control :is(span, small),
+.tabletop-layout .player-summary .champion-control button {
+  font-size: var(--tt-font-meta);
+}
+
+.tabletop-layout .player-summary .champion-control button {
+  min-height: 24px;
+  height: 24px;
+}
+
+/* Shelf piles share one physical card width and keep labels/counts outside the
+   card face. */
+.tabletop-layout .table-pile-dock {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(calc(var(--tt-shelf-card-width) + 4px), 1fr));
+  align-items: stretch;
+  gap: 5px;
+  height: 100%;
+  min-height: 0;
+  overflow: visible;
+}
+
+.tabletop-layout .table-card-pile {
+  grid-template-rows: minmax(0, 1fr) 17px;
+  align-items: end;
+  justify-items: center;
+  gap: 2px;
+  height: 100%;
+  min-height: 0;
+  overflow: visible;
+}
+
+.tabletop-layout .pile-cards,
+.tabletop-layout .table-card-pile.compact .pile-cards {
+  align-self: end;
+  width: var(--tt-shelf-card-width);
+  min-width: var(--tt-shelf-card-width);
+  max-width: none;
+  aspect-ratio: 0.714;
+  border-radius: 7px;
+}
+
+.tabletop-layout .pile-label {
+  display: block;
+  width: 100%;
+  min-height: 15px;
+  color: #d1e8f2;
+  font-size: var(--tt-font-meta);
+  line-height: 15px;
+  text-align: center;
+}
+
+.tabletop-layout .pile-count {
+  top: 12px;
+  right: 1px;
+  bottom: auto;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 5px;
+  font-size: var(--tt-font-small);
+  transform: translate(18%, -12%);
+}
+
+.tabletop-layout .table-card-pile .burnout-stat {
+  top: -1px;
+  right: 0;
+  padding: 3px 5px;
+  font-size: var(--tt-font-meta);
+}
+
+/* Runes use the same shelf baseline, but overlap slightly so every domain can
+   remain present without stealing the Base. */
+.tabletop-layout .resource-zone,
+.tabletop-layout .base-zone {
+  grid-template-rows: 18px minmax(0, 1fr);
+  gap: 3px;
+  height: 100%;
+}
+
+.tabletop-layout .resource-zone > .zone-caption,
+.tabletop-layout .base-zone > .zone-caption {
+  font-size: var(--tt-font-meta);
+  line-height: 1;
+}
+
+.tabletop-layout .rune-tabletop {
+  grid-template-columns: calc(var(--tt-shelf-card-width) + 8px) minmax(0, 1fr);
+  align-items: stretch;
+  gap: 6px;
+  height: 100%;
+}
+
+.tabletop-layout .rune-play-area {
+  grid-template-rows: 27px minmax(0, 1fr);
+  height: 100%;
+  overflow: visible;
+}
+
+.tabletop-layout .rune-summary {
+  position: relative;
+  z-index: 8;
+  top: auto;
+  right: auto;
+  left: auto;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+  width: 100%;
+  max-width: 100%;
+  min-height: 27px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 1px 2px;
+}
+
+.tabletop-layout .rune-count {
+  flex: 0 0 auto;
+  min-width: max-content;
+  height: 24px;
+  min-height: 24px;
+  padding: 3px 6px;
+  font-size: var(--tt-font-meta);
+  line-height: 1;
+}
+
+.tabletop-layout .rune-summary-art {
+  width: 15px;
+  height: 20px;
+  border-radius: 2px;
+}
+
+.tabletop-layout .resource-row.rune-card-stack {
+  align-items: flex-end;
+  min-height: 0;
+  height: 100%;
+  overflow: visible;
+  padding: 2px 20px 1px 3px;
+}
+
+.tabletop-layout .rune-card-chip {
+  flex: 0 0 var(--tt-rune-card-width);
+  width: var(--tt-rune-card-width);
+  min-width: var(--tt-rune-card-width);
+  height: auto;
+  aspect-ratio: 0.714;
+  margin-right: calc(var(--tt-rune-card-width) * -0.38);
+  border-radius: 6px;
+}
+
+.tabletop-layout .rune-card-caption,
+.tabletop-layout .rune-card-chip strong,
+.tabletop-layout .rune-recycle-ready {
+  font-size: var(--tt-font-meta);
+  line-height: 1.05;
+}
+
+.tabletop-layout .rune-card-caption { padding: 3px; }
+.tabletop-layout .rune-card-chip strong { padding: 3px 4px; }
+.tabletop-layout .rune-recycle-ready {
+  white-space: normal;
+  text-overflow: clip;
+}
+
+.tabletop-layout .rune-card-chip.spent .rune-orientation-layer {
+  transform: rotate(90deg) scale(0.82);
+}
+
+/* The Base is a full shelf row, not a narrow status strip. */
+.tabletop-layout .base-row {
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow-x: auto;
+  overflow-y: visible;
+  padding: 5px 10px;
+  border: 1px solid rgba(111, 182, 216, 0.3);
+  border-radius: 9px;
+  background: rgba(3, 18, 31, 0.54);
+}
+
+.tabletop-layout .base-row > .unit-token,
+.tabletop-layout .base-row > .image-card {
+  flex: 0 0 88px;
+  width: 88px;
+  min-width: 88px;
+  height: auto;
+  aspect-ratio: 0.714;
+}
+
+/* Two battlefields occupy the central table. Legacy location-column row and
+   child coordinates are reset with matching-or-higher specificity. */
+.tabletop-layout .location-band {
+  min-height: 0;
+  overflow: hidden;
+  padding: 18px 6px 6px;
+}
+
+.tabletop-layout .battlefield-mat {
+  grid-template-columns: none;
+  grid-auto-columns: minmax(420px, 1fr);
+  grid-auto-flow: column;
+  align-items: stretch;
+  justify-items: stretch;
+  gap: 8px;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0;
+}
+
+.tabletop-layout .battlefield.location-column {
+  grid-template-rows: minmax(100px, 1fr) 92px minmax(100px, 1fr);
+  gap: 4px;
+  width: 100%;
+  max-width: none;
+  min-width: 420px;
+  min-height: 0;
+  overflow: visible;
+  padding: 4px;
+  border-radius: 10px;
+}
+
+.tabletop-layout .battlefield.location-column .field-lane {
+  display: block;
+  min-height: 0;
+  overflow: visible;
+  padding: 16px 3px 3px;
+  border: 0;
+  border-radius: 7px;
+  background: rgba(3, 18, 31, 0.2);
+}
+
+.tabletop-layout .field-lane .lane-label {
+  font-size: var(--tt-font-meta);
+  line-height: 1;
+}
+
+.tabletop-layout .field-lane-track {
+  flex: none;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow-x: auto;
+  overflow-y: visible;
+  padding: 2px 8px;
+}
+
+.tabletop-layout .battlefield.location-column .field-center {
+  position: relative;
+  inset: auto;
+  display: grid;
+  grid-template-columns: clamp(160px, 28%, 220px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  align-items: stretch;
+  gap: 10px;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  overflow: hidden;
+  padding: 5px;
+  transform: none;
+}
+
+.tabletop-layout .battlefield.location-column .field-image {
+  position: relative;
+  grid-row: 1;
+  grid-column: 1;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: 6px;
+  opacity: 1;
+  filter: none;
+}
+
+.tabletop-layout .battlefield.location-column .field-image .card-art {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  aspect-ratio: auto;
+  object-fit: contain;
+  object-position: center;
+  filter: none;
+  transform: none;
+}
+
+.tabletop-layout .battlefield.location-column .battlefield-head {
+  position: relative;
+  inset: auto;
+  z-index: auto;
+  grid-row: 1;
+  grid-column: 2;
+  align-self: stretch;
+  align-content: center;
+  gap: 4px;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: visible;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: rgba(3, 17, 29, 0.58);
+  box-shadow: none;
+  transform: none;
+}
+
+.tabletop-layout .battlefield.location-column .battlefield-head h2 {
+  color: #fff0a8;
+  font-size: var(--tt-font-title);
+  line-height: 1.15;
+}
+
+.tabletop-layout .battlefield.location-column .battlefield-head span {
+  margin: 0;
+  color: #b9dbe9;
+  font-size: var(--tt-font-small);
+  font-style: normal;
+  line-height: 1.2;
+}
+
+.tabletop-layout .unit-placeholder { font-size: var(--tt-font-small); }
+
+.tabletop-layout .unit-token,
+.tabletop-layout .field-lane > .image-card,
+.tabletop-layout .field-lane-track > .image-card {
+  display: block;
+  grid-template-columns: none;
+  flex: 0 0 clamp(76px, 4.25vw, 86px);
+  width: clamp(76px, 4.25vw, 86px);
+  min-width: clamp(76px, 4.25vw, 86px);
+  height: auto;
+  min-height: 0;
+  aspect-ratio: 0.714;
+  gap: 0;
+  overflow: visible;
+  padding: 0;
+  border-radius: 7px;
+}
+
+.tabletop-layout .unit-token-art img,
+.tabletop-layout .card-face-layer > .card-art {
+  filter: none;
+  transform: none;
+}
+
+.tabletop-layout .unit-token-body {
+  gap: 2px;
+  padding: 18px 5px 5px;
+}
+
+.tabletop-layout .unit-token-body > strong,
+.tabletop-layout .unit-token-body > span {
+  font-size: var(--tt-font-meta);
+  line-height: 1.1;
+}
+
+.tabletop-layout .card-state-hud.unit-stats {
+  right: 3px;
+  bottom: 3px;
+  left: 3px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 3px;
+  max-width: calc(100% - 6px);
+  max-height: calc(100% - 6px);
+  overflow: visible;
+}
+
+.tabletop-layout .card-state-hud.unit-stats > b,
+.tabletop-layout .card-state-hud.unit-stats > em {
+  min-width: 23px;
+  min-height: 21px;
+  padding: 3px 5px;
+  font-size: var(--tt-font-meta);
+  line-height: 1;
+}
+
+.tabletop-layout .card-state-hud.unit-stats > b:first-child {
+  font-size: var(--tt-font-small);
+}
+
+.tabletop-layout .unit-state-badges {
+  gap: 3px;
+  overflow: visible;
+}
+
+.tabletop-layout .unit-state-badge,
+.tabletop-layout .owner-chip {
+  padding: 3px 5px;
+  font-size: var(--tt-font-meta);
+  line-height: 1;
+}
+
+.tabletop-layout .attachment-strip { gap: 4px; }
+.tabletop-layout button.attached-gear {
+  width: 50px;
+  min-width: 50px;
+  max-width: 50px;
+  height: 70px;
+  min-height: 70px;
+  max-height: 70px;
+}
+.tabletop-layout .attached-gear-might,
+.tabletop-layout .attached-gear-readiness { font-size: var(--tt-font-meta); }
+
+/* Commands occupy a dedicated row above the hand. They never share the hand's
+   stacking context, so hover lift cannot cover an action. */
+.tabletop-layout .context-action-dock {
+  z-index: 62;
+  right: 10px;
+  bottom: var(--tt-hand-height);
+  left: 10px;
+  grid-template-columns: minmax(220px, 0.72fr) minmax(0, 1.28fr);
+  min-height: calc(var(--tt-command-height) - 6px);
+  max-height: calc(var(--tt-command-height) - 4px);
+  padding: 6px 9px;
+  border-radius: 10px;
+}
+
+.tabletop-layout .action-context > * {
+  overflow: hidden;
+  white-space: normal;
+}
+
+.tabletop-layout .action-context .bar-label {
+  font-size: var(--tt-font-meta);
+  line-height: 1;
+}
+
+.tabletop-layout .action-context strong {
+  font-size: var(--tt-font-body);
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tabletop-layout .action-context span:last-child {
+  display: -webkit-box;
+  font-size: var(--tt-font-meta);
+  line-height: 1.15;
+  text-overflow: clip;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.tabletop-layout .action-command-list {
+  justify-content: flex-start;
+  gap: 6px;
+  height: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.tabletop-layout .action-command-list button {
+  min-height: 36px;
+  padding: 6px 10px;
+  font-size: var(--tt-font-small);
+}
+
+.tabletop-layout .persistent-hand.hand-drawer {
+  z-index: 40;
+  right: clamp(110px, 10vw, 180px);
+  bottom: 0;
+  left: clamp(110px, 10vw, 180px);
+  height: var(--tt-hand-height);
+}
+
+.tabletop-layout .persistent-hand.hand-drawer:has(.hand-fan-card:hover),
+.tabletop-layout .persistent-hand.hand-drawer:has(.hand-fan-card:focus-visible) {
+  z-index: 40;
+}
+
+.tabletop-layout .persistent-hand .hand-panel {
+  grid-template-rows: 28px minmax(0, 1fr);
+  overflow: visible;
+  padding: 0 8px env(safe-area-inset-bottom);
+}
+
+.tabletop-layout .persistent-hand .section-head h2,
+.tabletop-layout .persistent-hand .section-head span,
+.tabletop-layout .hand-focus-toggle {
+  font-size: var(--tt-font-meta);
+}
+
+.tabletop-layout .hand-fan {
+  align-items: flex-end;
+  overflow: visible;
+  padding: 0 clamp(28px, 4vw, 64px);
+}
+
+.tabletop-layout .hand-fan-card {
+  flex: 0 0 var(--tt-hand-card-width);
+  width: var(--tt-hand-card-width);
+  min-width: var(--tt-hand-card-width);
+  height: auto;
+  margin-right: clamp(-50px, -2.6vw, -28px);
+  aspect-ratio: 0.714;
+  transform: translateY(calc(var(--fan-rise) * 0.35)) rotate(calc(var(--fan-angle) * 0.72));
+  transform-origin: 50% 108%;
+}
+
+.tabletop-layout .hand-fan-card.selected-card,
+.tabletop-layout .hand-fan-card:focus-visible {
+  z-index: 65;
+  transform: translateY(-27px) rotate(0deg) scale(1.04);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .tabletop-layout .hand-fan-card:hover {
+    z-index: 66;
+    transform: translateY(-30px) rotate(0deg) scale(1.05);
+  }
+}
+
+.tabletop-layout .persistent-hand.focused .hand-fan-card {
+  margin-right: clamp(-36px, -1.8vw, -20px);
+  transform: translateY(calc(var(--fan-rise) * 0.2 - 9px)) rotate(calc(var(--fan-angle) * 0.52));
+}
+
+.tabletop-layout .persistent-hand.focused .hand-fan-card.selected-card,
+.tabletop-layout .persistent-hand.focused .hand-fan-card:focus-visible {
+  transform: translateY(-32px) rotate(0deg) scale(1.05);
+}
+
+.tabletop-layout .table-action-rail {
+  right: 8px;
+  bottom: 8px;
+  width: calc(var(--tt-action-rail) - 16px);
+  min-width: 72px;
+  gap: 7px;
+}
+
+.tabletop-layout .table-action-rail button,
+.tabletop-layout .table-action-rail button[data-action="toggle-hand"] {
+  min-height: 44px;
+  padding: 6px 4px;
+  font-size: var(--tt-font-small);
+}
+
+/* Utility sheets consume their reserved column and stop above commands/hand. */
+.tabletop-layout .floating-panels .graveyard-panel,
+.tabletop-layout .floating-panels .banished-panel,
+.tabletop-layout .floating-panels .intel-panel,
+.tabletop-layout .inspector.inspector-panel,
+.tabletop-layout .log-drawer {
+  top: 66px;
+  right: calc(var(--tt-action-rail) + 8px);
+  bottom: calc(var(--tt-hand-height) + var(--tt-command-height) + 12px);
+  width: calc(400px - 16px);
+  max-width: calc(100vw - var(--tt-action-rail) - 24px);
+  max-height: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+  font-size: var(--tt-font-small);
+}
+
+.tabletop-layout .floating-panels .graveyard-cards {
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  gap: 9px;
+  overflow: auto;
+}
+
+.tabletop-layout .floating-panels .graveyard-cards .image-card {
+  width: 100%;
+  min-width: 0;
+}
+
+/* Chain keeps the existing information model, but no longer squeezes its
+   content into the legacy 190/126/270px three-column collision. */
+.tabletop-layout .chain-pod {
+  z-index: 55;
+  top: calc(var(--tt-opponent-row) + 8px);
+  left: 50%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 7px;
+  width: min(1060px, calc(100% - 24px));
+  min-height: 0;
+  max-height: min(42dvh, 380px);
+  overflow: hidden;
+  padding: 8px;
+}
+
+.tabletop-layout .chain-zone-head {
+  width: 100%;
+  min-height: 34px;
+}
+
+.tabletop-layout .chain-zone-head strong,
+.tabletop-layout .chain-zone-head span,
+.tabletop-layout .chain-zone-head em,
+.tabletop-layout .chain-zone-toggle { font-size: var(--tt-font-small); }
+
+.tabletop-layout .chain-zone-content {
+  display: grid;
+  grid-template-columns: minmax(360px, 1.7fr) minmax(260px, 0.85fr);
+  gap: 9px;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  max-height: min(34dvh, 310px);
+  overflow: auto;
+}
+
+.tabletop-layout .chain-stack {
+  align-items: stretch;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  min-height: 142px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.tabletop-layout .chain-zone-item {
+  flex: 0 0 min(300px, 72vw);
+  width: min(300px, 72vw);
+  min-width: 260px;
+  min-height: 142px;
+  height: auto;
+  gap: 5px;
+  overflow: visible;
+  padding: 9px;
+}
+
+.tabletop-layout .chain-zone-item b,
+.tabletop-layout .chain-zone-item strong,
+.tabletop-layout .chain-zone-item span,
+.tabletop-layout .chain-zone-item small,
+.tabletop-layout .chain-zone-item em,
+.tabletop-layout .chain-zone-effect,
+.tabletop-layout .response-prompt :is(strong, span) {
+  font-size: var(--tt-font-small);
+  line-height: 1.3;
+}
+
+.tabletop-layout .chain-zone-effect {
+  display: block;
+  min-height: 34px;
+  max-height: 92px;
+  overflow: auto;
+  white-space: normal;
+  -webkit-line-clamp: unset;
+}
+
+.tabletop-layout .chain-context-panel {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+@media (max-height: 820px) and (min-width: 761px) {
+  .tabletop-layout {
+    --tt-command-height: 54px;
+    --tt-hand-height: 140px;
+    --tt-opponent-row: 104px;
+    --tt-player-row: 126px;
+    --tt-hand-card-width: 78px;
+    --tt-shelf-card-width: 50px;
+    --tt-rune-card-width: 46px;
+  }
+
+  .tabletop-layout .table-seat,
+  .tabletop-layout .table-seat.bottom {
+    grid-template-columns:
+      clamp(190px, 15vw, 230px)
+      clamp(150px, 12vw, 190px)
+      minmax(190px, 1fr)
+      clamp(230px, 19vw, 290px);
+    gap: 5px;
+    padding: 14px 4px 4px;
+  }
+
+  .tabletop-layout .physical-identity-cards,
+  .tabletop-layout .tabletop-identity-dock {
+    gap: 6px;
+  }
+
+  .tabletop-layout .tabletop-identity-dock {
+    grid-template-columns: calc(var(--tt-shelf-card-width) * 2 + 6px) minmax(0, 1fr);
+  }
+
+  .tabletop-layout .physical-identity-cards {
+    width: calc(var(--tt-shelf-card-width) * 2 + 6px);
+  }
+
+  .tabletop-layout .identity-zone { grid-template-rows: 13px minmax(0, 1fr); }
+  .tabletop-layout .table-card-pile { grid-template-rows: minmax(0, 1fr) 13px; }
+  .tabletop-layout .pile-label { min-height: 12px; line-height: 12px; }
+  .tabletop-layout .resource-zone,
+  .tabletop-layout .base-zone { grid-template-rows: 14px minmax(0, 1fr); }
+  .tabletop-layout .rune-play-area { grid-template-rows: 24px minmax(0, 1fr); }
+  .tabletop-layout .rune-summary { min-height: 24px; }
+  .tabletop-layout .rune-count { height: 22px; min-height: 22px; }
+  .tabletop-layout .base-row > .unit-token,
+  .tabletop-layout .base-row > .image-card { flex-basis: 64px; width: 64px; min-width: 64px; }
+  .tabletop-layout .battlefield.location-column { grid-template-rows: minmax(78px, 1fr) 72px minmax(78px, 1fr); }
+  .tabletop-layout .battlefield.location-column .field-center { grid-template-columns: clamp(120px, 27%, 170px) minmax(0, 1fr); }
+  .tabletop-layout .unit-token,
+  .tabletop-layout .field-lane > .image-card,
+  .tabletop-layout .field-lane-track > .image-card {
+    flex-basis: 64px;
+    width: 64px;
+    min-width: 64px;
+  }
+  .tabletop-layout .context-action-dock { min-height: calc(var(--tt-command-height) - 4px); }
+}
+
+@media (max-width: 1199px) {
+  .tabletop-layout.inspector-open,
+  .tabletop-layout:has(.floating-panels > .graveyard-panel),
+  .tabletop-layout:has(.floating-panels > .banished-panel),
+  .tabletop-layout:has(.floating-panels > .intel-panel),
+  .tabletop-layout:has(.log-drawer) {
+    --tt-sheet-reserve: 0px;
+  }
+
+  .tabletop-layout {
+    --tt-action-rail: 78px;
+  }
+
+  .tabletop-layout .table-seat,
+  .tabletop-layout .table-seat.bottom {
+    grid-template-columns: 190px minmax(180px, 1fr) 230px;
+    grid-template-areas: "identity base resources";
+    gap: 5px;
+  }
+
+  .tabletop-layout .table-seat.bottom { grid-template-areas: "resources base identity"; }
+
+  .tabletop-layout .table-pile-dock {
+    position: absolute;
+    z-index: 9;
+    top: 17px;
+    right: 235px;
+    width: 176px;
+    height: calc(100% - 22px);
+    gap: 3px;
+  }
+
+  .tabletop-layout .table-seat.top .table-pile-dock {
+    right: auto;
+    left: 195px;
+  }
+
+  .tabletop-layout .table-seat.top .base-row { padding-left: 184px; }
+  .tabletop-layout .table-seat.bottom .base-row { padding-right: 184px; }
+
+  .tabletop-layout .floating-panels .graveyard-panel,
+  .tabletop-layout .floating-panels .banished-panel,
+  .tabletop-layout .floating-panels .intel-panel,
+  .tabletop-layout .inspector.inspector-panel,
+  .tabletop-layout .log-drawer {
+    right: calc(var(--tt-action-rail) + 6px);
+    width: min(380px, 44vw);
+  }
+
+  .tabletop-layout .chain-zone-content {
+    grid-template-columns: minmax(300px, 1.5fr) minmax(230px, 0.9fr);
+  }
+}
+
+@media (max-width: 760px) {
+  .tabletop-layout {
+    --tt-action-rail: 56px;
+    --tt-command-height: 48px;
+    --tt-hand-height: calc(136px + env(safe-area-inset-bottom));
+    --tt-opponent-row: 92px;
+    --tt-player-row: 104px;
+    --tt-hand-card-width: 72px;
+    --tt-shelf-card-width: 36px;
+    --tt-rune-card-width: 34px;
+    --tt-font-meta: 11px;
+    --tt-font-small: 11px;
+    --tt-font-body: 12px;
+    --tt-font-title: 13px;
+  }
+
+  .tabletop-layout .board-panel {
+    inset: 0 var(--tt-action-rail) calc(var(--tt-hand-height) + var(--tt-command-height) + 4px) 0;
+    gap: 3px;
+    padding: 3px;
+  }
+
+  .tabletop-layout .table-command-layer { right: var(--tt-action-rail); }
+
+  .tabletop-layout .table-seat,
+  .tabletop-layout .table-seat.bottom {
+    grid-template-columns: 86px minmax(0, 1fr) 106px;
+    gap: 2px;
+    padding: 13px 2px 2px;
+  }
+
+  .tabletop-layout .tabletop-identity-dock {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) 24px;
+    gap: 2px;
+  }
+
+  .tabletop-layout .physical-identity-cards {
+    width: 100%;
+    gap: 3px;
+  }
+
+  .tabletop-layout .identity-zone {
+    width: calc(50% - 2px);
+    grid-template-rows: 12px minmax(0, 1fr);
+  }
+
+  .tabletop-layout .identity-button,
+  .tabletop-layout .empty-card-slot,
+  .tabletop-layout .champion-away-reference {
+    width: var(--tt-shelf-card-width);
+    min-width: var(--tt-shelf-card-width);
+    justify-self: center;
+  }
+
+  .tabletop-layout .player-summary {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .tabletop-layout .player-summary h2 { flex: 0 0 auto; max-width: 70px; }
+  .tabletop-layout .player-stats { flex: 0 0 auto; min-height: 22px; }
+  .tabletop-layout .player-stats > * { min-height: 20px; padding: 2px 4px; }
+  .tabletop-layout .player-summary .champion-control { flex: 0 0 auto; min-height: 21px; height: 21px; }
+
+  .tabletop-layout .table-pile-dock {
+    top: 14px;
+    right: 109px;
+    width: 94px;
+    height: 58px;
+  }
+  .tabletop-layout .table-seat.top .table-pile-dock { left: 89px; right: auto; }
+  .tabletop-layout .table-seat.top .base-row { padding-left: 98px; }
+  .tabletop-layout .table-seat.bottom .base-row { padding-right: 98px; }
+  .tabletop-layout .table-card-pile { grid-template-rows: minmax(0, 1fr) 13px; }
+  .tabletop-layout .pile-label { min-height: 12px; font-size: 10px; line-height: 12px; }
+  .tabletop-layout .pile-count { top: 4px; min-width: 19px; height: 19px; font-size: 11px; }
+  .tabletop-layout .resource-zone,
+  .tabletop-layout .base-zone { grid-template-rows: 14px minmax(0, 1fr); }
+  .tabletop-layout .rune-tabletop { grid-template-columns: 40px minmax(0, 1fr); gap: 2px; }
+  .tabletop-layout .rune-play-area { grid-template-rows: 24px minmax(0, 1fr); }
+  .tabletop-layout .rune-summary { min-height: 24px; }
+  .tabletop-layout .rune-count { height: 22px; min-height: 22px; padding: 2px 4px; }
+  .tabletop-layout .resource-row.rune-card-stack { padding: 1px 5px 1px 0; }
+  .tabletop-layout .rune-card-chip { margin-right: -24px; }
+  .tabletop-layout .base-row { gap: 4px; padding: 2px; }
+  .tabletop-layout .base-row > .unit-token,
+  .tabletop-layout .base-row > .image-card { flex-basis: 42px; width: 42px; min-width: 42px; }
+
+  .tabletop-layout .location-band { padding: 17px 2px 2px; }
+  .tabletop-layout .battlefield-mat { grid-auto-columns: minmax(250px, calc(100vw - var(--tt-action-rail) - 10px)); gap: 3px; }
+  .tabletop-layout .battlefield.location-column {
+    grid-template-rows: minmax(72px, 1fr) 58px minmax(72px, 1fr);
+    min-width: 250px;
+    padding: 2px;
+  }
+  .tabletop-layout .battlefield.location-column .field-center {
+    grid-template-columns: 92px minmax(0, 1fr);
+    gap: 4px;
+    padding: 2px;
+  }
+  .tabletop-layout .battlefield.location-column .battlefield-head { padding: 4px; }
+  .tabletop-layout .field-lane-track { justify-content: flex-start; gap: 5px; padding: 1px 4px; }
+  .tabletop-layout .unit-token,
+  .tabletop-layout .field-lane > .image-card,
+  .tabletop-layout .field-lane-track > .image-card {
+    flex-basis: 52px;
+    width: 52px;
+    min-width: 52px;
+  }
+  .tabletop-layout .card-state-hud.unit-stats > b,
+  .tabletop-layout .card-state-hud.unit-stats > em { min-width: 20px; min-height: 18px; padding: 2px 3px; }
+
+  .tabletop-layout .context-action-dock {
+    right: 3px;
+    bottom: var(--tt-hand-height);
+    left: 3px;
+    grid-template-columns: minmax(104px, 0.52fr) minmax(0, 1.48fr);
+    min-height: calc(var(--tt-command-height) - 3px);
+    max-height: calc(var(--tt-command-height) - 2px);
+    gap: 4px;
+    padding: 3px 5px;
+  }
+  .tabletop-layout .action-context span:last-child { -webkit-line-clamp: 1; }
+  .tabletop-layout .action-command-list button { min-height: 32px; padding: 4px 7px; }
+  .tabletop-layout .persistent-hand.hand-drawer { right: 0; left: 0; }
+  .tabletop-layout .persistent-hand .hand-panel { grid-template-rows: 24px minmax(0, 1fr); }
+  .tabletop-layout .hand-fan { padding: 0 26px; }
+  .tabletop-layout .hand-fan-card { margin-right: -40px; transform: translateY(calc(var(--fan-rise) * 0.2)) rotate(calc(var(--fan-angle) * 0.58)); }
+  .tabletop-layout .hand-fan-card.selected-card,
+  .tabletop-layout .hand-fan-card:focus-visible { transform: translateY(-22px) rotate(0deg) scale(1.03); }
+  .tabletop-layout .table-action-rail { right: 4px; bottom: 5px; width: 48px; min-width: 48px; gap: 4px; }
+  .tabletop-layout .table-action-rail button,
+  .tabletop-layout .table-action-rail button[data-action="toggle-hand"] { min-height: 38px; padding: 3px; font-size: 11px; }
+
+  .tabletop-layout .floating-panels .graveyard-panel,
+  .tabletop-layout .floating-panels .banished-panel,
+  .tabletop-layout .floating-panels .intel-panel,
+  .tabletop-layout .inspector.inspector-panel,
+  .tabletop-layout .log-drawer {
+    top: calc(64px + env(safe-area-inset-top));
+    right: calc(var(--tt-action-rail) + 3px);
+    bottom: calc(var(--tt-hand-height) + var(--tt-command-height) + 5px);
+    width: calc(100vw - var(--tt-action-rail) - 6px);
+    max-width: none;
+  }
+
+  .tabletop-layout .chain-pod {
+    top: calc(var(--tt-opponent-row) + 4px);
+    width: calc(100% - 8px);
+    max-height: 43dvh;
+    padding: 5px;
+  }
+  .tabletop-layout .chain-zone-content {
+    grid-template-columns: minmax(0, 1fr);
+    max-height: 34dvh;
+  }
+  .tabletop-layout .chain-zone-item {
+    flex-basis: min(260px, calc(100vw - var(--tt-action-rail) - 28px));
+    min-width: 220px;
+    min-height: 126px;
+  }
+}
+
+@media (max-width: 1024px) and (max-height: 600px) {
+  .tabletop-layout {
+    --tt-command-height: 38px;
+    --tt-hand-height: calc(92px + env(safe-area-inset-bottom));
+    --tt-opponent-row: 52px;
+    --tt-player-row: 58px;
+    --tt-hand-card-width: 54px;
+    --tt-shelf-card-width: 24px;
+    --tt-rune-card-width: 22px;
+  }
+
+  .tabletop-layout .board-panel {
+    inset: 0 var(--tt-action-rail) calc(var(--tt-hand-height) + var(--tt-command-height) + 2px) 0;
+  }
+  .tabletop-layout .table-seat,
+  .tabletop-layout .table-seat.bottom { padding-top: 8px; }
+  .tabletop-layout .identity-zone { grid-template-rows: 8px minmax(0, 1fr); }
+  .tabletop-layout .tabletop-identity-dock { grid-template-rows: minmax(0, 1fr) 15px; }
+  .tabletop-layout .player-summary {
+    display: flex;
+    min-height: 15px;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  .tabletop-layout .player-summary h2 { max-width: 64px; font-size: 11px; }
+  .tabletop-layout .player-stats,
+  .tabletop-layout .player-stats > *,
+  .tabletop-layout .player-summary .champion-control {
+    min-height: 14px;
+    height: 14px;
+    font-size: 11px;
+  }
+  .tabletop-layout .table-pile-dock { top: 5px; height: 46px; }
+  .tabletop-layout .pile-label { display: block; font-size: 11px; }
+  .tabletop-layout .table-card-pile { grid-template-rows: minmax(0, 1fr) 11px; }
+  .tabletop-layout .resource-zone,
+  .tabletop-layout .base-zone { grid-template-rows: 8px minmax(0, 1fr); }
+  .tabletop-layout .rune-play-area { grid-template-rows: 17px minmax(0, 1fr); }
+  .tabletop-layout .rune-summary { min-height: 17px; }
+  .tabletop-layout .rune-count { height: 17px; min-height: 17px; padding: 1px 3px; }
+  .tabletop-layout .battlefield.location-column {
+    grid-template-rows: minmax(45px, 1fr) 38px minmax(45px, 1fr);
+  }
+  .tabletop-layout .battlefield.location-column .field-center { grid-template-columns: 64px minmax(0, 1fr); }
+  .tabletop-layout .unit-token,
+  .tabletop-layout .field-lane > .image-card,
+  .tabletop-layout .field-lane-track > .image-card {
+    flex-basis: 34px;
+    width: 34px;
+    min-width: 34px;
+  }
+  .tabletop-layout .context-action-dock {
+    bottom: var(--tt-hand-height);
+    min-height: var(--tt-command-height);
+    max-height: var(--tt-command-height);
+  }
+  .tabletop-layout .action-context span:last-child {
+    display: -webkit-box;
+    font-size: 11px;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 1;
+  }
+  .tabletop-layout .action-command-list button { min-height: 28px; padding: 2px 5px; }
+  .tabletop-layout .floating-panels .graveyard-panel,
+  .tabletop-layout .floating-panels .banished-panel,
+  .tabletop-layout .floating-panels .intel-panel,
+  .tabletop-layout .inspector.inspector-panel,
+  .tabletop-layout .log-drawer {
+    bottom: calc(var(--tt-hand-height) + var(--tt-command-height) + 3px);
+  }
+}
+
+/* Blocking decisions are utility work, not a replacement for the board. On a
+   desktop they use the same reserved right column as card information and the
+   pile sheets, leaving battlefield targets and state HUDs visible. */
+@media (min-width: 1200px) {
+  .tabletop-layout:has(.floating-panels > .payment-panel),
+  .tabletop-layout:has(.floating-panels > .choice-panel) {
+    --tt-sheet-reserve: 420px;
+  }
+
+  .tabletop-layout .floating-panels.has-blocking-decision {
+    inset: 66px calc(var(--tt-action-rail) + 8px)
+      calc(var(--tt-hand-height) + var(--tt-command-height) + 12px) auto;
+    display: block;
+    width: 404px;
+    height: auto;
+    padding: 0;
+    pointer-events: none;
+  }
+
+  .tabletop-layout .floating-panels.has-modal::before,
+  .tabletop-layout .floating-panels .payment-panel::before,
+  .tabletop-layout .floating-panels .choice-panel::before {
+    content: none;
+    background: transparent;
+    backdrop-filter: none;
+    pointer-events: none;
+  }
+
+  .tabletop-layout .floating-panels .payment-panel,
+  .tabletop-layout .floating-panels .choice-panel {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    transform: none;
+    overflow: hidden;
+    padding: 12px;
+    border-radius: 12px;
+    background: rgba(3, 18, 31, 0.97);
+    box-shadow: -16px 0 42px rgba(0, 0, 0, 0.46);
+  }
+
+  .tabletop-layout .floating-panels :is(.payment-panel, .choice-panel) > .section-head {
+    align-items: flex-start;
+    gap: 8px;
+    margin: 0 0 10px;
+  }
+
+  .tabletop-layout .floating-panels :is(.payment-panel, .choice-panel) > .section-head h2 {
+    font-size: var(--tt-font-title);
+    line-height: 1.2;
+  }
+
+  .tabletop-layout .floating-panels :is(.payment-panel, .choice-panel) > .section-head span,
+  .tabletop-layout .choice-instruction,
+  .tabletop-layout .choice-search :is(span, small, input) {
+    font-size: var(--tt-font-small);
+    line-height: 1.35;
+  }
+
+  .tabletop-layout .payment-body {
+    grid-template-columns: 84px minmax(0, 1fr);
+    gap: 10px;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .tabletop-layout .payment-card-preview {
+    align-content: start;
+    gap: 6px;
+    min-width: 0;
+    overflow-y: auto;
+  }
+
+  .tabletop-layout .payment-card-preview .card-art {
+    width: 82px;
+    max-width: 100%;
+    aspect-ratio: 0.714;
+    object-fit: contain;
+  }
+
+  .tabletop-layout .payment-card-preview :is(strong, span),
+  .tabletop-layout .payment-resource-heading :is(strong, span),
+  .tabletop-layout .payment-resource-group :is(button, label, small) {
+    font-size: var(--tt-font-meta);
+    line-height: 1.3;
+  }
+
+  .tabletop-layout .payment-cost-area {
+    gap: 8px;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding-right: 2px;
+  }
+
+  .tabletop-layout .payment-resource-group { padding: 8px; }
+  .tabletop-layout .payment-resource-heading { gap: 6px; margin-bottom: 6px; }
+  .tabletop-layout .pay-runes,
+  .tabletop-layout .pool-energy-list,
+  .tabletop-layout .payment-add-actions { gap: 7px; }
+  .tabletop-layout .pay-rune { width: 102px; min-width: 102px; padding: 7px; }
+
+  .tabletop-layout .choice-panel {
+    align-content: start;
+    overflow-y: auto;
+  }
+
+  .tabletop-layout .choice-search { margin: 0 0 9px; }
+  .tabletop-layout .choice-search input { min-height: 36px; padding: 7px 9px; }
+  .tabletop-layout .choice-grid,
+  .tabletop-layout .choice-panel:not(.trigger-order-panel) .choice-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-content: start;
+    justify-content: stretch;
+    gap: 8px;
+    max-height: none;
+    overflow: visible;
+    padding: 0 2px 4px 0;
+  }
+
+  .tabletop-layout .choice-option,
+  .tabletop-layout .trigger-order-option {
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    font-size: var(--tt-font-small);
+  }
+
+  .tabletop-layout .choice-option.text-choice-option { grid-column: 1 / -1; }
+}
+
+/* The chain's moving card has a stable portrait anchor. Effect copy and pass
+   state deliberately remain outside the artwork and are never line-clamped. */
+.tabletop-layout .chain-card-motion-anchor[data-motion-anchor] {
+  flex: 0 0 54px;
+  align-self: start;
+  width: 54px;
+  min-width: 54px;
+  height: auto;
+  aspect-ratio: 0.714;
+  overflow: hidden;
+  border: 1px solid rgba(114, 200, 235, 0.5);
+  border-radius: 6px;
+  background: rgba(4, 15, 26, 0.92);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.34);
+}
+
+.tabletop-layout .chain-card-motion-anchor[data-motion-anchor] > :is(img, .card-art) {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.tabletop-layout :is(.chain-zone-copy, .chain-active-effect-text) {
+  display: block;
+  min-width: 0;
+  max-width: none;
+  max-height: none;
+  overflow: visible;
+  color: #e7f4fa;
+  font-size: var(--tt-font-small);
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
+  -webkit-box-orient: initial;
+  -webkit-line-clamp: unset;
+}
+
+.tabletop-layout .chain-pass-progress {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  padding: 4px 8px;
+  border: 1px solid rgba(103, 205, 244, 0.58);
+  border-radius: 999px;
+  background: rgba(8, 47, 66, 0.94);
+  color: #eefaff;
+  font-size: var(--tt-font-small);
+  font-weight: 900;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .tabletop-layout .pile-label { font-size: 11px; }
+
+  /* Phone/tablet interaction intentionally becomes a bottom sheet; the board
+     remains visible above it while the sheet itself can scroll. */
+  .tabletop-layout .floating-panels .payment-panel,
+  .tabletop-layout .floating-panels .choice-panel {
+    position: absolute;
+    inset: auto 4px 4px;
+    width: auto;
+    height: auto;
+    max-height: min(62dvh, 560px);
+    margin: 0;
+    transform: none;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .tabletop-layout .floating-panels.has-modal::before {
+    background: rgba(0, 6, 13, 0.14);
+    backdrop-filter: none;
+  }
+
+  .tabletop-layout .chain-card-motion-anchor[data-motion-anchor] {
+    flex-basis: 48px;
+    width: 48px;
+    min-width: 48px;
+  }
+}
+
+/* Cascade seal -----------------------------------------------------------
+   Keep these physical-table contracts after every legacy/responsive block. */
+.tabletop-layout .identity-button.exhausted > .identity-orientation-layer,
+.tabletop-layout .rune-card-chip.spent .rune-orientation-layer,
+.tabletop-layout .unit-token.exhausted .card-exhaust-layer,
+.tabletop-layout .image-card.exhausted .card-exhaust-layer,
+.tabletop-layout :is(
+  .attached-gear.exhausted,
+  .attached-gear[data-exhausted="true"],
+  .attached-gear-card.exhausted,
+  .attached-gear-card[data-exhausted="true"]
+) > .attachment-orientation-layer {
+  transform: rotate(90deg);
+}
+
+.tabletop-layout .base-row,
+.tabletop-layout .field-lane-track {
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+}
+
+.tabletop-layout .field-lane-track { align-items: center; }
+
+.tabletop-layout .field-lane-track > :is(.unit-token, .image-card) {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 0;
+  max-width: 86px;
+  height: calc(100% - 6px);
+  max-height: 120px;
+  aspect-ratio: 0.714;
+}
+
+.tabletop-layout .field-lane-track > .unit-token.field-token {
+  flex: 0 0 198px;
+  width: 198px;
+  min-width: 198px;
+  max-width: 198px;
+  height: calc(100% + 4px);
+  max-height: 120px;
+  aspect-ratio: auto;
+  overflow: visible;
+  padding-right: 132px;
+  box-sizing: border-box;
+}
+
+.tabletop-layout .unit-token.field-token > .card-exhaust-layer {
+  inset: 0 auto 0 0;
+  width: auto;
+  height: 100%;
+  aspect-ratio: 0.714;
+}
+
+.tabletop-layout .unit-token.field-token > .card-state-hud.unit-stats {
+  inset: 2px 2px 2px auto;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+  align-items: stretch;
+  gap: 2px;
+  width: 126px;
+  max-width: 126px;
+  max-height: none;
+  overflow: visible;
+  padding: 2px;
+  border: 1px solid rgba(108, 191, 225, 0.34);
+  border-radius: 6px;
+  background: rgba(2, 13, 23, 0.88);
+  box-sizing: border-box;
+}
+
+.tabletop-layout .card-state-hud.unit-stats > :is(b, em),
+.tabletop-layout .unit-token.field-token .unit-state-badge {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 16px;
+  height: auto;
+  padding: 1px 2px;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+  text-align: center;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.tabletop-layout .unit-token.field-token .unit-state-badges {
+  position: static;
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px;
+  width: 100%;
+  min-width: 0;
+  overflow: visible;
+}
+
+.tabletop-layout .unit-token.field-token > .owner-chip { max-width: calc(100% - 136px); }
+.tabletop-layout .unit-token.field-token > .move-select-chip { right: auto; left: 59px; }
+.tabletop-layout .unit-token.field-token > .attachment-strip { right: 128px; }
+
+.tabletop-layout .board-band > .side-label,
+.tabletop-layout .battlefield-caption,
+.tabletop-layout .persistent-hand .section-head :is(h2, span, b),
+.tabletop-layout .opponent-hand > .zone-caption,
+.tabletop-layout .empty-hand-count,
+.tabletop-layout .move-select-chip {
+  font-size: 11px;
+  line-height: 1.1;
+}
+
+.tabletop-layout .move-select-chip {
+  min-width: 24px;
+  width: 24px;
+  min-height: 24px;
+  height: 24px;
+}
+
+.tabletop-layout .chain-zone-copy {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+}
+
+.tabletop-layout .chain-active-effect-text {
+  min-height: 112px;
+  max-height: none;
+  overflow: visible;
+}
+
+@media (min-width: 1200px) {
+  .tabletop-layout:has(.chain-pod) { --tt-sheet-reserve: 420px; }
+
+  .tabletop-layout .chain-pod {
+    position: fixed;
+    z-index: 90;
+    top: 66px;
+    right: calc(var(--tt-action-rail) + 8px);
+    bottom: auto;
+    left: auto;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 7px;
+    width: 404px;
+    height: auto;
+    max-height: calc(100dvh - var(--tt-hand-height) - var(--tt-command-height) - 90px);
+    overflow: hidden;
+    padding: 8px;
+    transform: none;
+  }
+
+  .tabletop-layout .chain-zone-content {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 9px;
+    width: 100%;
+    min-height: 0;
+    max-height: none;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .tabletop-layout .chain-stack {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    gap: 8px;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .tabletop-layout .chain-zone-item {
+    display: grid;
+    grid-template-columns: 54px minmax(0, 1fr);
+    align-items: start;
+    gap: 9px;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    height: auto;
+    overflow: visible;
+    padding: 9px;
+  }
+
+  .tabletop-layout .chain-zone-countered > * { grid-column: 1 / -1; }
+  .tabletop-layout:has(.chain-pod) .floating-panels.has-blocking-decision { top: min(480px, 52dvh); }
+}
+
+@media (max-width: 760px) {
+  .tabletop-layout .field-lane-track > .unit-token.field-token {
+    flex-basis: 182px;
+    width: 182px;
+    min-width: 182px;
+    max-width: 182px;
+    padding-right: 124px;
+  }
+
+  .tabletop-layout .unit-token.field-token > .card-state-hud.unit-stats {
+    width: 118px;
+    max-width: 118px;
+  }
+
+  .tabletop-layout .unit-token.field-token > .move-select-chip { left: 49px; }
+  .tabletop-layout .unit-token.field-token > .attachment-strip { right: 120px; }
+}
+
+/* EOF visual-QA overrides ------------------------------------------------
+   This block must remain after every authoritative and responsive rule. */
+.tabletop-layout .location-band {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 13px 3px 3px;
+}
+
+.tabletop-layout .battlefield-mat {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: hidden;
+}
+
+.tabletop-layout .battlefield.location-column {
+  grid-template-rows: minmax(0, 1fr) clamp(54px, 28%, 84px) minmax(0, 1fr);
+  gap: 4px;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  padding: 3px;
+}
+
+.tabletop-layout .battlefield.location-column .field-lane {
+  display: block;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 1px;
+}
+
+.tabletop-layout .battlefield.location-column .field-lane-track {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 1px;
+}
+
+.tabletop-layout .field-lane-track > :is(.unit-token, .image-card),
+.tabletop-layout .field-lane-track > .unit-token.field-token {
+  height: calc(100% - 2px);
+}
+
+.tabletop-layout .base-row {
+  align-items: center;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 7px;
+  scroll-padding-inline: 7px;
+}
+
+.tabletop-layout .base-row > :is(.unit-token, .image-card) {
+  flex: 0 0 84px;
+  width: 84px;
+  min-width: 84px;
+  max-width: 84px;
+  height: auto;
+  max-height: calc(100% - 4px);
+  aspect-ratio: 0.714;
+}
+
+.tabletop-layout .base-token .unit-token-body > strong {
+  overflow: visible;
+  font-size: 11px;
+  line-height: 1.08;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.tabletop-layout .rune-card-caption,
+.tabletop-layout .rune-card-chip strong,
+.tabletop-layout .rune-recycle-ready,
+.tabletop-layout .rune-summary,
+.tabletop-layout .rune-count {
+  font-size: 11px;
+}
+
+@media (min-width: 761px) and (max-height: 820px) {
+  .tabletop-layout {
+    --tt-opponent-row: 96px;
+    --tt-player-row: 112px;
+    --tt-shelf-card-width: 50px;
+    --tt-rune-card-width: 46px;
+  }
+
+  .tabletop-layout .table-seat,
+  .tabletop-layout .table-seat.bottom {
+    padding-top: 12px;
+    padding-bottom: 3px;
+  }
+
+  .tabletop-layout .pile-cards,
+  .tabletop-layout .table-card-pile.compact .pile-cards {
+    width: 50px;
+    min-width: 50px;
+  }
+
+  .tabletop-layout .rune-card-chip {
+    flex-basis: 46px;
+    width: 46px;
+    min-width: 46px;
+  }
+
+  .tabletop-layout .base-row > :is(.unit-token, .image-card) {
+    flex-basis: 52px;
+    width: 52px;
+    min-width: 52px;
+    max-width: 52px;
+  }
+}
+
+@media (min-width: 1200px) and (max-width: 1499px) {
+  .tabletop-layout.inspector-open,
+  .tabletop-layout:has(.floating-panels > .graveyard-panel),
+  .tabletop-layout:has(.floating-panels > .banished-panel),
+  .tabletop-layout:has(.floating-panels > .intel-panel),
+  .tabletop-layout:has(.floating-panels > .payment-panel),
+  .tabletop-layout:has(.floating-panels > .choice-panel),
+  .tabletop-layout:has(.log-drawer),
+  .tabletop-layout:has(.chain-pod) {
+    --tt-sheet-reserve: clamp(304px, 24vw, 352px);
+  }
+
+  .tabletop-layout .floating-panels :is(
+    .graveyard-panel,
+    .banished-panel,
+    .intel-panel,
+    .payment-panel,
+    .choice-panel
+  ),
+  .tabletop-layout .floating-panels.has-blocking-decision,
+  .tabletop-layout .inspector.inspector-panel,
+  .tabletop-layout .log-drawer,
+  .tabletop-layout .chain-pod {
+    width: calc(var(--tt-sheet-reserve) - 16px);
+    max-width: calc(var(--tt-sheet-reserve) - 16px);
+  }
+
+  .tabletop-layout:is(
+    .inspector-open,
+    :has(.log-drawer),
+    :has(.chain-pod),
+    :has(.floating-panels > .graveyard-panel),
+    :has(.floating-panels > .banished-panel),
+    :has(.floating-panels > .intel-panel),
+    :has(.floating-panels > .payment-panel),
+    :has(.floating-panels > .choice-panel)
+  ) .table-seat,
+  .tabletop-layout:is(
+    .inspector-open,
+    :has(.log-drawer),
+    :has(.chain-pod),
+    :has(.floating-panels > .graveyard-panel),
+    :has(.floating-panels > .banished-panel),
+    :has(.floating-panels > .intel-panel),
+    :has(.floating-panels > .payment-panel),
+    :has(.floating-panels > .choice-panel)
+  ) .table-seat.bottom {
+    grid-template-columns:
+      minmax(180px, 1.05fr)
+      minmax(150px, 0.8fr)
+      minmax(160px, 1fr)
+      minmax(190px, 1.1fr);
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .tabletop-layout:is(
+    .inspector-open,
+    :has(.log-drawer),
+    :has(.chain-pod),
+    :has(.floating-panels > .graveyard-panel),
+    :has(.floating-panels > .banished-panel),
+    :has(.floating-panels > .intel-panel),
+    :has(.floating-panels > .payment-panel),
+    :has(.floating-panels > .choice-panel)
+  ) .battlefield-mat:not(.has-extra-battlefields) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-auto-columns: minmax(0, 1fr);
+    grid-auto-flow: row;
+    overflow-x: hidden;
+  }
+
+  .tabletop-layout:is(
+    .inspector-open,
+    :has(.log-drawer),
+    :has(.chain-pod),
+    :has(.floating-panels > .graveyard-panel),
+    :has(.floating-panels > .banished-panel),
+    :has(.floating-panels > .intel-panel),
+    :has(.floating-panels > .payment-panel),
+    :has(.floating-panels > .choice-panel)
+  ) .battlefield.location-column {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .tabletop-layout:is(
+    .inspector-open,
+    :has(.log-drawer),
+    :has(.chain-pod),
+    :has(.floating-panels > .graveyard-panel),
+    :has(.floating-panels > .banished-panel),
+    :has(.floating-panels > .intel-panel),
+    :has(.floating-panels > .payment-panel),
+    :has(.floating-panels > .choice-panel)
+  ) .location-band[data-count="1"] .battlefield-mat {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tabletop-layout .payment-body {
+    grid-template-columns: 64px minmax(0, 1fr);
+    gap: 7px;
+  }
+
+  .tabletop-layout .payment-card-preview .card-art { width: 62px; }
+}
+
+@media (min-width: 1200px) {
+  .tabletop-layout .floating-panels .payment-panel {
+    grid-template-rows: max-content minmax(0, 1fr);
+    min-height: 0;
+  }
+
+  .tabletop-layout .payment-body {
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .tabletop-layout .payment-cost-area {
+    height: 100%;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
+
+  .tabletop-layout .pay-runes {
+    display: flex;
+    align-items: stretch;
+    min-height: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 7px;
+    scroll-padding-inline: 4px;
+  }
+
+  .tabletop-layout .pay-rune {
+    flex: 0 0 102px;
+    width: 102px;
+    min-width: 102px;
+  }
+
+  .tabletop-layout:has(.chain-pod):has(.floating-panels.has-blocking-decision) {
+    --tt-chain-split-height: clamp(156px, 24dvh, 210px);
+  }
+
+  .tabletop-layout:has(.chain-pod):has(.floating-panels.has-blocking-decision) .chain-pod {
+    height: var(--tt-chain-split-height);
+    max-height: var(--tt-chain-split-height);
+  }
+
+  .tabletop-layout:has(.chain-pod):has(.floating-panels.has-blocking-decision) .floating-panels.has-blocking-decision {
+    top: calc(66px + var(--tt-chain-split-height) + 8px);
+  }
+}
+
+/* Final measured desktop seal -------------------------------------------
+   Keep this at the physical EOF: the compact 1280px table and docked
+   decision stack are measured against these values. */
+@media (min-width: 1200px) {
+  .tabletop-layout .board-panel,
+  .tabletop-layout .table-command-layer {
+    transition: none;
+  }
+
+  /* Fixed descendants resolve against the shifted board containing block.
+     Offset the Chain by the reserved sheet width so it lands in that sheet. */
+  .tabletop-layout .chain-pod {
+    top: 8px;
+    right: calc(8px - var(--tt-sheet-reserve));
+    left: auto;
+  }
+
+  .tabletop-layout:is(
+    .inspector-open,
+    :has(.log-drawer),
+    :has(.chain-pod),
+    :has(.floating-panels > .graveyard-panel),
+    :has(.floating-panels > .banished-panel),
+    :has(.floating-panels > .intel-panel),
+    :has(.floating-panels > .payment-panel),
+    :has(.floating-panels > .choice-panel)
+  ) .battlefield-mat:not(.has-extra-battlefields) {
+    overflow-x: clip;
+    scroll-padding: 0;
+    scroll-snap-type: none;
+  }
+
+  .tabletop-layout:is(
+    .inspector-open,
+    :has(.log-drawer),
+    :has(.chain-pod),
+    :has(.floating-panels > .graveyard-panel),
+    :has(.floating-panels > .banished-panel),
+    :has(.floating-panels > .intel-panel),
+    :has(.floating-panels > .payment-panel),
+    :has(.floating-panels > .choice-panel)
+  ) .battlefield.location-column {
+    scroll-snap-align: none;
+  }
+
+  .tabletop-layout:has(.chain-pod):has(.floating-panels.has-blocking-decision) {
+    --tt-chain-split-height: clamp(136px, 20dvh, 176px);
+  }
+
+  .tabletop-layout:has(.chain-pod):has(.floating-panels.has-blocking-decision) .chain-pod {
+    height: var(--tt-chain-split-height);
+    max-height: var(--tt-chain-split-height);
+  }
+
+  .tabletop-layout:has(.chain-pod):has(.floating-panels.has-blocking-decision) .floating-panels.has-blocking-decision {
+    top: calc(66px + var(--tt-chain-split-height) + 8px);
+  }
+
+  .tabletop-layout .floating-panels .payment-panel > .section-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 4px 7px;
+    min-height: 0;
+    margin: 0 0 6px;
+    padding: 0;
+  }
+
+  .tabletop-layout .floating-panels .payment-panel > .section-head > div:first-child {
+    min-width: 0;
+  }
+
+  .tabletop-layout .floating-panels .payment-panel > .section-head h2 {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.15;
+  }
+
+  .tabletop-layout .floating-panels .payment-panel > .section-head span {
+    max-height: 3.6em;
+    margin-top: 2px;
+    overflow-y: auto;
+    font-size: 11px;
+    line-height: 1.2;
+    letter-spacing: 0;
+  }
+
+  .tabletop-layout .floating-panels .payment-panel > .section-head .actions {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 4px;
+  }
+
+  .tabletop-layout .floating-panels .payment-panel > .section-head button {
+    min-height: 30px;
+    padding: 3px 6px;
+    font-size: 11px;
+    line-height: 1.15;
+    white-space: nowrap;
+  }
+
+  .tabletop-layout .payment-cost-area {
+    grid-auto-flow: row;
+    align-content: start;
+  }
+
+  .tabletop-layout .rune-payment-group {
+    order: -100;
+    padding: 5px;
+  }
+
+  .tabletop-layout .rune-payment-group .payment-resource-heading {
+    display: grid;
+    justify-content: stretch;
+    gap: 2px;
+    margin-bottom: 4px;
+  }
+
+  .tabletop-layout .rune-payment-group .payment-resource-heading span {
+    font-size: 11px;
+    line-height: 1.2;
+    text-align: left;
+  }
+
+  .tabletop-layout .pay-runes {
+    gap: 5px;
+    padding: 0 0 3px;
+  }
+
+  .tabletop-layout .pay-rune {
+    flex: 0 0 88px;
+    width: 88px;
+    min-width: 88px;
+    gap: 5px;
+    padding: 5px;
+  }
+
+  .tabletop-layout .pay-rune .payment-rune-card {
+    width: 54px;
+    height: 76px;
+  }
+
+  .tabletop-layout .pay-rune .payment-mode-buttons {
+    gap: 4px;
+  }
+
+  .tabletop-layout .pay-rune .payment-mode-buttons button {
+    height: 27px;
+    min-height: 27px;
+    padding: 2px 4px;
+    font-size: 11px;
+    line-height: 1.1;
+  }
+}
+
+@media (min-width: 761px) and (max-height: 820px) {
+  .tabletop-layout {
+    --tt-opponent-row: 104px;
+    --tt-player-row: 120px;
+    --tt-hand-card-width: 74px;
+    --tt-shelf-card-width: 56px;
+    --tt-rune-card-width: 50px;
+  }
+
+  .tabletop-layout .pile-cards,
+  .tabletop-layout .table-card-pile.compact .pile-cards {
+    width: 56px;
+    min-width: 56px;
+  }
+
+  .tabletop-layout .rune-card-chip {
+    flex-basis: 50px;
+    width: 50px;
+    min-width: 50px;
+  }
+
+  .tabletop-layout .base-row > :is(.unit-token, .image-card) {
+    flex-basis: 56px;
+    width: 56px;
+    min-width: 56px;
+    max-width: 56px;
+  }
+}
+
+.tabletop-layout .base-token .unit-token-body > strong {
+  display: block;
+  max-height: none;
+  line-height: 1;
+}
+
+@media (min-width: 1200px) {
+  .tabletop-layout:is(
+    .inspector-open,
+    :has(.log-drawer),
+    :has(.chain-pod),
+    :has(.floating-panels > .graveyard-panel),
+    :has(.floating-panels > .banished-panel),
+    :has(.floating-panels > .intel-panel),
+    :has(.floating-panels > .payment-panel),
+    :has(.floating-panels > .choice-panel)
+  ) .battlefield.location-column {
+    transform: none !important;
+  }
+}
+
+/* Final containment and glanceability pass -----------------------------
+   A battlefield card is a border-box grid item; its status rail is a
+   compact physical-card companion, not an overlay over the artwork. */
+.tabletop-layout .battlefield.location-column {
+  box-sizing: border-box;
+  align-self: center;
+  justify-self: center;
+  width: calc(100% - 10px) !important;
+  max-width: calc(100% - 10px) !important;
+  height: calc(100% - 4px) !important;
+  transform: none !important;
+}
+
+.tabletop-layout .battlefield.location-column .battlefield-head h2 {
+  min-height: 16px;
+  overflow: visible;
+  line-height: 16px;
+  text-overflow: clip;
+}
+
+@media (min-width: 761px) {
+  .tabletop-layout .field-lane-track > .unit-token.field-token {
+    flex-basis: 220px;
+    width: 220px;
+    min-width: 220px;
+    max-width: 220px;
+    min-height: 52px;
+    padding-right: 164px;
+    box-sizing: border-box;
+  }
+
+  .tabletop-layout .unit-token.field-token > .card-exhaust-layer {
+    width: 54px;
+    max-width: 54px;
+  }
+
+  .tabletop-layout .unit-token.field-token .unit-token-body {
+    gap: 1px;
+    padding: 10px 3px 3px;
+  }
+
+  .tabletop-layout .unit-token.field-token .unit-token-body > strong {
+    display: -webkit-box;
+    overflow: hidden;
+    font-size: 11px;
+    line-height: 1.05;
+    text-overflow: clip;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .tabletop-layout .unit-token.field-token .unit-token-body > span {
+    font-size: 11px;
+    line-height: 1;
+  }
+
+  .tabletop-layout .unit-token.field-token > .card-state-hud.unit-stats {
+    inset: 1px 1px 1px auto;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-content: center;
+    gap: 1px;
+    width: 162px;
+    max-width: 162px;
+    max-height: calc(100% - 2px);
+    overflow: hidden;
+    padding: 1px;
+  }
+
+  .tabletop-layout .unit-token.field-token > .card-state-hud.unit-stats > :is(b, em),
+  .tabletop-layout .unit-token.field-token .unit-state-badge {
+    min-height: 15px;
+    padding: 1px 2px;
+    font-size: 11px;
+    line-height: 1;
+    overflow-wrap: normal;
+    white-space: nowrap;
+  }
+
+  .tabletop-layout .unit-token.field-token > .card-state-hud.unit-stats > b:first-child {
+    font-size: 11px;
+  }
+
+  .tabletop-layout .unit-token.field-token .unit-state-badges {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1px;
+  }
+
+  .tabletop-layout .unit-token.field-token > .owner-chip {
+    top: 2px;
+    left: 2px;
+    max-width: 50px;
+    padding: 1px 3px;
+    font-size: 11px;
+  }
+
+  .tabletop-layout .unit-token.field-token > .move-select-chip {
+    left: 30px;
+    width: 20px;
+    min-width: 20px;
+    height: 20px;
+    min-height: 20px;
+  }
+
+  .tabletop-layout .unit-token.field-token > .attachment-strip {
+    right: 161px;
+  }
+}
+
+@media (min-width: 1200px) {
+  .tabletop-layout .pay-rune {
+    position: relative;
+    display: grid;
+    box-sizing: border-box;
+    min-height: 118px;
+    contain: layout;
+  }
+}
+
+/* The Base uses a compact horizontal card plus a dedicated state rail. This
+   keeps both the Unit and its attached Gear independently clickable. */
+@media (min-width: 761px) {
+  .tabletop-layout .base-row {
+    padding-inline: 2px;
+  }
+
+  .tabletop-layout .table-seat,
+  .tabletop-layout .table-seat.bottom {
+    grid-template-columns:
+      clamp(190px, 15vw, 230px)
+      clamp(190px, 15vw, 220px)
+      minmax(190px, 1fr)
+      clamp(230px, 19vw, 290px);
+  }
+
+  .tabletop-layout .base-row > .unit-token.base-token {
+    flex: 0 0 188px;
+    width: 188px;
+    min-width: 188px;
+    max-width: 188px;
+    height: calc(100% - 4px);
+    max-height: 82px;
+    aspect-ratio: auto;
+    overflow: hidden;
+    padding-right: 130px;
+    box-sizing: border-box;
+    cursor: pointer;
+  }
+
+  .tabletop-layout .unit-token.base-token > .card-exhaust-layer {
+    inset: 1px auto 1px 1px;
+    width: 56px;
+    height: calc(100% - 2px);
+    max-width: 56px;
+  }
+
+  .tabletop-layout .unit-token.base-token .unit-token-body {
+    gap: 1px;
+    padding: 10px 3px 3px;
+  }
+
+  .tabletop-layout .unit-token.base-token .unit-token-body > :is(strong, span) {
+    font-size: 11px;
+    line-height: 1.05;
+  }
+
+  .tabletop-layout .unit-token.base-token .unit-token-body > strong {
+    display: -webkit-box;
+    overflow: hidden;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .tabletop-layout .unit-token.base-token > .card-state-hud.unit-stats {
+    inset: 1px 1px 1px auto;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-content: center;
+    align-items: stretch;
+    gap: 1px;
+    width: 128px;
+    max-width: 128px;
+    max-height: calc(100% - 2px);
+    overflow: hidden;
+    padding: 1px;
+    border: 1px solid rgba(108, 191, 225, 0.34);
+    border-radius: 6px;
+    background: rgba(2, 13, 23, 0.9);
+    box-sizing: border-box;
+  }
+
+  .tabletop-layout .unit-token.base-token > .card-state-hud.unit-stats > :is(b, em),
+  .tabletop-layout .unit-token.base-token .unit-state-badge {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    min-height: 15px;
+    padding: 1px 2px;
+    box-sizing: border-box;
+    overflow-wrap: normal;
+    font-size: 11px;
+    line-height: 1;
+    text-align: center;
+    text-overflow: clip;
+    white-space: nowrap;
+  }
+
+  .tabletop-layout .unit-token.base-token > .card-state-hud.unit-stats > b:first-child {
+    margin-right: 0;
+    font-size: 11px;
+  }
+
+  .tabletop-layout .unit-token.base-token .unit-state-badges {
+    position: static;
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1px;
+    width: 100%;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .tabletop-layout .unit-token.base-token > .owner-chip {
+    top: 2px;
+    left: 2px;
+    max-width: 52px;
+    padding: 1px 3px;
+    font-size: 11px;
+  }
+
+  .tabletop-layout .unit-token.base-token > .attachment-strip {
+    z-index: 12;
+    top: 50%;
+    right: auto;
+    left: 22px;
+    bottom: auto;
+    transform: translateY(-50%);
+  }
+
+  .tabletop-layout .unit-token.base-token > .attachment-strip > button.attached-gear {
+    flex: 0 0 56px;
+    width: 40px;
+    min-width: 40px;
+    max-width: 40px;
+    height: 56px;
+    min-height: 56px;
+    max-height: 56px;
+  }
+
+  .tabletop-layout .unit-token.base-token > .move-select-chip {
+    left: 31px;
+  }
+}
+
+@media (min-width: 1200px) and (max-width: 1499px) {
+  .tabletop-layout:is(
+    .inspector-open,
+    :has(.log-drawer),
+    :has(.chain-pod),
+    :has(.floating-panels > .graveyard-panel),
+    :has(.floating-panels > .banished-panel),
+    :has(.floating-panels > .intel-panel),
+    :has(.floating-panels > .payment-panel),
+    :has(.floating-panels > .choice-panel)
+  ) .table-seat,
+  .tabletop-layout:is(
+    .inspector-open,
+    :has(.log-drawer),
+    :has(.chain-pod),
+    :has(.floating-panels > .graveyard-panel),
+    :has(.floating-panels > .banished-panel),
+    :has(.floating-panels > .intel-panel),
+    :has(.floating-panels > .payment-panel),
+    :has(.floating-panels > .choice-panel)
+  ) .table-seat.bottom {
+    grid-template-columns:
+      minmax(170px, 1fr)
+      minmax(180px, 0.9fr)
+      minmax(160px, 1fr)
+      minmax(180px, 1fr);
   }
 }
