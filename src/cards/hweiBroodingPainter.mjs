@@ -20,13 +20,13 @@ export default card({
       "energy": 5,
       "power": [
         {
-          "domain": DOMAINS.ANY,
+          "domain": DOMAINS.MIND,
           "amount": 1
         }
       ],
       "might": 5,
       "image": "https://exburst.dev/riftbound/cards/sd/UNL-080-219.webp",
-      "text": "When I move, draw 1, then discard 1. Then, do the following based on the discarded card's type:\n- Spell - Draw 1.\n- Gear - Ready up to 2 runes.\n- Unit - Give me +3 Might this turn.",
+      "text": "When I move, draw 1, then discard 1. Then, do the following based on the discarded card's type:\n- Spell — Draw 1.\n- Gear — Ready up to 2 runes.\n- Unit — Give me +3 Might this turn.",
       "effects": [
         {
           "timing": "onMove",

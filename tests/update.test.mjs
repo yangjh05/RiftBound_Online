@@ -349,10 +349,11 @@ test("helper launch waits for the child readiness handshake", async () => {
   try {
     const readyPath = path.join(root, "ready");
     const child = new EventEmitter();
+    let readyWrite;
     child.unref = () => {};
     child.kill = () => assert.fail("ready helper must not be killed");
     const spawnImpl = () => {
-      queueMicrotask(async () => {
+      readyWrite = Promise.resolve().then(async () => {
         child.emit("spawn");
         await writeFile(readyPath, "ready");
       });
@@ -367,6 +368,7 @@ test("helper launch waits for the child readiness handshake", async () => {
       logPath: path.join(root, "apply.log"),
       spawnImpl
     });
+    await readyWrite;
     assert.equal(await waitForFile(readyPath, 100), true);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -380,10 +382,11 @@ test("helper starts a hidden bootstrap process and unrefs it after the worker is
     const child = new EventEmitter();
     let unrefCount = 0;
     let invocation;
+    let readyWrite;
     child.unref = () => { unrefCount += 1; };
     const spawnImpl = (command, args, options) => {
       invocation = { command, args, options };
-      queueMicrotask(async () => {
+      readyWrite = Promise.resolve().then(async () => {
         child.emit("spawn");
         await writeFile(readyPath, "ready");
       });
@@ -398,6 +401,7 @@ test("helper starts a hidden bootstrap process and unrefs it after the worker is
       logPath: path.join(root, "apply.log"),
       spawnImpl
     });
+    await readyWrite;
     assert.match(path.basename(invocation.command), /^powershell\.exe$/iu);
     assert.equal(invocation.options.windowsHide, true);
     assert.equal(invocation.options.stdio, "ignore");

@@ -27,6 +27,18 @@ export function normalizeCardNumber(data) {
   return id && total ? `${id}/${total}` : id;
 }
 
+export function cardTypes(value) {
+  if (!value) return [];
+  const declared = Array.isArray(value.types) && value.types.length
+    ? value.types
+    : [value.type];
+  return [...new Set(declared.filter(Boolean).map((type) => String(type).toLowerCase()))];
+}
+
+export function cardHasType(value, type) {
+  return cardTypes(value).includes(String(type || "").toLowerCase());
+}
+
 export function card(data) {
   const cardNumber = normalizeCardNumber(data);
   const basicRuneDomain = data.type === "rune" && data.tags?.includes("Basic Rune")
@@ -61,6 +73,7 @@ export function card(data) {
     power: [],
     cardNumber,
     ...data,
+    types: cardTypes(data),
     effects: implicitBasicRuneEffects || data.effects || []
   };
 }

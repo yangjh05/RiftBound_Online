@@ -1,6 +1,7 @@
 import {
   activateCard,
   beginPlayCard,
+  beginPlayCardFromTrash,
   beginPlayChampion,
   cancelPayment,
   chooseFirstPlayer,
@@ -57,6 +58,8 @@ export function applyGameCommand(room, playerId, command) {
       return skipMulligan(game);
     case "beginPlayCard":
       return beginPlayCard(game, resolvedCommand.cardId, resolvedCommand.destination);
+    case "beginPlayCardFromTrash":
+      return beginPlayCardFromTrash(game, resolvedCommand.cardId, resolvedCommand.destination);
     case "beginPlayChampion":
       return beginPlayChampion(game, resolvedCommand.destination);
     case "hideCard":

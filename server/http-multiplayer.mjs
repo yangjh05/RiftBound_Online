@@ -16,6 +16,7 @@ import {
   readAiStatus,
   storeAiReplay
 } from "./ai-data.mjs";
+import { handleAccountRequest } from "./http-accounts.mjs";
 
 export async function handleMultiplayerRequest(req, res) {
   const url = new URL(req.url || "/", "http://127.0.0.1");
@@ -23,8 +24,8 @@ export async function handleMultiplayerRequest(req, res) {
 
   if (req.method === "OPTIONS") {
     res.writeHead(204, corsHeaders({
-      "access-control-allow-methods": "GET, POST, OPTIONS",
-      "access-control-allow-headers": "content-type",
+      "access-control-allow-methods": "GET, POST, PUT, OPTIONS",
+      "access-control-allow-headers": "authorization, content-type",
       "access-control-max-age": "86400"
     }));
     res.end();
@@ -32,6 +33,8 @@ export async function handleMultiplayerRequest(req, res) {
   }
 
   try {
+    if (await handleAccountRequest(req, res, { json, readJson })) return true;
+
     if (req.method === "GET" && url.pathname === "/api/rooms") {
       return json(res, 200, { ok: true, rooms: listRooms() });
     }
@@ -139,7 +142,12 @@ function corsHeaders(extra = {}) {
 
 async function readJson(req) {
   const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > 1024 * 1024) throw new Error("Request body is too large.");
+    chunks.push(chunk);
+  }
   if (!chunks.length) return {};
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }

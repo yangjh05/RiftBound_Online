@@ -22,7 +22,7 @@ export default card({
       "energy": 8,
       "power": [
         {
-          "domain": DOMAINS.ANY,
+          "domain": DOMAINS.CALM,
           "amount": 2
         }
       ],

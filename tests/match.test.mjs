@@ -16,7 +16,7 @@ import {
 const allCards = Object.values(cards);
 const cardByNumber = (number) => allCards.find((card) => [card.cardNumber, card.collectorNumber, card.id].includes(number)) || null;
 
-test("tournament decks require exactly 40 Main Deck cards and at most 8 Sideboard cards", () => {
+test("tournament decks require exactly 40 Main Deck cards and at most 10 Sideboard cards", () => {
   const deck = structuredClone(rawDecklists.originsKaisa);
   assert.equal(deck.main.reduce((sum, [, count]) => sum + count, 0), DECK_RULES.tournamentMainExact);
   assert.equal(validateDeckRecord(deck, cardByNumber).playable, true);

@@ -1,0 +1,1069 @@
+{
+  "schemaVersion": 1,
+  "set": "SFD",
+  "policy": "Card-number keyed declarative behavior overrides. Reused effects receive reviewed implementationReferences during generation.",
+  "manualCardNumbers": [
+    "SFD-032/221",
+    "SFD-036/221",
+    "SFD-051/221",
+    "SFD-097/221",
+    "SFD-105/221",
+    "SFD-109/221",
+    "SFD-115/221",
+    "SFD-136/221",
+    "SFD-140/221",
+    "SFD-146/221",
+    "SFD-208/221",
+    "SFD-215/221"
+  ],
+  "cards": {
+    "SFD-001/221": {
+      "effects": [
+        { "timing": "spell", "kind": "modifyMight", "target": "friendlyUnit", "amount": 0, "amountPerEnemyAtTargetBattlefield": 2, "temporary": true }
+      ]
+    },
+    "SFD-003/221": {
+      "effects": [
+        { "timing": "spell", "kind": "giveKeyword", "target": "unit", "keywords": ["Assault"], "might": 2, "temporary": true }
+      ]
+    },
+    "SFD-004/221": {
+      "effects": [
+        { "timing": "spell", "kind": "unitsEnterReadyThisTurn" },
+        { "timing": "spell", "kind": "playToken", "tokenKind": "gold", "count": 1, "destination": "base", "exhausted": true }
+      ]
+    },
+    "SFD-005/221": {
+      "effects": [
+        { "timing": "spell", "kind": "killGear", "draw": 2, "drawTargetController": true }
+      ]
+    },
+    "SFD-006/221": {
+      "effects": [
+        { "timing": "static", "kind": "entersReady" }
+      ]
+    },
+    "SFD-007/221": {
+      "effects": [
+        { "timing": "onPlay", "kind": "giveKeyword", "target": "unit", "keywords": ["Ganking"] }
+      ]
+    },
+    "SFD-009/221": {
+      "effects": [
+        { "timing": "static", "kind": "gainKeywords", "textSection": "effect", "keywords": ["Assault", "Assault"] }
+      ]
+    },
+    "SFD-010/221": {
+      "effects": [
+        { "timing": "static", "kind": "costModifier", "appliesTo": "self", "energy": -2, "requiresNotFromHand": true }
+      ]
+    },
+    "SFD-011/221": {
+      "effects": [
+        { "timing": "spell", "kind": "attachOrDetachEquipment" },
+        { "timing": "spell", "kind": "draw", "amount": 1 }
+      ]
+    },
+    "SFD-012/221": {
+      "effects": [
+        { "timing": "static", "kind": "costModifier", "appliesTo": "self", "energyPerCardPlayed": -1, "minEnergy": 1 }
+      ]
+    },
+    "SFD-013/221": {
+      "effects": [
+        { "timing": "onPlay", "kind": "dealDamageUnit", "target": "battlefieldUnit", "amount": 2, "optional": true, "additionalEnergy": 1, "additionalPower": { "domain": "Fury", "amount": 1 } }
+      ]
+    },
+    "SFD-014/221": {
+      "effects": [
+        { "timing": "static", "kind": "unitsCannotMoveToBase" }
+      ]
+    },
+    "SFD-015/221": {
+      "effects": [
+        { "timing": "static", "kind": "playDestinationRestriction", "mode": "conqueredThisTurnBattlefieldOnly" }
+      ]
+    },
+    "SFD-016/221": {
+      "effects": [
+        { "timing": "attackOrDefend", "kind": "dealDamageEnemyHere", "textSection": "effect", "amount": 2 }
+      ]
+    },
+    "SFD-017/221": {
+      "effects": [
+        { "timing": "spell", "kind": "dealDamageUnit", "target": "battlefieldUnit", "amount": 2, "attackingAmount": 4 }
+      ]
+    },
+    "SFD-018/221": {
+      "effects": [
+        { "timing": "replacement", "kind": "recycleTopBeforeReveal", "optional": true }
+      ]
+    },
+    "SFD-019/221": {
+      "effects": [
+        { "timing": "activated", "kind": "playUnitToken", "abilityId": "assembly", "exhaust": true, "costEnergy": 1, "costPower": [{ "domain": "Fury", "amount": 1 }], "costRecycleTrash": 1, "costRecycleTrashType": "unit", "tokenKind": "mech", "count": 1, "destination": "base" }
+      ]
+    },
+    "SFD-020/221": {
+      "effects": [
+        { "timing": "combatWin", "kind": "playToken", "tokenKind": "gold", "count": 1, "destination": "base", "exhausted": true },
+        { "timing": "attackOrDefend", "kind": "payPowerModifySelfMight", "domain": "Fury", "amount": 2, "temporary": true }
+      ]
+    },
+    "SFD-021/221": {
+      "effects": [
+        { "timing": "death", "kind": "playUnitToken", "tokenKind": "mech", "count": 2, "destination": "base" }
+      ]
+    },
+    "SFD-023/221": {
+      "effects": [
+        { "timing": "spell", "kind": "dealDamageUnit", "target": "battlefieldUnit", "amount": 2, "repeat": 2, "minTargets": 1, "maxTargets": 2, "selectRepeatedTargetsOnPlay": true }
+      ]
+    },
+    "SFD-024/221": {
+      "effects": [
+        { "timing": "attackOrDefend", "kind": "playEquipmentFromHandIgnoreCostAttachSelf", "role": "attacker", "maxEnergy": 2 }
+      ]
+    },
+    "SFD-025/221": {
+      "effects": [
+        { "timing": "static", "kind": "playDestinationRestriction", "mode": "attackedBattlefield" }
+      ]
+    },
+    "SFD-026/221": {
+      "effects": [
+        { "timing": "static", "kind": "friendlyMatchingUnitsGainKeywords", "tags": ["Mech"], "keywords": ["Assault"] },
+        { "timing": "conquer", "kind": "recycleFriendlyUnitPlayTrashMechReduced" }
+      ]
+    },
+    "SFD-027/221": {
+      "effects": [
+        { "timing": "static", "kind": "conditionalEnterReady", "handSizeAtMost": 2 },
+        { "timing": "hold", "kind": "draw", "amount": 2 }
+      ]
+    },
+    "SFD-028/221": {
+      "effects": [
+        { "timing": "attackOrDefend", "kind": "dealDamageEnemyHere", "role": "attacker", "amountFromAssault": true }
+      ]
+    },
+    "SFD-029/221": {
+      "effects": [
+        { "timing": "static", "kind": "otherFriendlyNonHandUnitsHaveAccelerate" }
+      ]
+    },
+    "SFD-030/221": {
+      "effects": [
+        { "timing": "static", "kind": "holdConquerInterchange", "textSection": "effect" }
+      ]
+    },
+    "SFD-031/221": {
+      "effects": [
+        { "timing": "spell", "kind": "playUnitToken", "tokenKind": "sandSoldier", "count": 1, "destination": "chooseEachBaseOrControlledBattlefield" }
+      ]
+    },
+    "SFD-034/221": {
+      "effects": [
+        { "timing": "spell", "kind": "modifyMight", "target": "unit", "amount": 2, "temporary": true }
+      ]
+    },
+    "SFD-032/221": {
+      "effects": [
+        { "timing": "onPlay", "kind": "killGear", "optional": true }
+      ]
+    },
+    "SFD-033/221": {
+      "effects": [
+        { "timing": "static", "kind": "gainKeywords", "textSection": "effect", "keywords": ["Tank"] }
+      ]
+    },
+    "SFD-035/221": {
+      "effects": [
+        { "timing": "hold", "kind": "returnTrashCardToHand", "cardTypes": ["unit", "gear"], "optional": true }
+      ]
+    },
+    "SFD-036/221": {
+      "effects": [
+        { "timing": "death", "kind": "drawIfAlone", "amount": 1 }
+      ]
+    },
+    "SFD-038/221": {
+      "effects": [
+        { "timing": "onMove", "kind": "modifyAnotherFriendly", "amount": 1, "temporary": true, "toBattlefieldOnly": true }
+      ]
+    },
+    "SFD-039/221": {
+      "effects": [
+        { "timing": "onPlay", "kind": "readyOrExhaustLegend" }
+      ]
+    },
+    "SFD-040/221": {
+      "effects": [
+        { "timing": "spell", "kind": "stunUnit", "target": "attackingUnit" }
+      ]
+    },
+    "SFD-041/221": {
+      "effects": [
+        { "timing": "onMove", "kind": "revealTopDrawTypeElseRecycle", "cardType": "gear" }
+      ]
+    },
+    "SFD-042/221": {
+      "effects": [
+        { "timing": "static", "kind": "attachedThisTurnMight", "textSection": "effect", "amount": 2 }
+      ]
+    },
+    "SFD-043/221": {
+      "effects": [
+        { "timing": "spell", "kind": "moveAnyFriendlyUnitsAtBattlefieldToBase" }
+      ]
+    },
+    "SFD-044/221": {
+      "additionalCost": { "kind": "returnFriendlyGearToHand" },
+      "effects": []
+    },
+    "SFD-045/221": {
+      "effects": [
+        { "timing": "spell", "kind": "counterSpell", "includeAbilities": true, "requiresChoosingFriendlyUnitOrGear": true }
+      ]
+    },
+    "SFD-046/221": {
+      "effects": [
+        { "timing": "onPlay", "kind": "draw", "amount": 1 },
+        { "timing": "activated", "kind": "draw", "abilityId": "snack", "amount": 1, "costEnergy": 1, "costPower": [{ "domain": "Calm", "amount": 1 }], "exhaust": true, "killSelfCost": true }
+      ]
+    },
+    "SFD-047/221": {
+      "effects": [
+        { "timing": "static", "kind": "readySelfWhenBuffed" }
+      ]
+    },
+    "SFD-048/221": {
+      "effects": [
+        { "timing": "onMove", "kind": "draw", "amount": 1 }
+      ]
+    },
+    "SFD-049/221": {
+      "effects": [
+        { "timing": "attached", "kind": "chooseUnusedMode", "modes": ["readyRunes", "channelRuneExhausted", "buffFriendlyUnit"] }
+      ]
+    },
+    "SFD-050/221": {
+      "effects": [
+        { "timing": "activated", "kind": "swapWithControlledUnit", "abilityId": "royal-exchange", "costPower": [{ "domain": "Calm", "amount": 1 }], "abilityKeywords": ["Action"], "oncePerTurn": true, "attachEquipmentFromTarget": true, "exhaust": false }
+      ]
+    },
+    "SFD-052/221": {
+      "effects": [
+        { "timing": "activated", "kind": "modifyMight", "abilityId": "dark-ice", "target": "unit", "amount": 3, "temporary": true, "exhaust": true }
+      ]
+    },
+    "SFD-053/221": {
+      "effects": [
+        { "timing": "onPlay", "kind": "healFriendlyUnitsHere" },
+        { "timing": "onPlay", "kind": "returnUnitToBase", "target": "enemyBattlefieldUnit", "sameLocationAsSource": true, "optional": true }
+      ]
+    },
+    "SFD-054/221": {
+      "effects": [
+        { "timing": "static", "kind": "friendlyMatchingCardsGainKeywords", "cardTypes": ["gear"], "tags": ["Equipment"], "keywords": ["Quick-Draw"] }
+      ]
+    },
+    "SFD-055/221": {
+      "effects": [
+        { "timing": "static", "kind": "costModifier", "appliesTo": "self", "energyPerHoldPoint": -2, "powerPerHoldPoint": -1 }
+      ]
+    },
+    "SFD-057/221": {
+      "effects": [
+        { "timing": "static", "kind": "modifySelfWhenChosenOrReadied", "amount": 1, "temporary": true }
+      ]
+    },
+    "SFD-058/221": {
+      "effects": [
+        { "timing": "onPlay", "kind": "chooseTopDeck", "look": 4, "cardType": "gear", "mayChoose": true, "recycleRest": true },
+        { "timing": "hold", "kind": "chooseTopDeck", "look": 4, "cardType": "gear", "mayChoose": true, "recycleRest": true }
+      ]
+    },
+    "SFD-059/221": {
+      "effects": [
+        { "timing": "static", "kind": "copyAttachedUnitText" }
+      ]
+    },
+    "SFD-060/221": {
+      "effects": [
+        { "timing": "static", "kind": "opponentsCannotGainPoints" }
+      ]
+    },
+    "SFD-061/221": {
+      "effects": [
+        { "timing": "onPlay", "kind": "returnTrashCardToHand", "cardTypes": ["gear"], "optional": false }
+      ]
+    },
+    "SFD-062/221": {
+      "effects": [
+        { "timing": "onPlay", "kind": "readyUnit", "target": "anotherUnit", "tags": ["Mech"] }
+      ]
+    },
+    "SFD-063/221": {
+      "effects": [
+        { "timing": "cardPlayed", "kind": "opponentTurnExhaustSelfPlayToken", "cardTypes": ["spell"], "tokenKind": "gold", "count": 1, "destination": "base", "exhausted": true }
+      ]
+    },
+    "SFD-064/221": {
+      "effects": [
+        { "timing": "static", "kind": "gainKeywords", "textSection": "effect", "keywords": ["Shield", "Shield"] }
+      ]
+    },
+    "SFD-065/221": {
+      "effects": [
+        { "timing": "static", "kind": "friendlyMatchingUnitsGainKeywords", "tags": ["Mech"], "keywords": ["Vision"] }
+      ]
+    },
+    "SFD-066/221": {
+      "effects": [
+        { "timing": "spell", "kind": "modifyMight", "target": "unit", "amount": -2, "temporary": true }
+      ]
+    },
+    "SFD-067/221": {
+      "effects": [
+        { "timing": "onPlay", "kind": "modifyMight", "target": "unit", "amount": -2, "temporary": true, "optional": true, "additionalPower": { "domain": "Mind", "amount": 1 } }
+      ]
+    },
+    "SFD-068/221": {
+      "effects": [
+        { "timing": "static", "kind": "doubleAttachedBaseMight" }
+      ]
+    },
+    "SFD-069/221": {
+      "effects": [
+        { "timing": "conquer", "kind": "playToken", "tokenKind": "gold", "count": 1, "destination": "base", "exhausted": true }
+      ]
+    },
+    "SFD-070/221": {
+      "effects": [
+        { "timing": "spell", "kind": "dealDamageUnit", "target": "battlefieldUnit", "amount": 3 },
+        { "timing": "spell", "kind": "playToken", "tokenKind": "gold", "count": 1, "destination": "base", "exhausted": true }
+      ]
+    },
+    "SFD-071/221": {
+      "effects": [
+        { "timing": "static", "kind": "friendlyMatchingUnitsGainKeywords", "tags": ["Mech"], "keywords": ["Deflect", "Ganking"] },
+        { "timing": "static", "kind": "conditionalEnterReady", "controlTag": "Mech" }
+      ]
+    },
+    "SFD-072/221": {
+      "effects": [
+        { "timing": "static", "kind": "conditionalEnterReady", "controlGearAtLeast": 2 }
+      ]
+    },
+    "SFD-073/221": {
+      "effects": [
+        { "timing": "static", "kind": "gainTags", "textSection": "effect", "tags": ["Mech"] }
+      ]
+    },
+    "SFD-074/221": {
+      "effects": [
+        { "timing": "onPlay", "kind": "killGear", "optional": true, "maxEnergy": 1, "playTokenOnSuccess": { "tokenKind": "gold", "count": 1, "destination": "base", "exhausted": true } }
+      ]
+    },
+    "SFD-075/221": {
+      "effects": [
+        { "timing": "activatedAbilityUsed", "kind": "modifySelfMight", "sourceCardTypes": ["gear"], "amount": 1, "temporary": true }
+      ]
+    },
+    "SFD-076/221": {
+      "effects": [
+        { "timing": "static", "kind": "costModifier", "appliesTo": "self", "energy": -2, "requiresControlTag": "Mech" },
+        { "timing": "spell", "kind": "playUnitToken", "tokenKind": "mech", "count": 1, "destination": "base" },
+        { "timing": "spell", "kind": "draw", "amount": 1 }
+      ]
+    },
+    "SFD-077/221": {
+      "effects": [
+        { "timing": "spell", "kind": "rocketBarrage" }
+      ]
+    },
+    "SFD-078/221": {
+      "effects": [
+        { "timing": "activated", "kind": "grantNextSpellRepeatEqualCost", "abilityId": "temporal-portal", "costPower": [{ "domain": "Any", "amount": 1 }], "exhaust": true }
+      ]
+    },
+    "SFD-079/221": {
+      "additionalCost": { "kind": "optionalExhaustLegend" },
+      "effects": [
+        { "timing": "onPlay", "kind": "moveFriendlyUnitsToOpenBattlefield", "requiresPaidLegendExhaust": true }
+      ]
+    },
+    "SFD-080/221": {
+      "effects": [
+        { "timing": "spell", "kind": "dealDamageUnit", "target": "unit", "amount": 1, "repeat": 3, "minTargets": 0, "maxTargets": 3, "selectRepeatedTargetsOnPlay": true, "sameLocationAsPrevious": true }
+      ]
+    },
+    "SFD-081/221": {
+      "effects": [
+        { "timing": "onPlay", "kind": "eachPlayerMayPlayTokenAndMatchOpponents", "tokenKind": "gold", "destination": "base", "exhausted": true }
+      ]
+    },
+    "SFD-082/221": {
+      "effects": [
+        { "timing": "attackOrDefend", "kind": "dealDamageEnemyHere", "amountFromSelfMight": true },
+        { "timing": "static", "kind": "doesNotDealCombatDamage" },
+        { "timing": "activated", "kind": "moveSelfToBase", "abilityId": "arcane-shift", "costPower": [{ "domain": "Mind", "amount": 1 }], "abilityKeywords": ["Action"], "exhaust": false }
+      ]
+    },
+    "SFD-083/221": {
+      "effects": [
+        { "timing": "activated", "kind": "convertPowerToEnergy", "abilityId": "hextech-anomaly", "exhaust": true, "abilityKeywords": ["Reaction"] }
+      ]
+    },
+    "SFD-084/221": {
+      "effects": [
+        { "timing": "onPlay", "kind": "killFriendlyGearThenPlayHandGear", "maxEnergy": 7, "ignoreEnergyCost": true, "optional": true }
+      ]
+    },
+    "SFD-085/221": {
+      "effects": [
+        { "timing": "static", "kind": "selfMightPerFriendlyGear", "amount": 1 }
+      ]
+    },
+    "SFD-086/221": {
+      "effects": [
+        { "timing": "hold", "kind": "playToken", "textSection": "effect", "tokenKind": "gold", "count": 2, "destination": "base", "exhausted": true }
+      ]
+    },
+    "SFD-087/221": {
+      "effects": [
+        { "timing": "spell", "kind": "draw", "amount": 3 }
+      ]
+    },
+    "SFD-088/221": {
+      "effects": [
+        { "timing": "activated", "kind": "draw", "abilityId": "draw", "costEnergy": 1, "costPower": [{ "domain": "Mind", "amount": 1 }], "sourceLocation": "battlefield", "amount": 1, "exhaust": false },
+        { "timing": "activated", "kind": "gainPoint", "abilityId": "score", "costEnergy": 4, "costPower": [{ "domain": "Mind", "amount": 4 }], "sourceLocation": "battlefield", "amount": 1, "exhaust": true }
+      ]
+    },
+    "SFD-089/221": {
+      "effects": [
+        { "timing": "static", "kind": "friendlyMatchingUnitsMight", "tags": ["Mech"], "amount": 1 },
+        { "timing": "hold", "kind": "playUnitToken", "tokenKind": "mech", "count": 1, "destination": "base" }
+      ]
+    },
+    "SFD-090/221": {
+      "effects": [
+        { "timing": "death", "kind": "banishSelf", "textSection": "effect" },
+        { "timing": "activated", "kind": "playUnitsBanishedWithSelf", "abilityId": "zero-drive", "costEnergy": 3, "costPower": [{ "domain": "Mind", "amount": 1 }], "banishSelfCost": true, "requiresUnattached": true, "exhaust": false }
+      ]
+    },
+    "SFD-091/221": {
+      "effects": [
+        { "timing": "onPlay", "kind": "chooseDrawOrBuffSelf", "draw": 1, "buff": 1, "optional": true }
+      ]
+    },
+    "SFD-093/221": {
+      "effects": [
+        { "timing": "static", "kind": "canEnterEnemyBattlefield" }
+      ]
+    },
+    "SFD-094/221": {
+      "effects": [
+        { "timing": "static", "kind": "conditionalEnterReady", "controlTag": "Dragon" }
+      ]
+    },
+    "SFD-096/221": {
+      "keywords": ["Ganking"],
+      "effects": []
+    },
+    "SFD-098/221": {
+      "effects": [
+        { "timing": "onPlay", "kind": "modifySelfMight", "amount": 1, "buff": true, "optional": true, "additionalEnergy": 1 }
+      ]
+    },
+    "SFD-100/221": {
+      "effects": [
+        { "timing": "cardPlayed", "kind": "highPowerCardDraw", "minPower": 2, "amount": 1 }
+      ]
+    },
+    "SFD-101/221": {
+      "effects": [
+        { "timing": "onPlay", "kind": "buffUnit", "target": "friendlyUnit", "amount": 1, "repeat": 4, "minTargets": 0, "maxTargets": 4, "optional": true },
+        { "timing": "buffSpent", "kind": "playToken", "tokenKind": "gold", "count": 1, "destination": "base", "exhausted": true }
+      ]
+    },
+    "SFD-102/221": {
+      "effects": [
+        { "timing": "static", "kind": "gainKeywords", "textSection": "effect", "keywords": ["Deflect"] }
+      ]
+    },
+    "SFD-103/221": {
+      "effects": [
+        { "timing": "static", "kind": "costModifier", "appliesTo": "self", "energyPerFriendlyMighty": -2 }
+      ]
+    },
+    "SFD-104/221": {
+      "effects": [
+        { "timing": "static", "kind": "friendlyMatchingUnitsGainKeywords", "keywords": ["Deflect"] }
+      ]
+    },
+    "SFD-106/221": {
+      "effects": [
+        { "timing": "spell", "kind": "drawPerFriendlyMightyUnit", "amount": 1 }
+      ]
+    },
+    "SFD-107/221": {
+      "effects": [
+        { "timing": "spell", "kind": "strikeDown" }
+      ]
+    },
+    "SFD-108/221": {
+      "effects": [
+        { "timing": "conquer", "kind": "buffSelf", "textSection": "effect", "amount": 1 }
+      ]
+    },
+    "SFD-110/221": {
+      "effects": [
+        { "timing": "static", "kind": "doubleMightOneOnOneCombat" }
+      ]
+    },
+    "SFD-111/221": {
+      "effects": [
+        { "timing": "spell", "kind": "playHandUnitToControlledBattlefieldReduced", "energyReduction": 3, "optional": true }
+      ]
+    },
+    "SFD-112/221": {
+      "effects": [
+        { "timing": "onMove", "kind": "modifyAnotherFriendly", "amountFromSelfMight": true, "copySourceKeywords": true, "temporary": true, "toBattlefieldOnly": true }
+      ]
+    },
+    "SFD-113/221": {
+      "effects": [
+        { "timing": "conquer", "kind": "readySelf", "firstEachTurn": true }
+      ]
+    },
+    "SFD-114/221": {
+      "effects": [
+        { "timing": "spell", "kind": "duelFriendlyEnemy", "amount": 0, "temporary": false }
+      ]
+    },
+    "SFD-116/221": {
+      "effects": [
+        { "timing": "conquer", "kind": "dealDamageEnemyBaseIfPreviouslyUncontrolled", "amountFromSelfMight": true }
+      ]
+    },
+    "SFD-117/221": {
+      "effects": [
+        { "timing": "activated", "kind": "convertEnergyToPower", "abilityId": "ancient-henge", "exhaust": true, "abilityKeywords": ["Reaction"] }
+      ]
+    },
+    "SFD-118/221": {
+      "effects": [
+        { "timing": "conquer", "kind": "channelRunes", "textSection": "effect", "amount": 1, "exhausted": true }
+      ]
+    },
+    "SFD-119/221": {
+      "effects": [
+        { "timing": "attached", "kind": "payEnergyDraw", "amount": 1, "draw": 1, "optional": true }
+      ]
+    },
+    "SFD-120/221": {
+      "effects": [
+        { "timing": "conquer", "kind": "dealExcessDamageEnemy", "excessDamage": 5, "afterAttackOnly": true, "optional": true }
+      ]
+    },
+    "SFD-130/221": {
+      "effects": [
+        { "timing": "onMove", "kind": "playToken", "tokenKind": "gold", "count": 1, "destination": "base", "exhausted": true }
+      ]
+    },
+    "SFD-134/221": {
+      "effects": [
+        { "timing": "conquer", "kind": "playToken", "textSection": "effect", "tokenKind": "gold", "count": 1, "destination": "base", "exhausted": true }
+      ]
+    },
+    "SFD-151/221": {
+      "effects": [
+        { "timing": "spell", "kind": "modifyMight", "target": "friendlyUnit", "amount": 1, "repeat": 2, "selectRepeatedTargetsOnPlay": true, "temporary": true }
+      ]
+    },
+    "SFD-154/221": {
+      "effects": [
+        { "timing": "spell", "kind": "playUnitToken", "tokenKind": "sandSoldier", "count": 1, "destination": "chooseEachBaseOrControlledBattlefield", "optionalReadyPower": [{ "domain": "Order", "amount": 1 }] }
+      ]
+    },
+    "SFD-155/221": {
+      "effects": [
+        { "timing": "death", "kind": "playToken", "tokenKind": "gold", "count": 1, "destination": "base", "exhausted": true }
+      ]
+    },
+    "SFD-157/221": {
+      "effects": [
+        { "timing": "onPlay", "kind": "playUnitToken", "tokenKind": "sandSoldier", "count": 1, "destination": "sourceLocation" }
+      ]
+    },
+    "SFD-174/221": {
+      "effects": [
+        { "timing": "onPlay", "kind": "playToken", "tokenKind": "gold", "count": 4, "destination": "base", "exhausted": true }
+      ]
+    },
+    "SFD-197/221": {
+      "effects": [
+        { "timing": "static", "kind": "friendlyMatchingUnitsGainKeywords", "names": ["Sand Soldier"], "keywords": ["Weaponmaster"] },
+        { "timing": "activated", "kind": "playUnitToken", "abilityId": "sand-soldier", "exhaust": true, "costEnergy": 1, "requiresCardTypePlayedThisTurn": "gear", "tokenKind": "sandSoldier", "count": 1, "destination": "base" }
+      ]
+    },
+    "SFD-198/221": {
+      "effects": [
+        { "timing": "spell", "kind": "playUnitToken", "tokenKind": "sandSoldier", "countFromControlledType": "gear", "destination": "chooseEachBaseOrControlledBattlefield", "readyCount": 2 }
+      ]
+    },
+    "SFD-121/221": {
+      "effects": [
+        { "timing": "cardPlayed", "kind": "fromHiddenPlayToken", "tokenKind": "gold", "count": 1, "destination": "base", "exhausted": true }
+      ]
+    },
+    "SFD-122/221": {
+      "effects": [
+        { "timing": "spell", "kind": "chooseTopDeck", "look": 2, "draw": 1, "recycleRest": true, "repeatCostPower": [{ "domain": "Chaos", "amount": 1 }] }
+      ]
+    },
+    "SFD-123/221": {
+      "effects": [
+        { "timing": "onMove", "kind": "discardDraw", "discard": 1, "draw": 0, "toBattlefieldOnly": true },
+        { "timing": "combatWin", "kind": "draw", "amount": 1 }
+      ]
+    },
+    "SFD-124/221": {
+      "effects": [
+        { "timing": "conquer", "kind": "discardDraw", "textSection": "effect", "discard": 1, "draw": 1 }
+      ]
+    },
+    "SFD-125/221": {
+      "effects": [
+        { "timing": "onMove", "kind": "moveWithFriendlyFromSameBattlefield", "toBattlefieldOnly": true, "optional": true, "costPower": [{ "domain": "Chaos", "amount": 1 }] }
+      ]
+    },
+    "SFD-126/221": {
+      "effects": [
+        { "timing": "defend", "kind": "moveSelfToBattlefield", "optional": true }
+      ]
+    },
+    "SFD-128/221": {
+      "effects": [
+        { "timing": "attackOrDefend", "kind": "killSelfMoveAttackerToBase", "role": "defender", "optional": true }
+      ]
+    },
+    "SFD-129/221": {
+      "effects": [
+        { "timing": "spell", "kind": "moveEnemyToSameControllerLocation", "repeatCostEnergy": 2 }
+      ]
+    },
+    "SFD-131/221": {
+      "effects": [
+        { "timing": "static", "kind": "assaultPerEnemyHere" }
+      ]
+    },
+    "SFD-132/221": {
+      "effects": [
+        { "timing": "onPlay", "kind": "returnFriendlyAndEnemyToHand", "anotherFriendly": true }
+      ]
+    },
+    "SFD-133/221": {
+      "effects": [
+        { "timing": "static", "kind": "gainKeywords", "textSection": "effect", "keywords": ["Ganking"] }
+      ]
+    },
+    "SFD-135/221": {
+      "effects": [
+        { "timing": "spell", "kind": "returnGearToHand" }
+      ]
+    },
+    "SFD-136/221": {
+      "effects": [
+        { "timing": "spell", "kind": "counterUnlessPayEnergy", "amount": 2, "repeatCostEnergy": 2 }
+      ]
+    },
+    "SFD-137/221": {
+      "effects": [
+        { "timing": "onMove", "kind": "modifySelfMight", "amount": 2, "temporary": true, "fromBattlefieldOnly": true }
+      ]
+    },
+    "SFD-138/221": {
+      "keywords": ["Hidden"],
+      "effects": [
+        { "timing": "onPlay", "kind": "returnBattlefieldUnitToHand", "maxMight": 3, "another": true, "optional": true }
+      ]
+    },
+    "SFD-139/221": {
+      "effects": [
+        { "timing": "onPlay", "kind": "attachSelfToFriendlyHereIfFromHidden" }
+      ]
+    },
+    "SFD-140/221": {
+      "effects": [
+        { "timing": "onPlay", "kind": "playSpellFromTrashMaxEnergy", "maxEnergy": 3, "ignoreEnergyCost": true, "recycleAfterResolve": true, "optional": true }
+      ]
+    },
+    "SFD-141/221": {
+      "effects": [
+        { "timing": "static", "kind": "selfTargetSpellCostReduction", "amount": 1, "resourceChoice": ["energy", "power"] }
+      ]
+    },
+    "SFD-142/221": {
+      "effects": [
+        { "timing": "chosen", "kind": "draw", "by": "friendlySpell", "amount": 1 }
+      ]
+    },
+    "SFD-143/221": {
+      "effects": [
+        { "timing": "static", "kind": "gainMightKeywordsIfPowerSpent", "powerAtLeast": 2, "amount": 2, "keywords": ["Ganking"], "temporary": true }
+      ]
+    },
+    "SFD-144/221": {
+      "effects": [
+        { "timing": "chosen", "kind": "payEnergyExhaustDraw", "by": "friendly", "costEnergy": 1, "draw": 1, "optional": true }
+      ]
+    },
+    "SFD-145/221": {
+      "effects": [
+        { "timing": "spell", "kind": "swapMightSameBattlefield", "temporary": true }
+      ]
+    },
+    "SFD-146/221": {
+      "effects": [
+        { "timing": "combatStatic", "kind": "spellCostModifier", "friendlyEnergy": -1, "friendlyPower": -1, "enemyEnergy": 1, "minEnergy": 1 }
+      ]
+    },
+    "SFD-147/221": {
+      "effects": [
+        { "timing": "spell", "kind": "returnAllUnitsAndGearToHand" }
+      ]
+    },
+    "SFD-148/221": {
+      "effects": [
+        { "timing": "combatWin", "kind": "gainPoint", "amount": 1, "firstEachTurn": true },
+        { "timing": "death", "kind": "opponentGainPointIfCombat", "amount": 1 }
+      ]
+    },
+    "SFD-149/221": {
+      "effects": [
+        { "timing": "onPlay", "kind": "discardDraw", "discard": 1, "draw": 2 },
+        { "timing": "static", "kind": "optionalAdditionalCostReduction", "amount": 1, "resourceChoice": ["energy", "power"] }
+      ]
+    },
+    "SFD-150/221": {
+      "effects": [
+        { "timing": "activated", "kind": "equip", "abilityId": "equip", "costPower": [{ "domain": "Chaos", "amount": 1 }], "costRecycleTrash": 2, "exhaust": false },
+        { "timing": "conquer", "kind": "playUnitFromTrash", "textSection": "effect", "payCosts": true, "optional": true },
+        { "timing": "hold", "kind": "playUnitFromTrash", "textSection": "effect", "payCosts": true, "optional": true }
+      ]
+    },
+    "SFD-152/221": {
+      "effects": [
+        { "timing": "hold", "kind": "playToken", "tokenKind": "gold", "count": 2, "destination": "base", "exhausted": true }
+      ]
+    },
+    "SFD-153/221": {
+      "effects": [
+        { "timing": "onMove", "kind": "playUnitToken", "textSection": "effect", "tokenKind": "recruit", "count": 1, "destination": "sourceBattlefield" }
+      ]
+    },
+    "SFD-158/221": {
+      "effects": [
+        { "timing": "onPlay", "kind": "killUnit", "target": "enemyUnit", "maxMight": 3 }
+      ]
+    },
+    "SFD-159/221": {
+      "effects": [
+        { "timing": "static", "kind": "selfMightWhileAnotherFriendlyHere", "amount": 1 }
+      ]
+    },
+    "SFD-160/221": {
+      "effects": [
+        { "timing": "onPlay", "kind": "killGear", "additionalCostKillFriendlyGear": true, "requiresPaidAdditionalCost": true }
+      ]
+    },
+    "SFD-162/221": {
+      "effects": [
+        { "timing": "spell", "kind": "killBattlefieldUnitRewardTokens", "maxMight": 2, "enemyTokenCount": 1, "friendlyTokenCount": 2, "tokenKind": "gold", "exhausted": true }
+      ]
+    },
+    "SFD-163/221": {
+      "effects": [
+        { "timing": "spell", "kind": "killFriendlyBuffAnotherByMight", "temporary": true },
+        { "timing": "spell", "kind": "draw", "amount": 1 }
+      ]
+    },
+    "SFD-164/221": {
+      "effects": [
+        { "timing": "static", "kind": "costModifier", "zoneNot": "hand", "energy": -2 },
+        { "timing": "spell", "kind": "killUnit", "target": "battlefieldUnit" }
+      ]
+    },
+    "SFD-165/221": {
+      "effects": [
+        { "timing": "death", "kind": "playUnitFromTrash", "maxEnergy": 3, "maxPower": 1, "ignoreCost": true, "optional": true }
+      ]
+    },
+    "SFD-166/221": {
+      "effects": [
+        { "timing": "spell", "kind": "buffFriendlyUnitsPlayedThisTurn" },
+        { "timing": "spell", "kind": "draw", "amount": 1 }
+      ]
+    },
+    "SFD-167/221": {
+      "effects": [
+        { "timing": "death", "kind": "drawIfMighty", "amount": 2, "mightyThreshold": 5 }
+      ]
+    },
+    "SFD-168/221": {
+      "effects": [
+        { "timing": "activated", "kind": "playUnitToken", "abilityId": "recruits", "exhaust": true, "tokenKind": "recruit", "count": 3, "destination": "chooseEachBaseOrControlledBattlefield" }
+      ]
+    },
+    "SFD-169/221": {
+      "effects": [
+        { "timing": "friendlyDeath", "kind": "exhaustDrawThenHandToDeck", "draw": 1, "optional": true }
+      ]
+    },
+    "SFD-170/221": {
+      "effects": [
+        { "timing": "attack", "kind": "revealTopBanishPlayRecycleRest", "look": 2, "unitDestination": "sourceBattlefield", "optional": true }
+      ]
+    },
+    "SFD-171/221": {
+      "effects": [
+        { "timing": "static", "kind": "friendlyTokensEnterReady" }
+      ]
+    },
+    "SFD-172/221": {
+      "effects": [
+        { "timing": "death", "kind": "draw", "textSection": "effect", "amount": 1 }
+      ]
+    },
+    "SFD-173/221": {
+      "effects": [
+        { "timing": "static", "kind": "combatDamageAssignmentLast" },
+        { "timing": "replacement", "kind": "saveLowerMightFriendlyHereByRecall", "another": true }
+      ]
+    },
+    "SFD-175/221": {
+      "effects": [
+        { "timing": "onPlay", "kind": "modifyFriendlyUnits", "amount": 2, "temporary": true, "excludeSelf": true },
+        { "timing": "static", "kind": "playFromTopReveal", "addEnergy": 2 }
+      ]
+    },
+    "SFD-176/221": {
+      "effects": [
+        { "timing": "static", "kind": "conditionalEnterReady", "otherUnitsInBaseAtLeast": 2 }
+      ]
+    },
+    "SFD-177/221": {
+      "effects": [
+        { "timing": "attack", "kind": "moveFriendlyTokensHere", "optional": true }
+      ]
+    },
+    "SFD-178/221": {
+      "effects": [
+        { "timing": "activated", "kind": "equip", "abilityId": "equip", "costPower": [{ "domain": "Order", "amount": 1 }], "killFriendlyUnitCost": true, "exhaust": false }
+      ]
+    },
+    "SFD-179/221": {
+      "effects": [
+        { "timing": "onMove", "kind": "playUnitToken", "tokenKind": "recruit", "count": 3, "destination": "sourceBattlefield", "toBattlefieldOnly": true }
+      ]
+    },
+    "SFD-180/221": {
+      "effects": [
+        { "timing": "becomesMighty", "kind": "payPowerReadyUnit", "costPower": [{ "domain": "Order", "amount": 1 }], "optional": true }
+      ]
+    },
+    "SFD-181/221": {
+      "effects": [
+        { "timing": "static", "kind": "friendlyMatchingUnitsGainKeywords", "tags": ["Mech"], "keywords": ["Shield"] }
+      ]
+    },
+    "SFD-182/221": {
+      "effects": [
+        { "timing": "spell", "kind": "modifyFriendlyUnits", "tags": ["Mech"], "amount": 1, "temporary": true, "repeatCostEnergy": 1, "repeatCostPower": [{ "domain": "Any", "amount": 1 }] }
+      ]
+    },
+    "SFD-183/221": {
+      "effects": [
+        { "timing": "static", "kind": "friendlyEquipmentGrantKeywords", "keywords": ["Assault"] }
+      ]
+    },
+    "SFD-184/221": {
+      "effects": [
+        { "timing": "spell", "kind": "moveAttachGrantConquerRecall", "temporary": true }
+      ]
+    },
+    "SFD-185/221": {
+      "effects": [
+        { "timing": "combatWin", "kind": "draw", "amount": 1 }
+      ]
+    },
+    "SFD-187/221": {
+      "effects": [
+        { "timing": "conquer", "kind": "exhaustRevealTopBanishPlayRecycleRest", "look": 2, "optional": true }
+      ]
+    },
+    "SFD-188/221": {
+      "effects": [
+        { "timing": "spell", "kind": "revealTopBanishPlayDrawRest", "look": 2, "energyReduction": 2, "optional": true }
+      ]
+    },
+    "SFD-189/221": {
+      "effects": [
+        { "timing": "activated", "kind": "addPower", "abilityId": "forge-power", "abilityKeywords": ["Reaction"], "amount": 1, "domain": "Any", "exhaust": true, "restriction": "gear" }
+      ]
+    },
+    "SFD-190/221": {
+      "effects": [
+        { "timing": "attackOrDefend", "kind": "dealDamageAllEnemiesHere", "textSection": "effect", "amount": 2 }
+      ]
+    },
+    "SFD-191/221": {
+      "effects": [
+        { "timing": "static", "kind": "globalBonusDamage", "textSection": "effect", "amount": 3 }
+      ]
+    },
+    "SFD-192/221": {
+      "effects": [
+        { "timing": "onPlay", "kind": "readyFriendlyUnits" },
+        { "timing": "static", "kind": "gainKeywords", "textSection": "effect", "keywords": ["Ganking"] },
+        { "timing": "static", "kind": "otherFriendlyHereGainKeywords", "textSection": "effect", "keywords": ["Ganking"] }
+      ]
+    },
+    "SFD-193/221": {
+      "effects": [
+        { "timing": "activated", "kind": "attachControlledEquipment", "abilityId": "attach-detached", "costEnergy": 1, "exhaust": true, "attachmentState": "detached" },
+        { "timing": "activated", "kind": "attachControlledEquipment", "abilityId": "reattach", "exhaust": true, "attachmentState": "attached" }
+      ]
+    },
+    "SFD-194/221": {
+      "effects": [
+        { "timing": "spell", "kind": "preventNextDamage", "target": "unit", "temporary": true },
+        { "timing": "spell", "kind": "draw", "amount": 1 }
+      ]
+    },
+    "SFD-195/221": {
+      "effects": [
+        { "timing": "chosen", "kind": "payPowerExhaustReady", "by": "friendly", "costPower": [{ "domain": "Any", "amount": 1 }], "optional": true },
+        { "timing": "conquer", "kind": "payEnergyReadySelf", "costEnergy": 1, "optional": true }
+      ]
+    },
+    "SFD-196/221": {
+      "effects": [
+        { "timing": "spell", "kind": "modifyTwoUnitsOpposite", "positive": 2, "negative": -2, "amount": 2, "temporary": true }
+      ]
+    },
+    "SFD-199/221": {
+      "effects": [
+        { "timing": "activated", "kind": "draw", "abilityId": "explore", "abilityKeywords": ["Reaction"], "amount": 1, "exhaust": true, "requiresEnemyObjectsChosenThisTurn": 2 }
+      ]
+    },
+    "SFD-200/221": {
+      "effects": [
+        { "timing": "spell", "kind": "banishFriendlyUnitPlayToBase", "ignoreCost": true },
+        { "timing": "spell", "kind": "dealDamageUnit", "target": "enemyBattlefieldUnit", "amount": 3 },
+        { "timing": "spell", "kind": "banishSelfAfterResolve" }
+      ]
+    },
+    "SFD-201/221": {
+      "effects": [
+        { "timing": "hold", "kind": "exhaustPlayToken", "includeAllyHold": true, "tokenKind": "gold", "count": 1, "destination": "base", "exhausted": true, "optional": true },
+        { "timing": "static", "kind": "goldAdditionalEnergyNearVictory", "withinScore": 3, "amount": 1 }
+      ]
+    },
+    "SFD-202/221": {
+      "effects": [
+        { "timing": "spell", "kind": "possession", "ready": true, "recallEndTurn": true }
+      ]
+    },
+    "SFD-203/221": {
+      "effects": [
+        { "timing": "runeRecycled", "kind": "exhaustPlayToken", "tokenKind": "gold", "count": 1, "destination": "base", "exhausted": true, "optional": true },
+        { "timing": "enemyDeath", "kind": "readySelf", "oneOrMore": true }
+      ]
+    },
+    "SFD-204/221": {
+      "effects": [
+        { "timing": "spell", "kind": "readyFriendlyUnits" }
+      ]
+    },
+    "SFD-205/221": {
+      "effects": [
+        { "timing": "becomesMighty", "kind": "exhaustChannelRunes", "amount": 1, "exhausted": true, "optional": true }
+      ]
+    },
+    "SFD-206/221": {
+      "effects": [
+        { "timing": "spell", "kind": "counterSpellBuffFriendlyByEnergy" }
+      ]
+    },
+    "SFD-207/221": {
+      "effects": [
+        { "timing": "conquerHere", "kind": "payEnergyReturnFriendlyPlayUnitToken", "costEnergy": 1, "tokenKind": "sandSoldier", "count": 1, "destination": "sourceBattlefield", "optional": true }
+      ]
+    },
+    "SFD-209/221": {
+      "effects": [
+        { "timing": "static", "kind": "cannotScoreHereBeforeTurn", "turn": 3 }
+      ]
+    },
+    "SFD-210/221": {
+      "effects": [
+        { "timing": "conquerHere", "kind": "payEnergyReadyLegend", "costEnergy": 1, "optional": true }
+      ]
+    },
+    "SFD-211/221": {
+      "effects": [
+        { "timing": "static", "kind": "repeatCostReduction", "energy": 1 }
+      ]
+    },
+    "SFD-212/221": {
+      "effects": [
+        { "timing": "conquerHere", "kind": "millTopDeck", "amount": 2 }
+      ]
+    },
+    "SFD-213/221": {
+      "effects": [
+        { "timing": "static", "kind": "firstFriendlyGearCostReduction", "energy": 1, "nonToken": true }
+      ]
+    },
+    "SFD-214/221": {
+      "effects": [
+        { "timing": "hold", "kind": "payPowerGainPoint", "costPower": [{ "domain": "Any", "amount": 4 }], "amount": 1, "optional": true }
+      ]
+    },
+    "SFD-216/221": {
+      "effects": [
+        { "timing": "static", "kind": "unitsCannotBePlayedHere" }
+      ]
+    },
+    "SFD-217/221": {
+      "effects": [
+        { "timing": "conquerHere", "kind": "drawPerOtherControlledBattlefield", "amount": 1 }
+      ]
+    },
+    "SFD-218/221": {
+      "effects": [
+        { "timing": "conquerHere", "kind": "payEnergyDrawIfMighty", "costEnergy": 1, "draw": 1, "optional": true }
+      ]
+    },
+    "SFD-219/221": {
+      "effects": [
+        { "timing": "hold", "kind": "eachPlayerChannelRunes", "amount": 1, "exhausted": true }
+      ]
+    },
+    "SFD-220/221": {
+      "effects": [
+        { "timing": "conquerHere", "kind": "payEnergyPlayToken", "costEnergy": 1, "tokenKind": "gold", "count": 1, "destination": "base", "exhausted": true, "optional": true }
+      ]
+    },
+    "SFD-221/221": {
+      "effects": [
+        { "timing": "conquerHere", "kind": "readyGearThenOptionalDetach", "optional": true }
+      ]
+    }
+  }
+}

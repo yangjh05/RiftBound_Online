@@ -18,9 +18,8 @@ export default card({
       ],
       "energy": 4,
       "power": [],
-      "might": 2,
       "image": "https://exburst.dev/riftbound/cards/sd/SFD-115-221.webp",
-      "text": "[Equip] Body Power (Body Power: Attach this to a unit you control.)",
+      "text": "[Equip] Body Power (Body Power : Attach this to a unit you control.)\nWhen I hold, score 1 point.",
       "effects": [
         {
           "timing": "activated",
@@ -33,6 +32,12 @@ export default card({
           "kind": "attachedMight",
           "textSection": "mightBonus",
           "amount": 2
+        },
+        {
+          "timing": "hold",
+          "kind": "gainPoint",
+          "textSection": "effect",
+          "amount": 1
         }
       ]
     });

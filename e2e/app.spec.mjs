@@ -74,6 +74,108 @@ test("local game reaches the real board without a browser runtime error", async 
   expect(pageErrors).toEqual([]);
 });
 
+test("Frigid Touch and Long Sword chain rendering tolerates a serialized empty effect entry", async ({ page }) => {
+  const pageErrors = capturePageErrors(page);
+
+  await openLocalApp(page);
+  await page.locator('[data-action="settings-language"]').selectOption("ko");
+  await completeLocalSetup(page);
+
+  await page.evaluate(() => {
+    const game = window.__riftboundGame;
+    const opponent = game.players[1];
+    const makeChainCard = (instanceId, cardNumber, name, type, keywords, effects) => ({
+      id: cardNumber,
+      cardNumber,
+      instanceId,
+      ownerId: opponent.id,
+      controllerId: opponent.id,
+      name,
+      type,
+      tags: type === "gear" ? ["Equipment"] : [],
+      keywords,
+      effects
+    });
+    const longSword = makeChainCard(
+      "frigid-touch-regression-long-sword",
+      "SFD-022/221",
+      "Long Sword",
+      "gear",
+      ["Quick-Draw", "Equip"],
+      [null, { timing: "activated", kind: "equip" }]
+    );
+    const frigidTouch = makeChainCard(
+      "frigid-touch-regression-spell",
+      "SFD-066/221",
+      "Frigid Touch",
+      "spell",
+      ["Reaction", "Repeat"],
+      [null, { timing: "spell", kind: "modifyMight", amount: -2, temporary: true }]
+    );
+    game.phase = "showdown";
+    game.actionChain = null;
+    game.showdown = {
+      battlefieldId: game.battlefields[0].instanceId,
+      turnPlayerId: game.players[0].id,
+      attackerId: game.players[0].id,
+      defenderId: opponent.id,
+      focusPlayerId: game.players[0].id,
+      chainSequence: 2,
+      chainOpenedBy: "card",
+      priorityPlayerId: game.players[0].id,
+      consecutivePasses: 0,
+      chain: [
+        { id: "chain-1", itemType: "card", card: longSword, playerId: opponent.id, status: "finalized" },
+        { id: "chain-2", itemType: "card", card: frigidTouch, playerId: opponent.id, status: "finalized" }
+      ]
+    };
+    window.__riftboundRender();
+  });
+
+  await expect(page.locator(".chain-zone-item")).toHaveCount(2);
+  await expect(page.locator(".chain-zone-item").filter({ hasText: "혹한의 손길" })).toHaveCount(1);
+  await expect(page.locator(".chain-zone-item").filter({ hasText: "롱소드" })).toHaveCount(1);
+  await expect(page.locator(".ui-exception-banner")).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+});
+
+test("every registered card renders its Korean library, detail, and full-card views", async ({ page }) => {
+  const pageErrors = capturePageErrors(page);
+  await openLocalApp(page);
+
+  const audit = await page.evaluate(() => {
+    const numbers = window.__riftboundCardRenderAuditNumbers();
+    const failures = [];
+    for (const number of numbers) {
+      const rendered = window.__riftboundCardRenderAudit(number);
+      if (!rendered) {
+        failures.push(`${number}: no render result`);
+        continue;
+      }
+      const host = document.createElement("div");
+      host.innerHTML = `${rendered.libraryHtml}${rendered.detailHtml}${rendered.modalHtml}`;
+      const library = host.querySelector(".library-card");
+      const detail = host.querySelector(".deck-preview-card");
+      const modal = host.querySelector(".full-card-modal");
+      const badMarkup = /undefined|\[object Object\]|NaN/u.test(host.innerHTML);
+      if (!library || library.dataset.cardNumber !== number) failures.push(`${number}: library card`);
+      if (library?.querySelector("strong")?.textContent?.trim() !== rendered.name.trim()) failures.push(`${number}: library name`);
+      if (!detail || detail.querySelector("h2")?.textContent?.trim() !== rendered.name.trim()) failures.push(`${number}: detail name`);
+      if (detail?.querySelector("p")?.textContent?.trim() !== rendered.text.trim()) failures.push(`${number}: detail text`);
+      if (!detail?.querySelector(".deck-detail-actions button")) failures.push(`${number}: detail action`);
+      if (!modal || modal.querySelector("h2")?.textContent?.trim() !== rendered.name.trim()) failures.push(`${number}: modal name`);
+      if (modal?.querySelector(".full-card-copy > p")?.textContent?.trim() !== rendered.text.trim()) failures.push(`${number}: modal text`);
+      if (rendered.image && [...host.querySelectorAll("img")].some((image) => !image.alt.trim())) failures.push(`${number}: image alt`);
+      if (!rendered.name.trim() || !rendered.type.trim() || badMarkup) failures.push(`${number}: localized render contract`);
+    }
+    return { count: numbers.length, failures };
+  });
+
+  expect(audit.count).toBe(989);
+  expect(audit.failures).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});
+
 test("battlefields with the same name show their selecting player seats", async ({ page }) => {
   const pageErrors = capturePageErrors(page);
 
@@ -92,6 +194,172 @@ test("battlefields with the same name show their selecting player seats", async 
     expect.stringContaining("P1"),
     expect.stringContaining("P2")
   ]));
+  expect(pageErrors).toEqual([]);
+});
+
+test("sign-up stores a modified default as an account deck and login restores it", async ({ page }) => {
+  const pageErrors = capturePageErrors(page);
+  let serverDeckStore = { decks: [], activeDeckIds: [] };
+  const user = { id: "e2e-account-user", accountId: "deckkeeper", createdAt: Date.now() };
+
+  await page.route("**/api/auth/signup", (route) => route.fulfill({
+    status: 201,
+    contentType: "application/json",
+    body: JSON.stringify({ ok: true, token: "e2e-token", user, deckStore: serverDeckStore })
+  }));
+  await page.route("**/api/auth/login", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ ok: true, token: "e2e-token-2", user, deckStore: serverDeckStore })
+  }));
+  await page.route("**/api/auth/logout", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ ok: true })
+  }));
+  await page.route("**/api/account/decks", async (route) => {
+    if (route.request().method() === "PUT") {
+      serverDeckStore = route.request().postDataJSON().deckStore;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ ok: true, deckStore: serverDeckStore })
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ok: true, deckStore: serverDeckStore })
+    });
+  });
+
+  await openLocalApp(page);
+  await page.locator('[data-action="auth-mode"][data-mode="signup"]').click();
+  await page.locator('[data-action="auth-account-id"]').fill("deckkeeper");
+  await page.locator('[data-action="auth-password"]').fill("password-123");
+  await page.locator('[data-action="auth-password-confirm"]').fill("password-123");
+  await page.locator('[data-action="auth-submit"]').click();
+  await expect(page.locator(".account-panel.signed-in")).toContainText("deckkeeper");
+
+  await page.locator('[data-action="menu-decks"]').click();
+  await page.locator('.deck-slot[data-deck^="default-"]').first().click();
+  await expect(page.locator(".deck-owner-badge.default")).toBeVisible();
+  await page.locator('[data-action="deck-name"]').fill("계정에 저장된 덱");
+  await page.locator('[data-action="deck-save"]').click();
+  await expect(page.locator(".deck-owner-badge.personal")).toBeVisible();
+  await expect.poll(() => serverDeckStore.decks.some((deck) => deck.name === "계정에 저장된 덱")).toBe(true);
+  expect(serverDeckStore.decks.some((deck) => deck.id.startsWith("default-"))).toBe(false);
+
+  await page.locator('[data-action="menu-home"]').click();
+  await page.locator('[data-action="auth-logout"]').click();
+  await expect(page.locator(".account-panel.signed-out")).toBeVisible();
+  await page.locator('[data-action="auth-account-id"]').fill("deckkeeper");
+  await page.locator('[data-action="auth-password"]').fill("password-123");
+  await page.locator('[data-action="auth-submit"]').click();
+  await expect(page.locator(".account-panel.signed-in")).toContainText("deckkeeper");
+  await expect(page.locator('[data-action="menu-active-deck"][data-slot="0"]')).toContainText("계정에 저장된 덱");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator('[data-action="menu-decks"]').click();
+  const restoredDeck = page.locator('.deck-slot[data-deck^="deck-"]').filter({ hasText: "계정에 저장된 덱" });
+  await expect(restoredDeck).toHaveCount(1);
+  await restoredDeck.click();
+  await expect(page.locator('[data-action="deck-delete-request"]')).toBeVisible();
+  await page.locator('[data-action="deck-delete-request"]').click();
+  await expect(page.locator(".deck-delete-dialog")).toContainText("계정에 저장된 덱");
+  await page.locator('[data-action="deck-delete-cancel"]').click();
+  await expect(page.locator(".deck-delete-dialog")).toHaveCount(0);
+
+  await page.locator('[data-action="deck-delete-request"]').click();
+  await page.locator('[data-action="deck-delete-confirm"]').click();
+  await expect(restoredDeck).toHaveCount(0);
+  await expect(page.locator(".deck-owner-badge.default")).toBeVisible();
+  await expect(page.locator('[data-action="deck-delete-request"]')).toHaveCount(0);
+  await expect.poll(() => serverDeckStore.decks.some((deck) => deck.name === "계정에 저장된 덱")).toBe(false);
+  expect(serverDeckStore.activeDeckIds.every((id) => id.startsWith("default-"))).toBe(true);
+
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.locator('[data-action="menu-home"]').click();
+  await page.locator('[data-action="auth-logout"]').click();
+  await page.locator('[data-action="auth-account-id"]').fill("deckkeeper");
+  await page.locator('[data-action="auth-password"]').fill("password-123");
+  await page.locator('[data-action="auth-submit"]').click();
+  await page.locator('[data-action="menu-decks"]').click();
+  await expect(page.locator('.deck-slot[data-deck^="deck-"]').filter({ hasText: "계정에 저장된 덱" })).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+});
+
+test("deck builder copies exported text and imports pasted text as a new deck", async ({ page, context }) => {
+  const pageErrors = capturePageErrors(page);
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await openLocalApp(page);
+  await page.locator('[data-action="menu-decks"]').click();
+
+  await page.locator('[data-action="deck-export-open"]').click();
+  const exportField = page.locator('textarea[data-action="deck-transfer-text"]');
+  await expect(exportField).toBeVisible();
+  await expect(exportField).toHaveAttribute("readonly", "");
+  const exported = await exportField.inputValue();
+  expect(exported).toMatch(/^Legend:\n1 .+\n\nChampion:\n1 .+\n\nMainDeck:/u);
+  expect(exported).toContain("\n\nBattlefields:\n");
+  expect(exported).toContain("\n\nRune Pool:\n");
+  expect(exported).toContain("\n\nSideboard:\n");
+  await page.locator('[data-action="deck-export-copy"]').click();
+  await expect(page.locator(".deck-transfer-message.success")).toContainText("Copied all deck text");
+  expect((await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/gu, "\n")).toBe(exported.replace(/\r\n/gu, "\n"));
+  await page.locator('[data-action="deck-transfer-close"]').last().click();
+
+  await page.locator('[data-action="deck-import-open"]').click();
+  const importField = page.locator('textarea[data-action="deck-transfer-text"]');
+  await importField.fill(exported);
+  await page.locator('[data-action="deck-import-confirm"]').click();
+
+  await expect(page.locator('[data-action="deck-name"]')).toHaveValue(/ Deck$/u);
+  await expect(page.locator(".deck-transfer-notice.success")).toContainText("Created a new deck");
+  await expect(page.locator(".main-deck-block .deck-zone-title span")).toHaveText("40/40");
+  expect(pageErrors).toEqual([]);
+});
+
+test("a battlefield token added during play appears as an accessible third battlefield", async ({ page }) => {
+  const pageErrors = capturePageErrors(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openLocalApp(page);
+  await completeLocalSetup(page);
+  await page.evaluate(() => {
+    const template = window.__riftboundGame.battlefields[0];
+    window.__riftboundGame.battlefields.push({
+      ...structuredClone(template),
+      id: "BARON-PIT",
+      cardNumber: "TOKEN-BARON-PIT",
+      collectorNumber: "TOKEN-BARON-PIT",
+      instanceId: "e2e-baron-pit",
+      name: "Baron Pit",
+      units: [],
+      hidden: [],
+      controlledBy: null,
+      contestedBy: null,
+      isToken: true,
+      translations: {
+        ko: {
+          name: "내셔 남작 둥지",
+          text: "유닛은 어디서든 이곳으로 이동할 수 있습니다."
+        }
+      }
+    });
+    window.__riftboundRender();
+  });
+
+  const fields = page.locator(".battlefield.location-column");
+  await expect(fields).toHaveCount(3);
+  const pit = page.locator('[data-card-id="e2e-baron-pit"]');
+  await expect(pit).toBeVisible();
+  await expect(pit.locator(".battlefield-head h2")).toHaveText("Baron Pit");
+  const scrollState = await page.locator(".location-band").evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth
+  }));
+  expect(scrollState.scrollWidth).toBeGreaterThan(scrollState.clientWidth);
   expect(pageErrors).toEqual([]);
 });
 
@@ -162,6 +430,42 @@ test("trigger order confirmation stays visible with many selected triggers", asy
   expect(bounds.confirmTop).toBeGreaterThanOrEqual(bounds.panelTop);
   expect(bounds.confirmBottom).toBeLessThanOrEqual(bounds.panelBottom);
   await expect(panel).toBeVisible();
+});
+
+test("mobile choice modal keeps its header visible and every long-list option reachable", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 640 });
+  await openLocalApp(page);
+  await page.evaluate(() => {
+    const options = Array.from({ length: 24 }, (_, index) => `
+      <div class="choice-option-wrap">
+        <button type="button" class="choice-option text-choice-option" data-long-choice="${index + 1}">
+          <span>Vendetta option ${index + 1} with a descriptive label</span>
+        </button>
+      </div>
+    `).join("");
+    document.querySelector("#app").innerHTML = `
+      <section class="choice-panel modal-panel">
+        <div class="section-head"><div><h2>Choose a Vendetta target</h2><span>Choose one card</span></div></div>
+        <label class="choice-search"><span>Search choices</span><input value="" /></label>
+        <div class="choice-grid">${options}</div>
+      </section>
+    `;
+  });
+
+  const panel = page.locator(".choice-panel");
+  const grid = page.locator(".choice-grid");
+  const last = page.locator('[data-long-choice="24"]');
+  await expect(panel.locator("h2")).toBeInViewport();
+  const initial = await grid.evaluate((node) => ({ clientWidth: node.clientWidth, scrollWidth: node.scrollWidth }));
+  expect(initial.scrollWidth).toBeGreaterThan(initial.clientWidth);
+  await grid.evaluate((node) => { node.scrollLeft = node.scrollWidth; });
+  await expect(last).toBeInViewport();
+  const bounds = await panel.evaluate((node) => {
+    const rect = node.getBoundingClientRect();
+    return { top: rect.top, bottom: rect.bottom, viewportHeight: window.innerHeight };
+  });
+  expect(bounds.top).toBeGreaterThanOrEqual(0);
+  expect(bounds.bottom).toBeLessThanOrEqual(bounds.viewportHeight);
 });
 
 test("AI generation selection only enables trained AI decks", async ({ page }) => {

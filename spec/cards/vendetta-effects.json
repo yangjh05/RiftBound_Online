@@ -1,0 +1,295 @@
+{
+  "schemaVersion": 1,
+  "set": "VEN",
+  "policy": "Official Vendetta card text is represented as card-number keyed declarative effects. Shared timing:kind pairs own rules behavior; card-name branches are forbidden.",
+  "manualCardNumbers": [],
+  "cards": {
+    "VEN-001/166": { "effects": [
+      { "timing": "static", "kind": "costModifier", "appliesTo": "activatedAbility", "abilityKind": "empowerSelf", "energy": -3, "requiresRunesAtMost": 4 },
+      { "timing": "static", "kind": "empoweredKeywords", "keywords": ["Deflect", "Assault"], "keywordAmounts": { "Assault": 2 } }
+    ] },
+    "VEN-002/166": { "effects": [{ "timing": "onMove", "kind": "burnPlayer", "amount": 1, "firstEachTurn": true }] },
+    "VEN-003/166": { "effects": [{ "timing": "spell", "kind": "killGear", "target": "gear" }] },
+    "VEN-004/166": { "effects": [{ "timing": "static", "kind": "ignoreTankHere" }] },
+    "VEN-005/166": { "effects": [{ "timing": "beginning", "kind": "modifySelfIfFewerRunes", "amount": 1, "temporary": true }] },
+    "VEN-006/166": { "effects": [{ "timing": "beginning", "kind": "modifySelfIfFewerRunes", "amount": 2, "keywords": ["Ganking"], "temporary": true }] },
+    "VEN-007/166": { "effects": [{ "timing": "static", "kind": "empoweredMight", "amount": 1 }] },
+    "VEN-008/166": { "additionalCost": { "optionalDiscard": 1 }, "effects": [{ "timing": "spell", "kind": "dealDamageUnit", "target": "battlefieldUnit", "amount": 3, "amountIfPaidAdditionalCost": 5 }] },
+    "VEN-009/166": { "effects": [{ "timing": "attack", "kind": "payPowerGiveSelfKeyword", "costPower": [{ "domain": "Fury", "amount": 1 }], "keywords": ["Assault"], "keywordAmounts": { "Assault": 2 }, "temporary": true, "optional": true }] },
+    "VEN-010/166": { "effects": [{ "timing": "spell", "kind": "dealDamageUnit", "target": "battlefieldUnit", "amount": 2, "bonusPerSameNameInTrash": 1 }] },
+    "VEN-011/166": { "effects": [{ "timing": "onMove", "kind": "modifySelfMight", "textSection": "effect", "amount": 2, "temporary": true, "requiresBattlefieldDestination": true }] },
+    "VEN-012/166": { "effects": [{ "timing": "spell", "kind": "readyUnitGiveKeyword", "target": "unit", "keywords": ["Assault"], "keywordAmounts": { "Assault": 3 }, "temporary": true }] },
+    "VEN-013/166": { "effects": [{ "timing": "static", "kind": "conditionalEnterReady", "sameNameInTrash": true }] },
+    "VEN-014/166": { "effects": [{ "timing": "static", "kind": "empoweredKeywords", "keywords": ["Assault"], "keywordAmounts": { "Assault": 3 } }] },
+    "VEN-015/166": { "effects": [
+      { "timing": "static", "kind": "cannotBeCountered" },
+      { "timing": "spell", "kind": "dealDamageUnit", "target": "enemyUnit", "requiredDomain": "Calm", "amount": 4 }
+    ] },
+    "VEN-016/166": { "effects": [{ "timing": "onMove", "kind": "draw", "amount": 1, "requiresRunesAtMost": 4 }] },
+    "VEN-017/166": { "effects": [{ "timing": "onPlay", "kind": "dealMarkedDamage", "target": "unit", "requiresBattlefieldDestination": true }] },
+    "VEN-018/166": { "effects": [{ "timing": "static", "kind": "friendlyUnitsMightByEmpoweredSource", "amount": 1, "empoweredAmount": 2 }] },
+    "VEN-019/166": { "effects": [{ "timing": "attack", "kind": "dealDamageAllEnemiesHere", "amount": 2, "requiresRunesAtMost": 4 }] },
+    "VEN-020/166": { "effects": [{ "timing": "attack", "kind": "readyAnotherFriendly", "target": "otherFriendly" }] },
+    "VEN-021/166": { "effects": [
+      { "timing": "onMove", "kind": "dealDamageAtMovedLocations", "amount": 1, "empoweredAmount": 2, "optional": true },
+      { "timing": "static", "kind": "empoweredMight", "amount": 1 }
+    ] },
+    "VEN-022/166": { "effects": [
+      { "timing": "onPlay", "kind": "banishHandTrashBurn", "amount": 7 },
+      { "timing": "static", "kind": "skipDrawPhase" },
+      { "timing": "static", "kind": "playCardsFromTrash" },
+      { "timing": "replacement", "kind": "banishNonDeckTrashCards" }
+    ] },
+    "VEN-023/166": { "additionalCost": { "optionalDiscard": 1 }, "effects": [{ "timing": "onPlay", "kind": "playUnitToken", "tokenKind": "shadowClone", "destination": "base", "requiresPaidAdditionalCost": true }] },
+    "VEN-024/166": { "effects": [{ "timing": "combatEnd", "kind": "drawIfNoDamageThisTurn", "amount": 1 }] },
+    "VEN-025/166": { "effects": [{ "timing": "static", "kind": "preventEnemySpellAbilityDamage", "requiresRunesAtLeast": 7 }] },
+    "VEN-026/166": { "effects": [{ "timing": "onPlay", "kind": "modifyMight", "target": "unit", "amount": 3, "temporary": true }] },
+    "VEN-027/166": { "effects": [{ "timing": "static", "kind": "selfMightWhileExactlyOneOtherFriendlyHere", "textSection": "effect", "amount": 2 }] },
+    "VEN-028/166": { "effects": [
+      { "timing": "combatEnd", "kind": "empowerSelfIfParticipated" },
+      { "timing": "static", "kind": "empoweredMight", "amount": 2 }
+    ] },
+    "VEN-029/166": { "effects": [{ "timing": "static", "kind": "playDestinationRestriction", "mode": "afterOwnTurn", "minimumTurn": 4 }] },
+    "VEN-030/166": { "effects": [{ "timing": "static", "kind": "empoweredKeywords", "keywords": ["Deflect", "Shield"], "keywordAmounts": { "Shield": 3 } }] },
+    "VEN-031/166": { "effects": [{ "timing": "spell", "kind": "buffAndUntargetable", "target": "friendlyUnit", "amount": 1, "temporary": true }] },
+    "VEN-032/166": { "effects": [
+      { "timing": "static", "kind": "costModifier", "appliesTo": "activatedAbility", "abilityKind": "empowerSelf", "energyPerControlledRune": -1 },
+      { "timing": "static", "kind": "empoweredMight", "amount": 3 }
+    ] },
+    "VEN-033/166": { "effects": [{ "timing": "onMove", "kind": "revealTopDrawUnitElseTrashBuffSelf", "amount": 2, "temporary": true }] },
+    "VEN-034/166": { "effects": [{ "timing": "spell", "kind": "moveControlledUnitToControlledBattlefieldBuff", "amount": 2, "temporary": true }] },
+    "VEN-035/166": { "effects": [{ "timing": "spell", "kind": "temporaryEmpowerMode" }] },
+    "VEN-036/166": { "effects": [{ "timing": "static", "kind": "limitStartChannelHere", "amount": 1 }] },
+    "VEN-037/166": { "effects": [{ "timing": "onPlay", "kind": "disempowerOrKillEnemyGear", "requiresRunesAtLeast": 7 }] },
+    "VEN-038/166": { "effects": [
+      { "timing": "static", "kind": "cannotBeChosenByEnemy", "unlessInCombat": true },
+      { "timing": "onMove", "kind": "modifySelfMight", "amount": 2, "temporary": true, "requiresBattlefieldDestination": true }
+    ] },
+    "VEN-039/166": { "effects": [{ "timing": "spell", "kind": "counterSpell", "requiresOpponentPriorSpellThisTurn": true }] },
+    "VEN-040/166": { "effects": [{ "timing": "spell", "kind": "modifyMight", "target": "friendlyUnitAgainstOrChosenByEnemyDomain", "requiredDomain": "Fury", "amount": 4, "temporary": true }] },
+    "VEN-041/166": { "effects": [{ "timing": "attack", "kind": "dealDamageEnemyHerePerAttachment", "amount": 2 }] },
+    "VEN-042/166": { "effects": [{ "timing": "hold", "kind": "draw", "amount": 1, "requiresExactlyOneOtherFriendlyHere": true }] },
+    "VEN-043/166": { "effects": [{ "timing": "static", "kind": "empoweredMight", "amount": 7 }] },
+    "VEN-044/166": { "effects": [{ "timing": "cardPlayed", "kind": "discountNextCard", "firstEachTurn": true, "requiresSourceAtBattlefield": true, "energy": 2, "power": 2 }] },
+    "VEN-045/166": { "effects": [{ "timing": "static", "kind": "opponentSpellCostIncreaseByEmpowered", "energy": 1, "empoweredPower": 1 }] },
+    "VEN-046/166": { "effects": [{ "timing": "conquer", "kind": "gainPoint", "amount": 1, "requiresEmpowered": true }] },
+    "VEN-047/166": { "effects": [
+      { "timing": "becomesEmpowered", "kind": "predict", "amount": 2 },
+      { "timing": "static", "kind": "empoweredMight", "amount": 1 }
+    ] },
+    "VEN-048/166": { "effects": [{ "timing": "onPlay", "kind": "draw", "amount": 1 }] },
+    "VEN-049/166": { "effects": [{ "timing": "spell", "kind": "draw", "amount": 1 }] },
+    "VEN-050/166": { "effects": [
+      { "timing": "static", "kind": "costModifier", "appliesTo": "activatedAbility", "abilityKind": "empowerSelf", "energyPerControlledRune": -1 },
+      { "timing": "static", "kind": "empoweredKeywords", "keywords": ["Deflect", "Shield"], "keywordAmounts": { "Shield": 3 } }
+    ] },
+    "VEN-051/166": { "effects": [{ "timing": "spell", "kind": "playUnitToken", "tokenKind": "mech", "might": 3, "destination": "base" }] },
+    "VEN-052/166": { "effects": [{ "timing": "spell", "kind": "returnFriendlyOrWeakenEnemy", "amount": -2, "temporary": true }] },
+    "VEN-053/166": { "effects": [{ "timing": "replacement", "kind": "earlyBattlefieldScoreDraw", "turns": 2, "amount": 1 }] },
+    "VEN-054/166": { "effects": [{ "timing": "activated", "kind": "draw", "abilityId": "tome-draw", "disempowerSelfCost": true, "costEnergy": 1, "exhaust": true, "amount": 1 }] },
+    "VEN-055/166": { "effects": [{ "timing": "static", "kind": "friendlySpellCostReduction", "requiresEmpowered": true, "energy": 1, "power": 1, "minEnergy": 1 }] },
+    "VEN-056/166": { "effects": [
+      { "timing": "spell", "kind": "predict", "amount": 5 },
+      { "timing": "spell", "kind": "draw", "amount": 2 }
+    ] },
+    "VEN-057/166": { "effects": [{ "timing": "onMove", "kind": "draw", "amount": 1, "requiresEmpowered": true }] },
+    "VEN-058/166": { "effects": [{ "timing": "onPlay", "kind": "draw", "amount": 1, "requiresOtherGearAtLeast": 3 }] },
+    "VEN-059/166": { "effects": [
+      { "timing": "static", "kind": "costModifier", "appliesTo": "self", "energy": -2, "requiresControlledEmpowered": true },
+      { "timing": "spell", "kind": "dealDamageUnit", "target": "battlefieldUnit", "amount": 4 }
+    ] },
+    "VEN-060/166": { "effects": [{ "timing": "activated", "kind": "dealDamageUnit", "abilityId": "sky-cruiser-shot", "costDiscard": 1, "costDiscardType": "gear", "costEnergy": 1, "exhaust": true, "target": "battlefieldUnit", "amount": 4 }] },
+    "VEN-061/166": { "effects": [{ "timing": "spell", "kind": "modifyMight", "target": "enemyUnit", "requiredDomain": "Body", "ignoreDeflect": true, "amount": -5, "temporary": true }] },
+    "VEN-062/166": { "effects": [
+      { "timing": "static", "kind": "entersExhausted" },
+      { "timing": "activated", "kind": "empowerOtherGear", "abilityId": "formula-empower", "exhaust": true, "target": "otherGear" }
+    ] },
+    "VEN-063/166": { "effects": [{ "timing": "enemyDeath", "kind": "channelRunes", "amount": 1, "exhausted": true, "here": true, "oncePerTurn": true }] },
+    "VEN-064/166": { "effects": [{ "timing": "static", "kind": "costReductionPerControlledType", "cardType": "gear", "energy": 1 }] },
+    "VEN-065/166": { "effects": [{ "timing": "conquer", "kind": "gainPoint", "amount": 1, "requiresNonTokenTypesPlayedThisTurn": ["unit", "gear", "spell"] }] },
+    "VEN-066/166": { "effects": [{ "timing": "spell", "kind": "banishUnitReplaySameLocation", "target": "unit" }] },
+    "VEN-067/166": { "effects": [{ "timing": "mainStart", "kind": "killThreeFriendlyPermanentsGainPoint", "amount": 1, "optional": true }] },
+    "VEN-068/166": { "effects": [
+      { "timing": "onPlay", "kind": "readyAnotherExhausted", "optional": true },
+      { "timing": "cardPlayed", "kind": "readyAnotherExhausted", "cardType": "gear", "nonToken": true, "firstEachTurn": true, "optional": true }
+    ] },
+    "VEN-069/166": { "effects": [
+      { "timing": "onPlay", "kind": "draw", "amount": 1 },
+      { "timing": "static", "kind": "friendlySpellsAbilitiesCantBeCountered", "requiresEmpowered": true },
+      { "timing": "replacement", "kind": "additionalNegativeMight", "requiresEmpowered": true, "amount": -1 }
+    ] },
+    "VEN-070/166": { "effects": [
+      { "timing": "static", "kind": "empoweredMight", "amount": 2 },
+      { "timing": "static", "kind": "empoweredKeywords", "keywords": ["Ganking"] }
+    ] },
+    "VEN-071/166": { "effects": [{ "timing": "ready", "kind": "modifySelfMight", "amount": 2, "temporary": true }] },
+    "VEN-072/166": { "effects": [{ "timing": "spell", "kind": "modifyMight", "target": "unit", "amount": 2, "amountIfTargetEmpowered": 4, "temporary": true }] },
+    "VEN-073/166": { "effects": [{ "timing": "static", "kind": "cannotBeMovedByEnemy", "textSection": "effect" }] },
+    "VEN-074/166": { "effects": [{ "timing": "static", "kind": "empoweredMight", "amount": 1 }] },
+    "VEN-075/166": { "effects": [
+      { "timing": "static", "kind": "entersExhausted" },
+      { "timing": "activated", "kind": "addEnergy", "abilityId": "egg-energy", "exhaust": true, "abilityKeywords": ["Reaction"], "amount": 1, "amountIfEmpowered": 2 }
+    ] },
+    "VEN-076/166": { "effects": [{ "timing": "static", "kind": "assaultPerFriendlyGear" }] },
+    "VEN-077/166": { "effects": [{ "timing": "activated", "kind": "modifyMight", "abilityId": "tools-buff", "exhaust": true, "target": "unit", "amount": 2, "amountIfSourceEmpowered": 4, "temporary": true }] },
+    "VEN-078/166": { "effects": [
+      { "timing": "static", "kind": "empoweredMight", "amount": 2 },
+      { "timing": "death", "kind": "channelRunes", "amount": 2, "exhausted": true, "requiresEmpowered": true }
+    ] },
+    "VEN-079/166": { "effects": [{ "timing": "attackOrDefend", "kind": "matchChosenUnitMightPlus", "amount": 1, "requiresEmpowered": true, "temporary": true }] },
+    "VEN-080/166": { "effects": [{ "timing": "conquer", "kind": "killGearUpToSelfMight", "optional": true }] },
+    "VEN-081/166": { "effects": [{ "timing": "spell", "kind": "modifyMight", "target": "unit", "amount": 6, "temporary": true }] },
+    "VEN-082/166": { "effects": [{ "timing": "onPlay", "kind": "disempowerFriendlyEmpowerTarget", "optional": true }] },
+    "VEN-083/166": { "additionalCost": { "optionalPower": [{ "domain": "Body", "amount": 1 }] }, "effects": [{ "timing": "spell", "kind": "duelFriendlyEnemy", "friendlyBonusIfPaid": 2, "temporary": true }] },
+    "VEN-084/166": { "effects": [
+      { "timing": "static", "kind": "empoweredMight", "amount": 3 },
+      { "timing": "static", "kind": "preventDamageOutsideCombat", "requiresEmpowered": true }
+    ] },
+    "VEN-085/166": { "effects": [{ "timing": "spell", "kind": "revealOpponentHandRecycleDomainCard", "requiredDomain": "Mind" }] },
+    "VEN-086/166": { "effects": [{ "timing": "replacement", "kind": "replaceChosenDisableWithBuff", "requiresEmpowered": true, "amount": 3, "temporary": true }] },
+    "VEN-087/166": { "effects": [{ "timing": "activated", "kind": "playUnitToken", "abilityId": "disc-mech", "disempowerSelfCost": true, "costEnergy": 1, "exhaust": true, "tokenKind": "mech", "might": 3, "destination": "base" }] },
+    "VEN-088/166": { "effects": [{ "timing": "ready", "kind": "chooseSelfKeyword", "keywords": ["Assault", "Deflect", "Ganking"], "keywordAmounts": { "Assault": 2, "Deflect": 2 }, "temporary": true }] },
+    "VEN-089/166": { "effects": [{ "timing": "spell", "kind": "lookTopPlayUnitOrGearReducedThenEmpower", "look": 5, "energyReduction": 5, "optional": true }] },
+    "VEN-090/166": { "effects": [{ "timing": "spell", "kind": "eachPlayerKeepChosenUnitKillRest" }] },
+    "VEN-091/166": { "effects": [
+      { "timing": "static", "kind": "conditionalEnterReady", "outsideVictoryRange": 3 },
+      { "timing": "attack", "kind": "moveEnemyUnitsHereToBase", "maxMightEach": 5, "optional": true, "multi": true }
+    ] },
+    "VEN-092/166": { "effects": [
+      { "timing": "activated", "kind": "modifySelfMight", "abilityId": "brute-grow", "costEnergy": 1, "exhaust": false, "amount": 1, "temporary": true },
+      { "timing": "mightThreshold", "kind": "empowerSelf", "threshold": 10 },
+      { "timing": "static", "kind": "empoweredKeywords", "keywords": ["Deflect", "Ganking"] }
+    ] },
+    "VEN-093/166": { "effects": [
+      { "timing": "static", "kind": "empoweredMight", "amount": 1 },
+      { "timing": "static", "kind": "empoweredKeywords", "keywords": ["Ganking"] }
+    ] },
+    "VEN-094/166": { "effects": [{ "timing": "discarded", "kind": "payEnergyModifyFriendly", "costEnergy": 1, "amount": 2, "temporary": true, "optional": true }] },
+    "VEN-095/166": { "effects": [{ "timing": "onMove", "kind": "burnBuffSelf", "burn": 1, "amount": 1, "temporary": true, "optional": true }] },
+    "VEN-096/166": { "effects": [{ "timing": "static", "kind": "costReductionPerSameNameInTrash", "energy": 2 }] },
+    "VEN-097/166": { "effects": [
+      { "timing": "static", "kind": "selfMightPerOtherSameNameHere", "amount": 1 },
+      { "timing": "static", "kind": "unlimitedDeckCopies" }
+    ] },
+    "VEN-098/166": { "effects": [{ "timing": "static", "kind": "friendlyFlowCostReduction", "energy": 2, "minEnergy": 1 }] },
+    "VEN-099/166": { "effects": [{ "timing": "onPlay", "kind": "empowerHereUntilEndTurn", "requiresPlayedFromHidden": true, "optional": true }] },
+    "VEN-100/166": { "effects": [{ "timing": "spell", "kind": "playUnitToken", "tokenKind": "tentacle", "might": 1, "count": 2, "destination": "base", "tags": ["Bilgewater"] }] },
+    "VEN-101/166": { "additionalCost": { "optionalEnergy": 1 }, "effects": [{ "timing": "onPlay", "kind": "banishTrashCardGiveKeyword", "requiresPaidAdditionalCost": true, "keywords": ["Assault"], "keywordAmounts": { "Assault": 2 }, "temporary": true }] },
+    "VEN-102/166": { "effects": [{ "timing": "opponentCardPlayed", "kind": "banishSelfAndPlayedCard", "cardType": "gear", "optional": true }] },
+    "VEN-103/166": { "effects": [{ "timing": "spell", "kind": "returnTrashUnitsToOwnersHands", "max": 2, "optional": true }] },
+    "VEN-104/166": { "effects": [{ "timing": "becomesEmpowered", "kind": "playTrashUnitToBase", "maxEnergy": 3, "maxPower": 1, "ignoreCost": true, "optional": true }] },
+    "VEN-105/166": { "effects": [{ "timing": "spell", "kind": "moveUnit", "target": "unit", "maxMight": 3 }] },
+    "VEN-106/166": { "effects": [{ "timing": "spell", "kind": "banishWeakElseReturnUnit", "target": "battlefieldUnit", "threshold": 3 }] },
+    "VEN-107/166": { "effects": [{ "timing": "spell", "kind": "returnEnemyDomainUnitsTotalMight", "requiredDomain": "Order", "maxTotalMight": 5 }] },
+    "VEN-108/166": { "effects": [
+      { "timing": "onPlay", "kind": "burnBuffFromBurnedUnit", "burn": 1, "temporary": true },
+      { "timing": "beginning", "kind": "burnBuffFromBurnedUnit", "burn": 1, "temporary": true }
+    ] },
+    "VEN-109/166": { "effects": [
+      { "timing": "onPlay", "kind": "playUnitToken", "tokenKind": "tentacle", "might": 1, "destination": "base", "tags": ["Bilgewater"] },
+      { "timing": "score", "kind": "playUnitToken", "tokenKind": "tentacle", "might": 1, "destination": "base", "tags": ["Bilgewater"] },
+      { "timing": "static", "kind": "selfMightPerFriendlyTokenUnit", "amount": 1 }
+    ] },
+    "VEN-110/166": { "effects": [{ "timing": "becomesEmpowered", "kind": "banishEnemyBattlefieldUnit", "maxMight": 3 }] },
+    "VEN-111/166": { "effects": [{ "timing": "onMove", "kind": "eachPlayerDiscardOrDraw", "requiresBattlefieldDestination": true }] },
+    "VEN-112/166": { "effects": [
+      { "timing": "conquer", "kind": "playUnitToken", "tokenKind": "shadowClone", "destination": "base" },
+      { "timing": "activated", "kind": "swapWithControlledToken", "abilityId": "zed-swap", "costEnergy": 1, "costPower": [{ "domain": "Chaos", "amount": 1 }], "exhaust": false, "tokenKind": "shadowClone", "abilityKeywords": ["Action"] }
+    ] },
+    "VEN-113/166": { "effects": [
+      { "timing": "onPlay", "kind": "burn", "amount": 2 },
+      { "timing": "conquer", "kind": "grantTrashSpellFlowThisTurn" }
+    ] },
+    "VEN-114/166": { "effects": [{ "timing": "becomesEmpowered", "kind": "opponentBurnPlayTheirTrashUnit", "burn": 3, "optionalPlay": true }] },
+    "VEN-115/166": { "effects": [
+      { "timing": "static", "kind": "canEnterOpenBattlefield" },
+      { "timing": "onPlay", "kind": "returnBattlefieldUnitToHand", "target": "nonDragon", "optional": true }
+    ] },
+    "VEN-116/166": { "effects": [{ "timing": "spell", "kind": "setBaseMight", "target": "unit", "amount": 5, "temporary": true }] },
+    "VEN-117/166": { "effects": [{ "timing": "static", "kind": "conditionalShield", "amount": 3, "requiresExactlyOneOtherFriendlyHere": true }] },
+    "VEN-119/166": { "effects": [{ "timing": "static", "kind": "costModifier", "appliesTo": "self", "energy": -2, "power": -1, "requiresControlledBattlefieldExactlyUnits": 2 }] },
+    "VEN-120/166": { "additionalCost": { "optionalPower": [{ "domain": "Order", "amount": 1 }] }, "effects": [{ "timing": "onPlay", "kind": "stunUnit", "target": "enemyBattlefieldUnit", "requiresPaidAdditionalCost": true }] },
+    "VEN-121/166": { "effects": [{ "timing": "cardPlayed", "kind": "modifySelfMight", "cardType": "unit", "another": true, "amount": 2, "temporary": true }] },
+    "VEN-122/166": { "effects": [
+      { "timing": "static", "kind": "empoweredMight", "amount": 1 },
+      { "timing": "static", "kind": "empoweredKeywords", "keywords": ["Deflect"], "keywordAmounts": { "Deflect": 2 } }
+    ] },
+    "VEN-124/166": { "effects": [{ "timing": "static", "kind": "empoweredMight", "amount": 2 }] },
+    "VEN-125/166": { "effects": [{ "timing": "activated", "kind": "readySelfMight", "abilityId": "hungry-wolf", "costPower": [{ "domain": "Order", "amount": 1 }], "exhaust": false, "amount": 1, "temporary": true, "oncePerTurn": true, "requiresEnemyChosenThisTurn": true }] },
+    "VEN-126/166": { "effects": [{ "timing": "spell", "kind": "preventNextDamage", "target": "unit", "amount": 7, "temporary": true }] },
+    "VEN-127/166": { "effects": [{ "timing": "spell", "kind": "disempowerThenKillWeak", "target": "unit", "maxMight": 3 }] },
+    "VEN-128/166": { "effects": [{ "timing": "death", "kind": "playUnitToken", "tokenKind": "recruit", "might": 1, "count": 2, "destination": "base", "requiresEmpowered": true }] },
+    "VEN-129/166": { "effects": [{ "timing": "static", "kind": "doesNotDealCombatDamage", "unlessExactlyOneOtherFriendlyHere": true }] },
+    "VEN-130/166": { "effects": [{ "timing": "static", "kind": "friendlyEmpoweredMight", "amount": 2, "requiresEmpowered": true }] },
+    "VEN-131/166": { "effects": [{ "timing": "spell", "kind": "killEnemyDomainUnitOrGear", "requiredDomain": "Chaos" }] },
+    "VEN-132/166": { "effects": [
+      { "timing": "onPlay", "kind": "nameCard", "cardType": "spell" },
+      { "timing": "static", "kind": "opponentsCannotPlayNamedCard", "cardType": "spell", "requiresSourceAtBattlefield": true }
+    ] },
+    "VEN-133/166": { "effects": [
+      { "timing": "activated", "kind": "giveControlRecallSelf", "abilityId": "glowstone-control", "disempowerSelfCost": true, "exhaust": true, "target": "player" },
+      { "timing": "endTurn", "kind": "killSelfDamageControlledUnits", "amount": 5 }
+    ] },
+    "VEN-134/166": { "effects": [
+      { "timing": "static", "kind": "empoweredMight", "amount": 2, "perEmpower": true },
+      { "timing": "static", "kind": "empoweredKeywords", "keywords": ["Deflect", "Ganking"], "keywordAmounts": { "Deflect": 3 }, "requiresEmpoweredCount": 3 }
+    ] },
+    "VEN-135/166": { "effects": [
+      { "timing": "onPlay", "kind": "payEnergyStunUnit", "costEnergy": 2, "optional": true },
+      { "timing": "attack", "kind": "payEnergyStunUnit", "costEnergy": 2, "optional": true },
+      { "timing": "static", "kind": "selfMightIfStunnedEnemyHere", "amount": 2 }
+    ] },
+    "VEN-136/166": { "effects": [
+      { "timing": "static", "kind": "empoweredKeywords", "keywords": ["Assault"], "keywordAmounts": { "Assault": 2 } },
+      { "timing": "attack", "kind": "killWeakerEnemyHere", "requiresEmpowered": true }
+    ] },
+    "VEN-137/166": { "effects": [{ "timing": "replacement", "kind": "copyOtherFriendlyOnAttach", "textSection": "effect" }] },
+    "VEN-138/166": { "effects": [{ "timing": "hold", "kind": "gainPoint", "amount": 1, "requiresExactlyOneOtherFriendlyHere": true }] },
+    "VEN-139/166": { "effects": [{ "timing": "activated", "kind": "moveShowdownFriendlyToBaseReadyIfEmpowered", "abilityId": "rogue-assassin", "exhaust": true, "abilityKeywords": ["Action"], "requiresOwnTurn": true }] },
+    "VEN-140/166": { "effects": [{ "timing": "spell", "kind": "optionalDamageEnemyThenMoveFriendly", "amount": 2 }] },
+    "VEN-141/166": { "effects": [{ "timing": "activated", "kind": "addEnergy", "abilityId": "butcher-energy", "costPower": [{ "domain": "Any", "amount": 2 }], "exhaust": true, "abilityKeywords": ["Reaction"], "amount": 2, "restriction": "unitOrUnitAbility" }] },
+    "VEN-142/166": { "effects": [{ "timing": "spell", "kind": "doubleMightGrantReadyAbility", "target": "unit", "costPower": [{ "domain": "Any", "amount": 2 }], "temporary": true }] },
+    "VEN-143/166": { "effects": [
+      { "timing": "ownedCardBanished", "kind": "empowerSelf" },
+      { "timing": "activated", "kind": "discardThenDraw", "abilityId": "master-shadows", "disempowerSelfCost": true, "exhaust": true, "costDiscard": 1, "amount": 1, "abilityKeywords": ["Action"] }
+    ] },
+    "VEN-144/166": { "effects": [
+      { "timing": "spell", "kind": "burn", "amount": 3 },
+      { "timing": "spell", "kind": "playUnitToken", "tokenKind": "shadowClone", "destination": "base" }
+    ] },
+    "VEN-145/166": { "effects": [{ "timing": "cardOrAbilityPlayed", "kind": "exhaustSelfReadyRunes", "cardTypes": ["unit", "gear"], "includeActivatedAbilities": true, "minEnergy": 7, "max": 2, "optional": true }] },
+    "VEN-146/166": { "effects": [{ "timing": "spell", "kind": "damageUnitDeathChannel", "target": "battlefieldUnit", "amount": 4, "amountAtRunes": 7, "requiresRunesAtLeast": 7, "channel": 1, "exhausted": true }] },
+    "VEN-147/166": { "effects": [{ "timing": "activated", "kind": "giveKeyword", "abilityId": "eye-tank", "exhaust": true, "abilityKeywords": ["Action"], "target": "friendlyUnit", "keywords": ["Tank"], "temporary": true }] },
+    "VEN-148/166": { "effects": [{ "timing": "spell", "kind": "moveEnemyToFriendlyBattlefieldBuffIfExactlyTwo", "amount": 1, "temporary": true }] },
+    "VEN-149/166": { "effects": [
+      { "timing": "activated", "kind": "readyGear", "abilityId": "defender-ready-one", "costEnergy": 1, "exhaust": true, "max": 1, "requiresNotEmpowered": true },
+      { "timing": "activated", "kind": "readyGear", "abilityId": "defender-ready-two", "costEnergy": 1, "exhaust": true, "max": 2, "requiresEmpowered": true }
+    ] },
+    "VEN-150/166": { "effects": [{ "timing": "spell", "kind": "readyPermanentsAndRunes", "max": 4 }] },
+    "VEN-151/166": { "effects": [
+      { "timing": "otherEmpowered", "kind": "empowerSelf" },
+      { "timing": "activated", "kind": "modifyMight", "abilityId": "soul-reflection", "disempowerSelfCost": true, "exhaust": true, "target": "battlefieldUnit", "amount": -2, "temporary": true }
+    ] },
+    "VEN-152/166": { "effects": [{ "timing": "spell", "kind": "rebuttal", "maxEnergy": 4, "optionalPower": [{ "domain": "Any", "amount": 1 }] }] },
+    "VEN-153/166": { "effects": [
+      { "timing": "otherEmpowered", "kind": "empowerSelf" },
+      { "timing": "activated", "kind": "readyUnit", "abilityId": "matriarch-ready", "disempowerSelfCost": true, "costPower": [{ "domain": "Any", "amount": 1 }], "exhaust": true, "target": "unit" }
+    ] },
+    "VEN-154/166": { "effects": [{ "timing": "spell", "kind": "killEnemyWeakerThanFriendly", "target": "friendlyThenEnemy" }] },
+    "VEN-155/166": { "effects": [
+      { "timing": "cardPlayed", "kind": "empowerSelf", "fromOutsideHand": true },
+      { "timing": "activated", "kind": "giveKeyword", "abilityId": "heart-assault", "disempowerSelfCost": true, "exhaust": true, "abilityKeywords": ["Action"], "target": "unit", "keywords": ["Assault"], "keywordAmounts": { "Assault": 2 }, "temporary": true }
+    ] },
+    "VEN-156/166": { "effects": [{ "timing": "spell", "kind": "chooseTopDeck", "look": 3, "draw": 1, "trashRest": true, "optional": true }] },
+    "VEN-157/166": { "effects": [{ "timing": "static", "kind": "dragonRoostPlayPermission", "additionalPowerCost": [{ "domain": "Any", "amount": 2 }] }] },
+    "VEN-158/166": { "effects": [{ "timing": "static", "kind": "ignoreDeflectHere" }] },
+    "VEN-159/166": { "effects": [{ "timing": "static", "kind": "taggedUnitsHereMight", "keyword": "Tank", "amount": 1 }] },
+    "VEN-160/166": { "effects": [{ "timing": "combatStatic", "kind": "reactionCostIncrease", "power": 1 }] },
+    "VEN-161/166": { "effects": [{ "timing": "static", "kind": "firstFriendlyGearAbilityCostReduction", "energy": 1, "requiresControl": true }] },
+    "VEN-162/166": { "effects": [{ "timing": "conquerHere", "kind": "payEnergyDraw", "costEnergy": 1, "amount": 1, "requiresRunesAtMost": 4, "optional": true }] },
+    "VEN-163/166": { "effects": [{ "timing": "static", "kind": "empowerAbilityCostReductionHere", "energyOrPower": 1 }] },
+    "VEN-164/166": { "effects": [{ "timing": "static", "kind": "friendlyTargetSpellCostReductionHere", "power": 1 }] },
+    "VEN-165/166": { "effects": [{ "timing": "hold", "kind": "burn", "amount": 3 }] },
+    "VEN-166/166": { "effects": [{ "timing": "showdownBeginsHere", "kind": "addEnergyToAttackerDefender", "amount": 1 }] }
+  }
+}

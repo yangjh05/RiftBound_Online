@@ -100,16 +100,25 @@ export function validateNewCardImplementationReferences(cardPool, baseline = rea
   const errors = [];
   const baselineCards = new Set(baseline.cardNumbers);
   const reusableEffects = new Set(baseline.usedEffectKeys || []);
+  const baselineCardPool = cardPool.filter((card) => baselineCards.has(card.cardNumber));
   for (const card of cardPool) {
     if (baselineCards.has(card.cardNumber)) continue;
     for (const effect of card.effects || []) {
       const key = effectKey(effect);
       if (!reusableEffects.has(key)) continue;
+      const hasSameTypeReferenceCandidate = baselineCardPool.some((candidate) => candidate.type === card.type
+        && (candidate.effects || []).some((candidateEffect) => effectKey(candidateEffect) === key));
+      if (!hasSameTypeReferenceCandidate) continue;
       const referenceNumber = card.implementationReferences?.[key] || card.implementationReference;
       if (!referenceNumber) {
         errors.push(`${card.cardNumber} ${card.name}: reused effect ${key} must declare an implementation reference to a previously registered same-type card.`);
       } else if (!baselineCards.has(referenceNumber)) {
         errors.push(`${card.cardNumber} ${card.name}: reused effect ${key} references ${referenceNumber}, which was not registered in the previous reviewed baseline.`);
+      } else {
+        const referencedCard = baselineCardPool.find((candidate) => candidate.cardNumber === referenceNumber);
+        if (referencedCard?.type !== card.type) {
+          errors.push(`${card.cardNumber} ${card.name}: reused effect ${key} must reference a previously registered ${card.type} card.`);
+        }
       }
     }
   }

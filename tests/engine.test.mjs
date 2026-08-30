@@ -2,12 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { cards, decklists, DOMAINS, makeRune, rawDecklists } from "../src/cards.mjs";
-import { DECK_RULES, validateDeckRecord } from "../src/decks/rules.mjs";
+import { DECK_RULES, championMatchesLegend, validateDeckRecord } from "../src/decks/rules.mjs";
 import { snapshotForPlayer } from "../server/snapshots.mjs";
 import { applyGameCommand } from "../server/commands.mjs";
 import { validateStableGameState } from "../scripts/semantic-oracle.mjs";
 import { referenceZone, resolveCleanupReference } from "../scripts/reference-rules.mjs";
-import { OFFICIAL_TOKEN_DEFINITIONS, officialTokenKinds } from "../src/rules/tokens.mjs";
+import { OFFICIAL_TOKEN_DEFINITIONS, officialTokenDefinition, officialTokenKinds } from "../src/rules/tokens.mjs";
 import { applyAiAction, enumerateAiPolicyActions, enumerateLegalActions, planPaymentActions, resolveLegalAction } from "../src/ai/actions.mjs";
 import { choosePaymentPlan, enumeratePaymentPlans, executePaymentPlan, isMechanicalPaymentAction, resolvePlannedPayment } from "../src/ai/payment-planner.mjs";
 import { reactionReserveProfile } from "../src/ai/resource-strategy.mjs";
@@ -867,28 +867,49 @@ test("every declared unit-token effect creates the right unique tokens in the ri
     const game = createGame({ interactive: true });
     finishSetup(game);
     const player = currentPlayer(game);
-    const source = instance(card, player.id, `token-source-${card.id}-${effect.timing}`);
+    let source = instance(card, player.id, `token-source-${card.id}-${effect.timing}`);
     const battlefield = game.battlefields[0];
     battlefield.controlledBy = player.id;
     battlefield.units = [];
+    if (card.type === "gear" && effect.textSection === "effect") {
+      source = instance(cards.lonelyPoro, player.id, `token-host-${card.id}-${effect.timing}`);
+      source.appendedEffects = [structuredClone(effect)];
+    }
     let explicitDestination = null;
     if (effect.destination === "sourceBattlefield") battlefield.units.push(source);
     if (effect.destination === "movedBattlefield") explicitDestination = battlefield.instanceId;
     if (effect.destination === "showdownBattlefield") explicitDestination = battlefield.instanceId;
     if (effect.destination === "hiddenBattlefield") source.hiddenBattlefieldId = battlefield.instanceId;
+    if (effect.countFromControlledType === "gear") {
+      player.base.push(instance(cards.trinityForce, player.id, `token-count-gear-${card.id}`));
+    }
+    if (effect.countFromControlledType === "unit") {
+      player.base.push(instance(cards.lonelyPoro, player.id, `token-count-unit-${card.id}`));
+    }
+    if (effect.countFromControlledTag) {
+      const tagged = instance(cards.lonelyPoro, player.id, `token-count-tag-${card.id}`);
+      tagged.tags = [effect.countFromControlledTag];
+      player.base.push(tagged);
+    }
 
     const beforeIds = new Set([...player.base, ...battlefield.units].map((entry) => entry.instanceId));
     assert.equal(playUnitToken(game, player, source, effect, explicitDestination), true, `${card.name} should generate tokens`);
+    while (game.pendingChoice?.effect === "playUnitTokenDestination") {
+      assert.equal(chooseEffectOption(game, "base").ok, true, `${card.name} token destination`);
+    }
     const generated = [...player.base, ...battlefield.units].filter((entry) => !beforeIds.has(entry.instanceId));
-    const expectedSource = tokenCards.get(effect.tokenCardNumber || "OGN-273/298");
+    const expectedSource = officialTokenDefinition(effect.tokenKind)
+      || tokenCards.get(effect.tokenCardNumber || "OGN-273/298");
     assert.ok(expectedSource, `${card.name} references a registered token`);
-    assert.equal(generated.length, effect.count || 1, `${card.name} token count`);
+    const expectedCount = effect.countFromControlledType || effect.countFromControlledTag ? 1 : effect.count || 1;
+    assert.equal(generated.length, expectedCount, `${card.name} token count`);
     assert.equal(new Set(generated.map((entry) => entry.instanceId)).size, generated.length, `${card.name} token IDs are unique`);
-    for (const token of generated) {
+    for (const [index, token] of generated.entries()) {
       assert.equal(token.id, expectedSource.id, `${card.name} token identity`);
       assert.equal(token.ownerId, player.id, `${card.name} token owner`);
       assert.equal(token.controllerId, player.id, `${card.name} token controller`);
-      assert.equal(token.exhausted, !Boolean(effect.ready), `${card.name} ready state`);
+      const entersReady = Boolean(effect.ready) || index < (effect.readyCount || 0);
+      assert.equal(token.exhausted, !entersReady, `${card.name} ready state`);
       assert.equal(token.damage, 0, `${card.name} token starts undamaged`);
       assert.equal(token.stunned, false, `${card.name} token starts unstunned`);
     }
@@ -898,15 +919,17 @@ test("every declared unit-token effect creates the right unique tokens in the ri
   }
 });
 
-test("the official token registry exactly implements every Core Rules 184 token", () => {
+test("the official token registry implements Core Rules 184 and set-specific tokens", () => {
   assert.deepEqual(officialTokenKinds(), [
-    "recruit", "sprite", "sandSoldier", "mech", "gold", "reflection", "bird", "brush", "baronPit"
+    "recruit", "sprite", "sandSoldier", "mech", "tentacle", "shadowClone", "gold", "reflection", "bird", "brush", "baronPit"
   ]);
   const expectedUnits = {
     recruit: { might: 1, tags: ["Recruit"], keywords: [] },
     sprite: { might: 3, tags: ["Fae"], keywords: ["Temporary"] },
     sandSoldier: { might: 2, tags: ["Shurima"], keywords: [] },
     mech: { might: 3, tags: ["Mech"], keywords: [] },
+    tentacle: { might: 1, tags: ["Bilgewater"], keywords: [] },
+    shadowClone: { might: 0, tags: [], keywords: [] },
     reflection: { might: 0, tags: [], keywords: [] },
     bird: { might: 1, tags: ["Bird"], keywords: ["Deflect"] }
   };
@@ -922,6 +945,12 @@ test("the official token registry exactly implements every Core Rules 184 token"
   assert.equal(OFFICIAL_TOKEN_DEFINITIONS.gold.effects[0].kind, "addPower");
   assert.equal(OFFICIAL_TOKEN_DEFINITIONS.brush.type, "battlefield");
   assert.equal(OFFICIAL_TOKEN_DEFINITIONS.baronPit.type, "battlefield");
+  assert.equal(OFFICIAL_TOKEN_DEFINITIONS.shadowClone.effects[0].kind, "banishOwnTrashUnitGiveSelfKeyword");
+  for (const token of Object.values(OFFICIAL_TOKEN_DEFINITIONS)) {
+    assert.match(token.image, /^https:\/\//, `${token.name} has its printed token image`);
+    assert.ok(token.translations?.ko?.name, `${token.name} has a Korean name`);
+    assert.ok(token.translations?.ko?.text, `${token.name} has Korean rules text`);
+  }
 });
 
 test("Gold kills and exhausts itself as an Add Reaction cost, then universal Power pays a colored cost", () => {
@@ -1482,6 +1511,31 @@ test("Brush and Baron Pit battlefield tokens share the Replace framework and the
   assert.equal(baron.units.some((unit) => unit.instanceId === mover.instanceId), true);
 });
 
+test("Baron Nashor adds a third Baron Pit only once and enters it only when it was added", () => {
+  const game = createGame({ interactive: false });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const firstBaron = instance({ ...cards.unl147baronNashor, energy: 0, power: [] }, player.id, "first-baron-nashor");
+  player.hand = [firstBaron];
+
+  assert.equal(game.battlefields.length, 2);
+  assert.equal(playCard(game, firstBaron.instanceId, "base").ok, true);
+  const pit = game.battlefields.find((field) => field.cardNumber === OFFICIAL_TOKEN_DEFINITIONS.baronPit.cardNumber);
+  assert.ok(pit);
+  assert.equal(game.battlefields.length, 3, "Baron Pit is added instead of replacing either selected battlefield");
+  assert.equal(pit.units.some((unit) => unit.instanceId === firstBaron.instanceId), true,
+    "the Baron whose play added Baron Pit enters there");
+  assert.equal(player.base.some((unit) => unit.instanceId === firstBaron.instanceId), false);
+
+  const secondBaron = instance({ ...cards.unl147baronNashor, energy: 0, power: [] }, player.id, "second-baron-nashor");
+  player.hand = [secondBaron];
+  assert.equal(playCard(game, secondBaron.instanceId, "base").ok, true);
+  assert.equal(game.battlefields.length, 3, "an existing Baron Pit prevents another copy from being added");
+  assert.equal(player.base.some((unit) => unit.instanceId === secondBaron.instanceId), true,
+    "if Baron Pit was already there, Baron Nashor keeps its declared destination");
+  assert.equal(pit.units.some((unit) => unit.instanceId === secondBaron.instanceId), false);
+});
+
 test("Brush offers its optional swap-back trigger only after its controller actually scores", () => {
   const game = createGame({ interactive: true });
   finishSetup(game);
@@ -1993,6 +2047,31 @@ test("players choose starting champions before battlefield selection and opening
   assert.equal(second.hand.length, 4);
   assert.equal(first.mainDeck.length, expectedDeckSize(decklists.keenanXiong) - 4);
   assert.equal(second.mainDeck.length, expectedDeckSize(decklists.drowsy) - 4);
+});
+
+test("starting Champion selection requires the Legend's exact Champion identity tag", () => {
+  const kennenDeck = structuredClone(decklists.keenanXiong);
+  kennenDeck.legend = structuredClone(cards.ven155heartOfTheTempest);
+  kennenDeck.main = kennenDeck.main.filter((card) => !card.isChampion && !card.tags?.includes("Champion"));
+  kennenDeck.main.push(
+    structuredClone(cards.ven135kennenKeeperOfBalance),
+    structuredClone(cards.unl056yuumiMagicalCat)
+  );
+
+  assert.equal(championMatchesLegend(cards.ven135kennenKeeperOfBalance, kennenDeck.legend), true);
+  assert.equal(championMatchesLegend(cards.unl056yuumiMagicalCat, kennenDeck.legend), false);
+
+  const game = createGame({ interactive: true, decks: [kennenDeck, decklists.drowsy] });
+  assert.equal(confirmFirstPlayer(game).ok, true);
+  const player = game.players[0];
+  assert.deepEqual(player.availableChampions.map((card) => card.name), [cards.ven135kennenKeeperOfBalance.name]);
+
+  const forgedChoice = instance(cards.unl056yuumiMagicalCat, player.id, "forged-yuumi-choice");
+  player.availableChampions.push(forgedChoice);
+  const rejected = selectChampion(game, player.id, forgedChoice.instanceId);
+  assert.equal(rejected.ok, false);
+  assert.match(rejected.message, /Champion tag/u);
+  assert.equal(player.champion, null);
 });
 
 test("starting champion leaves the champion zone after being played and cannot be played again", () => {
@@ -4745,6 +4824,79 @@ test("activated equipment attaches only after explicit activation", () => {
   assert.equal(player.base.some((card) => card.instanceId === "guardian-equip"), false);
 });
 
+test("cleanup transfers Contested to the remaining non-controller after its original applier leaves", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const originalApplier = currentPlayer(game);
+  const remainingPlayer = game.players.find((candidate) => candidate.id !== originalApplier.id);
+  const field = game.battlefields[0];
+  field.units = [instance(cards.lonelyPoro, remainingPlayer.id, "contested-transfer-remaining")];
+  field.controlledBy = originalApplier.id;
+  field.contestedBy = originalApplier.id;
+  game.stagedEvents = [{
+    id: `staged-combat-${field.instanceId}-${originalApplier.id}`,
+    type: "combat",
+    battlefieldId: field.instanceId,
+    attackerId: originalApplier.id,
+    defenderId: remainingPlayer.id
+  }];
+
+  assert.equal(endTurn(game).ok, true);
+  assert.equal(field.contestedBy, remainingPlayer.id);
+  assert.equal(game.showdown?.battlefieldId, field.instanceId);
+  assert.equal(game.showdown?.combat, false);
+  assert.equal(game.showdown?.focusPlayerId, remainingPlayer.id);
+});
+
+test("Blade of the Ruined King pays its friendly-unit Equip cost before choosing the attachment", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const sacrifice = instance(cards.lonelyPoro, player.id, "bork-sacrifice");
+  const target = instance(cards.stalwartPoro, player.id, "bork-target");
+  const gear = instance(cards.sfd178bladeOfTheRuinedKing, player.id, "bork-gear");
+  player.base = [sacrifice, target, gear];
+  player.runes = [rune(DOMAINS.ORDER, player.id, "bork-power")];
+
+  assert.equal(activateCard(game, gear.instanceId).ok, true);
+  assert.equal(game.pendingChoice?.data?.targetEffect, "killFriendlyUnitCost");
+  assert.equal(chooseEffectOption(game, sacrifice.instanceId).ok, true);
+  assert.equal(game.pendingPayment?.source, "activatedAbility");
+  assert.equal(togglePaymentRune(game, "bork-power", "power").ok, true);
+  assert.equal(confirmPayment(game).ok, true);
+  assert.equal(player.trash.some((card) => card.instanceId === sacrifice.instanceId), true);
+  assert.equal(game.pendingChoice?.effect, "equipGear");
+  assert.equal(chooseEffectOption(game, target.instanceId).ok, true);
+  assert.equal(target.attachments.some((card) => card.instanceId === gear.instanceId), true);
+});
+
+test("Assembly Rig restricts its recycle activation cost to a unit card", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const rig = instance(cards.sfd019assemblyRig, player.id, "assembly-rig");
+  const recyclableUnit = instance(cards.lonelyPoro, player.id, "assembly-unit");
+  const ineligibleSpell = instance(cards.charm, player.id, "assembly-spell");
+  player.base = [rig];
+  player.trash = [ineligibleSpell, recyclableUnit];
+  player.runes = [
+    rune(DOMAINS.FURY, player.id, "assembly-energy"),
+    rune(DOMAINS.FURY, player.id, "assembly-power")
+  ];
+
+  assert.equal(activateCard(game, rig.instanceId).ok, true);
+  assert.equal(game.pendingChoice?.effect, "declareActivatedRecycleTrash");
+  assert.deepEqual(game.pendingChoice.options.map((option) => option.cardId), [recyclableUnit.instanceId]);
+  assert.equal(chooseEffectOption(game, recyclableUnit.instanceId).ok, true);
+  assert.equal(game.pendingPayment?.recycleTrashType, "unit");
+  assert.equal(togglePaymentRune(game, "assembly-energy", "energy").ok, true);
+  assert.equal(togglePaymentRune(game, "assembly-power", "power").ok, true);
+  assert.equal(confirmPayment(game).ok, true);
+  assert.equal(player.mainDeck.some((card) => card.instanceId === recyclableUnit.instanceId), true);
+  assert.equal(player.trash.some((card) => card.instanceId === ineligibleSpell.instanceId), true);
+  assert.equal(rig.exhausted, true);
+});
+
 test("attached Rules Text is inactive while Effect Text is appended to the Top-Most card", () => {
   const game = createGame({ interactive: true });
   finishSetup(game);
@@ -6119,6 +6271,118 @@ test("hard bargain can repeat to counter multiple spells on the showdown chain",
   assert.equal(player.trash.some((card) => card.instanceId === "repeat-bargain"), true);
 });
 
+test("Piercing Light adds both Energy and Fury Power before declaring a repeated instruction", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const opponent = game.players.find((candidate) => candidate.id !== player.id);
+  const first = instance({ ...cards.lonelyPoro, might: 5 }, opponent.id, "piercing-first");
+  const second = instance({ ...cards.lonelyPoro, might: 5 }, opponent.id, "piercing-second");
+  game.battlefields[0].units = [first, second];
+  game.battlefields[0].controlledBy = opponent.id;
+  const spell = instance(cards.sfd023piercingLight, player.id, "piercing-spell");
+  player.hand = [spell];
+  player.runes = Array.from({ length: 4 }, (_, index) => rune(DOMAINS.FURY, player.id, `piercing-rune-${index}`));
+
+  assert.equal(beginPlayCard(game, spell.instanceId, game.battlefields[0].instanceId).ok, true);
+  assert.equal(chooseEffectOption(game, first.instanceId).ok, true);
+  assert.equal(chooseEffectOption(game, "declare-finish").ok, true);
+  assert.deepEqual(game.pendingChoice?.options.map((option) => option.id), ["repeat-count-0", "repeat-count-1"]);
+  assert.equal(chooseEffectOption(game, "repeat-count-1").ok, true);
+  assert.equal(chooseEffectOption(game, second.instanceId).ok, true);
+  assert.equal(chooseEffectOption(game, "declare-finish").ok, true);
+  assert.equal(game.pendingPayment?.energyCost, 4);
+  assert.deepEqual(game.pendingPayment?.powerCost, [{ domain: DOMAINS.FURY, amount: 1 }, { domain: DOMAINS.FURY, amount: 1 }]);
+});
+
+test("Arise counts every controlled Gear type, including a Unit Gear, and readies only its first two Sand Soldiers", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const spell = instance(cards.sfd198arise, player.id, "arise-spell");
+  player.base = [
+    instance(cards.sfd009serratedDirk, player.id, "arise-equipment-1"),
+    instance(cards.sfd016recurveBow, player.id, "arise-equipment-2"),
+    instance(cards.sfd022longSword, player.id, "arise-equipment-3"),
+    instance(cards.ven058patchedPorobot, player.id, "arise-unit-gear")
+  ];
+
+  assert.equal(resolveEffect(game, player, spell), true);
+  for (let index = 0; index < 4; index += 1) {
+    assert.equal(game.pendingChoice?.effect, "playUnitTokenDestination");
+    assert.equal(chooseEffectOption(game, "base").ok, true);
+  }
+  while (game.actionChain) assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
+  const tokens = player.base.filter((card) => card.name === "Sand Soldier");
+  assert.equal(tokens.length, 4);
+  assert.deepEqual(tokens.map((token) => token.exhausted), [false, false, true, true]);
+});
+
+test("Guards carries its destination choice through the optional ready payment", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const spell = instance(cards.sfd154guards, player.id, "guards-spell");
+  player.runes = [rune(DOMAINS.ORDER, player.id, "guards-ready-power")];
+
+  assert.equal(resolveEffect(game, player, spell), true);
+  assert.equal(chooseEffectOption(game, "base").ok, true);
+  assert.equal(game.pendingPayment?.effectPayment?.kind, "playUnitTokenOptionalReady");
+  assert.equal(togglePaymentRune(game, "guards-ready-power", "power").ok, true);
+  assert.equal(confirmPayment(game).ok, true);
+  const token = player.base.find((card) => card.name === "Sand Soldier");
+  assert.equal(token.exhausted, false);
+});
+
+test("Production Surge receives its conditional Mech discount only while a Mech is controlled", () => {
+  const withoutMech = createGame({ interactive: true });
+  finishSetup(withoutMech);
+  const firstPlayer = currentPlayer(withoutMech);
+  const fullCost = instance(cards.sfd076productionSurge, firstPlayer.id, "production-full");
+  firstPlayer.hand = [fullCost];
+  firstPlayer.runes = Array.from({ length: 5 }, (_, index) => rune(DOMAINS.MIND, firstPlayer.id, `production-full-rune-${index}`));
+  assert.equal(beginPlayCard(withoutMech, fullCost.instanceId, "base").ok, true);
+  assert.equal(withoutMech.pendingPayment?.energyCost, 4);
+
+  const withMech = createGame({ interactive: true });
+  finishSetup(withMech);
+  const secondPlayer = currentPlayer(withMech);
+  const discounted = instance(cards.sfd076productionSurge, secondPlayer.id, "production-discounted");
+  secondPlayer.base = [instance(OFFICIAL_TOKEN_DEFINITIONS.mech, secondPlayer.id, "production-mech")];
+  secondPlayer.hand = [discounted];
+  secondPlayer.runes = Array.from({ length: 3 }, (_, index) => rune(DOMAINS.MIND, secondPlayer.id, `production-discount-rune-${index}`));
+  assert.equal(beginPlayCard(withMech, discounted.instanceId, "base").ok, true);
+  assert.equal(withMech.pendingPayment?.energyCost, 2);
+});
+
+test("Rumble buffs every friendly Mech regardless of its area", () => {
+  const game = createGame();
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const rumble = instance(cards.sfd089rumbleScrapper, player.id, "rumble-static");
+  const mech = instance(OFFICIAL_TOKEN_DEFINITIONS.mech, player.id, "rumble-mech");
+  player.base = [rumble];
+  game.battlefields[0].units = [mech];
+  game.battlefields[0].controlledBy = player.id;
+
+  assert.equal(currentMight(game, rumble), 5);
+  assert.equal(currentMight(game, mech), 4);
+});
+
+test("Emperor of the Sands activates only after an Equipment card was played this turn", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const emperor = instance(cards.sfd197emperorOfTheSands, player.id, "emperor-legend");
+  player.legend = emperor;
+  player.runes = [rune(DOMAINS.ORDER, player.id, "emperor-energy")];
+
+  assert.equal(activateCard(game, emperor.instanceId).ok, false);
+  player.cardsPlayedByTypeThisTurn = { gear: 1 };
+  assert.equal(activateCard(game, emperor.instanceId).ok, true);
+  assert.equal(game.pendingPayment?.energyCost, 1);
+});
+
 test("counter spells declare their chain target before payment", () => {
   const game = createGame({ interactive: true });
   finishSetup(game);
@@ -6936,6 +7200,7 @@ test("optional triggered ability placement proceeds directly to its cost", () =>
   const opponent = game.players.find((candidate) => candidate.id !== player.id);
   const field = game.battlefields[0];
   const vayne = instance(cards.vayneHunter, player.id, "vayne-optional-cost");
+  delete vayne.effects.find((effect) => effect.kind === "payEnergyReturnSelfToHand").optional;
   player.base = [vayne];
   player.runes = [rune(DOMAINS.FURY, player.id, "vayne-optional-energy")];
   field.controlledBy = opponent.id;
@@ -7329,6 +7594,29 @@ test("spell-only generated Power can pay spells but not unit costs", () => {
   assert.equal(togglePaymentPoolPower(game, spellOnlyPowerId).ok, true);
   assert.equal(confirmPayment(game).ok, true);
   assert.equal(player.runePool.power.length, 0);
+});
+
+test("Chem-Baroness makes Gold add Energy only within three points of victory", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  player.legend = instance(cards.sfd201chemBaroness, player.id, "chem-baroness-gold-legend");
+  player.base = [];
+  player.runePool = { energy: [], power: [] };
+  player.score = 4;
+
+  assert.equal(playToken(game, player, player.legend, { tokenKind: "gold" }), true);
+  const distantGold = player.base.find((card) => card.tokenKind === "gold");
+  assert.equal(activateCard(game, distantGold.instanceId).ok, true);
+  assert.equal(player.runePool.power.length, 1);
+  assert.equal(player.runePool.energy.length, 0);
+
+  player.score = 5;
+  assert.equal(playToken(game, player, player.legend, { tokenKind: "gold" }), true);
+  const nearGold = player.base.find((card) => card.tokenKind === "gold");
+  assert.equal(activateCard(game, nearGold.instanceId).ok, true);
+  assert.equal(player.runePool.power.length, 2);
+  assert.equal(player.runePool.energy.length, 1);
 });
 
 test("generated spell Power expires and does not leak into later turns", () => {
@@ -8421,6 +8709,84 @@ test("look effects resolve every observed top-deck self ability before presentin
   assert.deepEqual(game.pendingChoice.options.filter((option) => option.cardId).map((option) => option.cardId), [unit.instanceId]);
 });
 
+test("targon's peak does not generate an expired end-turn rune trigger", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const opponent = game.players.find((candidate) => candidate.id !== player.id);
+  const peak = {
+    ...instance(cards.targonsPeak, opponent.id, "expired-peak"),
+    controlledBy: opponent.id,
+    units: [],
+    hidden: []
+  };
+  const unit = instance(cards.lonelyPoro, player.id, "expired-peak-conqueror");
+  game.battlefields = [peak];
+  player.base = [unit];
+  game.pendingEndTurnPlayerId = player.id;
+  game.endTurnProcess = { playerId: player.id, step: "expiration" };
+
+  assert.equal(moveUnit(game, unit.instanceId, peak.instanceId).ok, true);
+  while (game.showdown?.battlefieldId === peak.instanceId) {
+    assert.equal(passShowdown(game, game.showdown.priorityPlayerId).ok, true);
+  }
+
+  assert.equal(player.endTurnReadyRunes || 0, 0);
+  assert.equal(game.log.some((entry) => entry.includes("expired end-of-turn effect is not generated")), true);
+});
+
+test("Stacked Deck can leave an observed Nocturne in the deck and then put it into hand", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const stackedDeck = instance({ ...cards.stackedDeck, energy: 0, power: [] }, player.id, "stacked-deck-nocturne");
+  const nocturne = instance(cards.nocturneHorrifying, player.id, "stacked-deck-observed-nocturne");
+  const second = instance(cards.charm, player.id, "stacked-deck-second");
+  const third = instance(cards.gust, player.id, "stacked-deck-third");
+  player.hand = [stackedDeck];
+  player.mainDeck = [nocturne, second, third];
+  player.runes = [];
+
+  assert.equal(playCard(game, stackedDeck.instanceId, "base").ok, true);
+  assert.equal(game.pendingChoice?.effect, "observedTopDeckSelfAbility");
+  assert.deepEqual(game.pendingChoice.options.map((option) => option.id), ["banish", "leave"]);
+  assert.equal(chooseEffectOption(game, "leave").ok, true);
+
+  assert.equal(game.pendingChoice?.effect, "chooseTopDeck");
+  assert.equal(game.pendingChoice.options.some((option) => option.id === nocturne.instanceId), true);
+  assert.equal(chooseEffectOption(game, nocturne.instanceId).ok, true);
+  assert.equal(player.hand.some((card) => card.instanceId === nocturne.instanceId), true);
+  assert.equal(player.banished.some((card) => card.instanceId === nocturne.instanceId), false);
+  assert.deepEqual(new Set(player.mainDeck.map((card) => card.instanceId)), new Set([second.instanceId, third.instanceId]));
+});
+
+test("Nocturne finishes its observed play before Stacked Deck resumes its card choice", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const stackedDeck = instance({ ...cards.stackedDeck, energy: 0, power: [] }, player.id, "stacked-deck-play-nocturne");
+  const nocturne = instance(cards.nocturneHorrifying, player.id, "stacked-deck-played-nocturne");
+  const second = instance(cards.charm, player.id, "stacked-deck-after-nocturne-second");
+  const third = instance(cards.gust, player.id, "stacked-deck-after-nocturne-third");
+  const powerRune = rune(DOMAINS.CHAOS, player.id, "stacked-deck-nocturne-power");
+  player.hand = [stackedDeck];
+  player.mainDeck = [nocturne, second, third];
+  player.runes = [powerRune];
+
+  assert.equal(playCard(game, stackedDeck.instanceId, "base").ok, true);
+  assert.equal(game.pendingChoice?.effect, "observedTopDeckSelfAbility");
+  assert.equal(chooseEffectOption(game, "banish-play").ok, true);
+  assert.notEqual(game.pendingChoice?.effect, "chooseTopDeck",
+    "the enclosing look effect must wait for Nocturne's instructed play");
+  assert.equal(game.pendingPayment?.source, "effectPlay");
+  assert.equal(togglePaymentRune(game, powerRune.instanceId, "power").ok, true);
+  assert.equal(confirmPayment(game).ok, true);
+
+  assert.equal(player.base.some((card) => card.instanceId === nocturne.instanceId), true);
+  assert.equal(game.pendingChoice?.effect, "chooseTopDeck");
+  assert.deepEqual(game.pendingChoice.options.map((option) => option.cardId), [second.instanceId, third.instanceId]);
+});
+
 test("blind fury waits for the player to inspect and choose a revealed opponent card", () => {
   const game = createGame({ interactive: true });
   finishSetup(game);
@@ -9304,7 +9670,7 @@ test("Miss Fortune Captain enters ready only when her Body Accelerate cost is se
   assert.equal(player.base.find((card) => card.instanceId === missFortune.instanceId)?.exhausted, false);
 });
 
-test("Accelerate derives exactly one Power from Domain identity instead of reminder text", () => {
+test("Accelerate derives one matching Power from Domain identity instead of reminder text", () => {
   const requirementFor = (domains, id) => {
     const game = createGame({ interactive: true });
     finishSetup(game);
@@ -9327,12 +9693,16 @@ test("Accelerate derives exactly one Power from Domain identity instead of remin
     assert.equal(accelerate.length, 1, "multiple Accelerate instances are redundant");
     assert.equal(accelerate[0].energyCost, 1);
     assert.equal(accelerate[0].requirements[0].amount, 1);
-    return accelerate[0].requirements[0].domain;
+    return accelerate[0].requirements[0];
   };
 
-  assert.equal(requirementFor([DOMAINS.BODY], "single"), DOMAINS.BODY);
-  assert.equal(requirementFor([DOMAINS.BODY, DOMAINS.CALM], "multi"), DOMAINS.ANY);
-  assert.equal(requirementFor([], "domainless"), DOMAINS.ANY);
+  assert.deepEqual(requirementFor([DOMAINS.BODY], "single"), { domain: DOMAINS.BODY, amount: 1 });
+  assert.deepEqual(requirementFor([DOMAINS.BODY, DOMAINS.CALM], "multi"), {
+    domain: DOMAINS.ANY,
+    allowedDomains: [DOMAINS.BODY, DOMAINS.CALM],
+    amount: 1
+  });
+  assert.deepEqual(requirementFor([], "domainless"), { domain: DOMAINS.ANY, amount: 1 });
 });
 
 test("Seal of Strength adds the Body Power needed to play Miss Fortune Captain", () => {
@@ -9719,6 +10089,158 @@ test("get excited discards a card and deals its energy as damage", () => {
   assert.equal(game.pendingChoice, null);
   assert.equal(target.damage, 3);
   assert.equal(player.trash.some((card) => card.instanceId === "get-excited-discard"), true);
+});
+
+test("a declared Deflect payment survives Get Excited's discard continuation", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const opponent = game.players[1];
+  const field = game.battlefields[0];
+  const target = instance({
+    ...cards.missFortuneCaptain,
+    keywords: [...new Set([...(cards.missFortuneCaptain.keywords || []), "Deflect"])],
+    keywordAmounts: { ...(cards.missFortuneCaptain.keywordAmounts || {}), Deflect: 1 }
+  }, opponent.id, "get-excited-deflect-target");
+  field.controlledBy = opponent.id;
+  field.units = [target];
+  player.hand = [
+    instance(cards.getExcited, player.id, "get-excited-deflect"),
+    instance(cards.portalRescue, player.id, "get-excited-deflect-discard")
+  ];
+  player.runes = Array.from({ length: 4 }, (_, index) =>
+    rune(DOMAINS.FURY, player.id, `get-excited-deflect-r${index}`));
+
+  assert.equal(beginPlayCard(game, "get-excited-deflect", "base").ok, true);
+  assert.equal(chooseEffectOption(game, target.instanceId).ok, true);
+  assert.deepEqual(game.pendingPayment?.deflectTargetIds, [target.instanceId]);
+  assert.equal(togglePaymentRune(game, "get-excited-deflect-r0", "energy").ok, true);
+  assert.equal(togglePaymentRune(game, "get-excited-deflect-r1", "energy").ok, true);
+  assert.equal(togglePaymentRune(game, "get-excited-deflect-r2", "power").ok, true);
+  assert.equal(togglePaymentRune(game, "get-excited-deflect-r3", "power").ok, true);
+  assert.equal(confirmPayment(game).ok, true);
+  assert.equal(game.pendingChoice?.effect, "discardEnergyDamage");
+
+  assert.equal(chooseEffectOption(game, "get-excited-deflect-discard").ok, true);
+  assert.notEqual(game.pendingChoice?.effect, "payDeflect");
+  assert.equal(target.damage, 3);
+  assert.equal(player.runes.length, 2, "Deflect is paid once during declaration");
+});
+
+test("Star-Crossed carries its paid Deflect target into the second prepared choice", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const opponent = game.players[1];
+  const friendly = instance(cards.lonelyPoro, player.id, "star-crossed-friendly");
+  const enemy = instance({
+    ...cards.stalwartPoro,
+    keywords: [...new Set([...(cards.stalwartPoro.keywords || []), "Deflect"])]
+  }, opponent.id, "star-crossed-deflect-enemy");
+  const source = instance(cards.starCrossed, player.id, "star-crossed-deflect-source");
+  source.declaredPlayTargets = [
+    { effect: "starCrossed", targetId: friendly.instanceId },
+    { effect: "starCrossedEnemy", targetId: enemy.instanceId }
+  ];
+  source.deflectPaidTargetIds = [enemy.instanceId];
+  player.base = [friendly];
+  game.battlefields[0].units = [enemy];
+  game.battlefields[0].controlledBy = opponent.id;
+  player.runes = [];
+
+  resolveEffect(game, player, source);
+  assert.notEqual(game.pendingChoice?.effect, "payDeflect");
+  assert.ok(player.hand.some((card) => card.instanceId === friendly.instanceId));
+  assert.ok(opponent.hand.some((card) => card.instanceId === enemy.instanceId));
+});
+
+test("new enemy-unit choice resolvers inherit Deflect without a positive allowlist", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const opponent = game.players.find((candidate) => candidate.id !== player.id);
+  const source = instance(cards.sfd114marchingOrders, player.id, "default-deflect-source");
+  const friendly = instance(cards.lonelyPoro, player.id, "default-deflect-friendly");
+  const enemy = instance(cards.stalwartPoro, opponent.id, "default-deflect-enemy");
+  enemy.keywords = [...(enemy.keywords || []), "Deflect"];
+  player.base = [friendly];
+  opponent.base = [enemy];
+  player.runes = [rune(DOMAINS.BODY, player.id, "default-deflect-rune")];
+
+  assert.equal(resolveEffect(game, player, source), true);
+  assert.equal(game.pendingChoice?.effect, "duelFriendlyEnemy");
+  assert.equal(chooseEffectOption(game, friendly.instanceId).ok, true);
+  assert.equal(game.pendingChoice?.effect, "duelEnemy");
+  assert.equal(chooseEffectOption(game, enemy.instanceId).ok, true);
+  assert.equal(game.pendingChoice?.effect, "payDeflect");
+  assert.equal(game.pendingChoice?.data?.targetId, enemy.instanceId);
+});
+
+test("an effect-played unit offers every legal location and uses the chosen battlefield", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const field = game.battlefields[0];
+  const resident = instance(cards.stalwartPoro, player.id, "effect-play-location-resident");
+  const unit = instance(cards.lonelyPoro, player.id, "effect-play-location-unit");
+  const source = instance(cards.theHarrowing, player.id, "effect-play-location-source");
+  field.controlledBy = player.id;
+  field.units = [resident];
+  player.trash = [unit];
+
+  assert.equal(resolveEffect(game, player, source), true);
+  assert.equal(game.pendingChoice?.effect, "playTrashUnit");
+  assert.equal(chooseEffectOption(game, unit.instanceId).ok, true);
+  assert.equal(game.pendingChoice?.effect, "effectPlayDestination");
+  assert.ok(game.pendingChoice.options.some((option) => option.destination === "base"));
+  assert.ok(game.pendingChoice.options.some((option) => option.destination === field.instanceId));
+
+  assert.equal(chooseEffectOption(game, field.instanceId).ok, true);
+  while (game.actionChain && !game.pendingChoice && !game.pendingPayment) {
+    assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
+  }
+  assert.ok(field.units.some((candidate) => candidate.instanceId === unit.instanceId));
+  assert.equal(player.base.some((candidate) => candidate.instanceId === unit.instanceId), false);
+});
+
+test("Rek'Sai's reveal play offers normal Unit locations plus its granted battlefield", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const opponent = game.players.find((candidate) => candidate.id !== player.id);
+  const sourceField = game.battlefields[0];
+  const controlledField = game.battlefields[1];
+  const source = instance(cards.sfd170rekSaiSwarmQueen, player.id, "reksai-location-source");
+  const unit = instance({ ...cards.lonelyPoro, energy: 0, power: [] }, player.id, "reksai-location-unit");
+  const resident = instance(cards.stalwartPoro, player.id, "reksai-controlled-resident");
+  sourceField.controlledBy = opponent.id;
+  sourceField.units = [source];
+  controlledField.controlledBy = player.id;
+  controlledField.units = [resident];
+  player.mainDeck = [unit];
+  game.pendingChoice = {
+    id: "reksai-reveal-location-choice",
+    playerId: player.id,
+    card: source,
+    effect: "revealTopBanishPlay",
+    prompt: "Choose the revealed card.",
+    options: [{ id: unit.instanceId, cardId: unit.instanceId, label: unit.name }],
+    data: { revealedIds: [unit.instanceId], unitDestination: "sourceBattlefield" },
+    optional: false,
+    finishSpell: false
+  };
+
+  assert.equal(chooseEffectOption(game, unit.instanceId).ok, true);
+  assert.equal(game.pendingChoice?.effect, "effectPlayDestination");
+  const destinations = new Set(game.pendingChoice.options.map((option) => option.destination));
+  assert.equal(destinations.has("base"), true);
+  assert.equal(destinations.has(controlledField.instanceId), true);
+  assert.equal(destinations.has(sourceField.instanceId), true);
+  assert.equal(chooseEffectOption(game, sourceField.instanceId).ok, true);
+  while (game.actionChain && !game.pendingChoice && !game.pendingPayment) {
+    assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
+  }
+  assert.equal(sourceField.units.some((card) => card.instanceId === unit.instanceId), true);
 });
 
 test("karthus eternal makes friendly deathknell trigger an additional time", () => {
@@ -10905,7 +11427,7 @@ test("akshan weaponmaster returns temporarily controlled enemy equipment when he
   finishSetup(game);
   const player = currentPlayer(game);
   const opponent = game.players[1];
-  const equipment = instance(cards.guardianAngel, opponent.id, "enemy-equipment");
+  const equipment = instance(cards.trinityForce, opponent.id, "enemy-equipment");
   opponent.base = [equipment];
   player.hand = [instance(cards.akshanMischievous, player.id, "explicit-akshan")];
   player.runes = Array.from({ length: 6 }, (_, index) => rune(DOMAINS.BODY, player.id, `akshan-r${index}`));
@@ -10946,6 +11468,29 @@ test("akshan weaponmaster returns temporarily controlled enemy equipment when he
   startTurn(game);
   assert.equal(opponent.base.some((card) => card.instanceId === "enemy-equipment"), true);
   assert.equal(player.base.some((card) => card.instanceId === "enemy-equipment"), false);
+});
+
+test("temporary Gear control returns a moved Unit Gear when its source leaves play", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const opponent = game.players.find((candidate) => candidate.id !== player.id);
+  const field = game.battlefields[0];
+  const akshan = instance(cards.akshanMischievous, player.id, "unit-gear-control-source");
+  const porobot = instance(cards.ven058patchedPorobot, opponent.id, "moved-stolen-porobot");
+  porobot.controllerBeforeTemporaryControlId = opponent.id;
+  porobot.temporaryControlSourceId = akshan.instanceId;
+  porobot.controllerId = player.id;
+  akshan.damage = 20;
+  field.controlledBy = player.id;
+  field.units = [akshan, porobot];
+
+  startTurn(game);
+
+  assert.equal(field.units.some((card) => card.instanceId === porobot.instanceId), false);
+  assert.equal(opponent.base.some((card) => card.instanceId === porobot.instanceId), true);
+  assert.equal(porobot.controllerId, opponent.id);
+  assert.equal(porobot.temporaryControlSourceId, undefined);
 });
 
 test("akshan weaponmaster does not steal gear without paying the additional body power", () => {
@@ -11141,26 +11686,104 @@ test("Falling Star charges Deflect once for each time the same unit is chosen", 
   assert.equal(game.pendingPayment.powerCost.reduce((sum, cost) => sum + cost.amount, 0), 4);
 });
 
+test("Singularity keeps its two declared targets locked and damages only the one still present", () => {
+  const game = createGame({ interactive: true, manualActionChainPriority: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const opponent = game.players.find((candidate) => candidate.id !== player.id);
+  const vanished = instance({ ...cards.lonelyPoro, might: 10 }, opponent.id, "singularity-vanished-target");
+  const survivor = instance({ ...cards.lonelyPoro, might: 10 }, opponent.id, "singularity-surviving-target");
+  const spell = instance({ ...cards.singularity, energy: 0, power: [] }, player.id, "singularity-locked-spell");
+  opponent.base = [vanished, survivor];
+  player.hand = [spell];
+  player.runes = [];
+
+  assert.equal(beginPlayCard(game, spell.instanceId, "base").ok, true);
+  assert.equal(game.pendingChoice?.effect, "declarePlayTarget");
+  assert.equal(chooseEffectOption(game, vanished.instanceId).ok, true);
+  assert.equal(game.pendingChoice?.effect, "declarePlayTarget");
+  assert.equal(chooseEffectOption(game, survivor.instanceId).ok, true);
+  assert.equal(confirmPayment(game).ok, true);
+
+  opponent.base.splice(opponent.base.indexOf(vanished), 1);
+  vanished.zoneChangeCounter = (vanished.zoneChangeCounter || 0) + 1;
+  opponent.trash.push(vanished);
+
+  while (game.actionChain) {
+    assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
+  }
+  assert.equal(vanished.damage, 0);
+  assert.equal(survivor.damage, 6);
+  assert.equal(game.pendingChoice, null, "a vanished declared target cannot be replaced");
+  assert.equal(player.trash.some((card) => card.instanceId === spell.instanceId), true);
+});
+
+test("Singularity resolves and is discarded when both declared targets have disappeared", () => {
+  const game = createGame({ interactive: true, manualActionChainPriority: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const opponent = game.players.find((candidate) => candidate.id !== player.id);
+  const first = instance({ ...cards.lonelyPoro, might: 10 }, opponent.id, "singularity-gone-first");
+  const second = instance({ ...cards.lonelyPoro, might: 10 }, opponent.id, "singularity-gone-second");
+  const spell = instance({ ...cards.singularity, energy: 0, power: [] }, player.id, "singularity-empty-spell");
+  opponent.base = [first, second];
+  player.hand = [spell];
+  player.runes = [];
+
+  assert.equal(beginPlayCard(game, spell.instanceId, "base").ok, true);
+  assert.equal(chooseEffectOption(game, first.instanceId).ok, true);
+  assert.equal(chooseEffectOption(game, second.instanceId).ok, true);
+  assert.equal(confirmPayment(game).ok, true);
+
+  opponent.base = [];
+  for (const target of [first, second]) {
+    target.zoneChangeCounter = (target.zoneChangeCounter || 0) + 1;
+    opponent.trash.push(target);
+  }
+
+  while (game.actionChain) {
+    assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
+  }
+  assert.equal(first.damage, 0);
+  assert.equal(second.damage, 0);
+  assert.equal(game.pendingChoice, null);
+  assert.equal(player.trash.some((card) => card.instanceId === spell.instanceId), true);
+});
+
 test("a spell replayed from trash is recycled exactly once after its Chain resolution", () => {
   const game = createGame({ interactive: true, manualActionChainPriority: true });
   finishSetup(game);
   const player = currentPlayer(game);
+  const opponent = game.players.find((candidate) => candidate.id !== player.id);
   const fizz = instance(cards.fizzTrickster, player.id, "trash-replay-fizz");
   const spell = instance(cards.turnToDust, player.id, "trash-replay-spell");
+  const gear = instance(cards.trinityForce, opponent.id, "trash-replay-gear");
   player.hand = [fizz];
   player.trash = [spell];
   player.runes = Array.from({ length: 4 }, (_, index) => rune(DOMAINS.CHAOS, player.id, `trash-replay-rune-${index}`));
+  opponent.base = [gear];
 
   assert.equal(playCard(game, fizz.instanceId, "base").ok, true);
   assert.equal(game.pendingChoice?.effect, "declareOptionalTrigger");
   assert.equal(chooseEffectOption(game, "use-optional-trigger").ok, true);
   assert.equal(game.pendingChoice?.effect, "playTrashSpell");
   assert.equal(chooseEffectOption(game, spell.instanceId).ok, true);
+  let passGuard = 0;
+  while (!game.pendingChoice && game.actionChain && passGuard < 8) {
+    assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
+    passGuard += 1;
+  }
+  assert.equal(game.pendingChoice?.effect, "declarePlayTarget");
+  assert.equal(chooseEffectOption(game, gear.instanceId).ok, true);
+  assert.equal(game.pendingPayment?.source, "effectPlay");
+  assert.equal(confirmPayment(game).ok, true);
   assert.equal(game.actionChain?.chain.length, 1);
-  assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
-  assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
-  assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
-  assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
+  passGuard = 0;
+  while (game.actionChain && passGuard < 8) {
+    assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
+    passGuard += 1;
+  }
+  assert.equal(game.actionChain, null);
 
   assert.equal(player.mainDeck.filter((card) => card.instanceId === spell.instanceId).length, 1);
   assert.equal(player.trash.some((card) => card.instanceId === spell.instanceId), false);
@@ -12529,4 +13152,348 @@ test("Sai Scout can be played directly to an open battlefield", () => {
   player.hand = [scout];
 
   assert.equal(legalCardPlayDestinations(game, scout.instanceId).includes(field.instanceId), true);
+});
+
+test("Spiritforged 061-075 shared effects return gear, ready Mechs, double Equipment Might, and reward a gear kill", () => {
+  const game = createGame({ interactive: false });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const opponent = game.players.find((candidate) => candidate.id !== player.id);
+  player.runes = [];
+
+  const trashedGear = instance(cards.sfd064clothArmor, player.id, "sfd-trash-gear");
+  const engineer = instance({ ...cards.sfd061aspiringEngineer, energy: 0, power: [] }, player.id, "sfd-engineer");
+  player.trash = [trashedGear];
+  player.hand = [engineer];
+  assert.equal(playCard(game, engineer.instanceId, "base").ok, true);
+  assert.equal(player.hand.some((card) => card.instanceId === trashedGear.instanceId), true);
+
+  const mech = instance(cards.sfd062bubbleBot, player.id, "sfd-ready-mech");
+  mech.exhausted = true;
+  const bubble = instance({ ...cards.sfd062bubbleBot, energy: 0, power: [] }, player.id, "sfd-bubble");
+  player.base.push(mech);
+  player.hand = [bubble];
+  assert.equal(playCard(game, bubble.instanceId, "base").ok, true);
+  assert.equal(mech.exhausted, false);
+
+  const gearhead = instance(cards.sfd068gearhead, player.id, "sfd-gearhead");
+  const blade = instance(cards.sfd095doransBlade, player.id, "sfd-gearhead-blade");
+  gearhead.attachments = [blade];
+  assert.equal(currentMight(game, gearhead), 7, "Gearhead receives the printed +2 twice");
+
+  const cheapGear = instance({ ...cards.sfd064clothArmor, energy: 1 }, opponent.id, "sfd-cheap-gear");
+  const pickpocket = instance({ ...cards.sfd074pickpocket, energy: 0, power: [] }, player.id, "sfd-pickpocket");
+  opponent.base = [cheapGear];
+  player.hand = [pickpocket];
+  assert.equal(playCard(game, pickpocket.instanceId, "base").ok, true);
+  assert.equal(opponent.base.includes(cheapGear), false);
+  assert.equal(player.base.some((card) => card.name === "Gold"), true);
+});
+
+test("Irelia, Fervent gains Might once when a declared spell target is reused during resolution", () => {
+  const game = createGame({ interactive: true, manualActionChainPriority: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const irelia = instance(cards.sfd057ireliaFervent, player.id, "irelia-single-chosen-event");
+  const discipline = instance({ ...cards.discipline, energy: 0, power: [] }, player.id, "irelia-targeting-spell");
+  player.base = [irelia];
+  player.hand = [discipline];
+  player.runes = [];
+
+  assert.equal(beginPlayCard(game, discipline.instanceId, "base").ok, true);
+  assert.equal(game.pendingChoice?.effect, "declarePlayTarget");
+  assert.equal(chooseEffectOption(game, irelia.instanceId).ok, true);
+  assert.equal(confirmPayment(game).ok, true);
+
+  while (game.actionChain && !game.pendingChoice && !game.pendingPayment) {
+    assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
+  }
+
+  assert.equal(irelia.mightModifier, 3, "Discipline's +2 and Irelia's chosen trigger each apply once");
+  assert.equal(irelia.temporaryMight, 3);
+  assert.equal(currentMight(game, irelia), 7);
+
+  const automaticGame = createGame({ interactive: false });
+  finishSetup(automaticGame);
+  const automaticPlayer = currentPlayer(automaticGame);
+  const automaticIrelia = instance(cards.sfd057ireliaFervent, automaticPlayer.id, "irelia-automatic-chosen-event");
+  const automaticDiscipline = instance({ ...cards.discipline, energy: 0, power: [] }, automaticPlayer.id, "irelia-automatic-spell");
+  automaticPlayer.base = [automaticIrelia];
+  automaticPlayer.hand = [automaticDiscipline];
+  automaticPlayer.runes = [];
+
+  assert.equal(playCard(automaticGame, automaticDiscipline.instanceId, "base").ok, true);
+  assert.equal(automaticIrelia.mightModifier, 3, "automatic declarations still create one chosen event");
+  assert.equal(currentMight(automaticGame, automaticIrelia), 7);
+});
+
+test("declared trigger targets create one chosen event when their saved target resolves", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const irelia = instance(cards.sfd057ireliaFervent, player.id, "irelia-trigger-target");
+  const rookie = instance({ ...cards.pitRookie, energy: 0, power: [] }, player.id, "irelia-trigger-source");
+  player.base = [irelia];
+  player.hand = [rookie];
+  player.runes = [];
+
+  assert.equal(beginPlayCard(game, rookie.instanceId, "base").ok, true);
+  assert.equal(confirmPayment(game).ok, true);
+  assert.equal(game.pendingChoice?.effect, "buffUnit");
+  assert.equal(chooseEffectOption(game, irelia.instanceId).ok, true);
+
+  assert.equal(irelia.buffs, 1);
+  assert.equal(irelia.mightModifier, 1, "the declaration and trigger resolution share one chosen-event receipt");
+  assert.equal(currentMight(game, irelia), 6);
+});
+
+test("Vendetta mode spells reuse their declared target without emitting a second chosen event", () => {
+  const game = createGame({ interactive: true, manualActionChainPriority: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const irelia = instance(cards.sfd057ireliaFervent, player.id, "irelia-vendetta-target");
+  const sanction = instance({ ...cards.ven035sanction, energy: 0, power: [] }, player.id, "irelia-vendetta-spell");
+  player.base = [irelia];
+  player.hand = [sanction];
+  player.runes = [];
+
+  assert.equal(beginPlayCard(game, sanction.instanceId, "base").ok, true);
+  assert.equal(chooseEffectOption(game, "empower").ok, true);
+  assert.equal(chooseEffectOption(game, irelia.instanceId).ok, true);
+  assert.equal(confirmPayment(game).ok, true);
+  while (game.actionChain && !game.pendingChoice && !game.pendingPayment) {
+    assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
+  }
+
+  assert.equal(irelia.empoweredCount, 1);
+  assert.equal(irelia.mightModifier, 1, "the prepared Vendetta resolver consumes the declaration receipt");
+});
+
+test("declared activated-ability targets create one chosen event when their saved target resolves", () => {
+  const game = createGame({ interactive: true, manualActionChainPriority: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const irelia = instance(cards.sfd057ireliaFervent, player.id, "irelia-activated-target");
+  const leeSin = instance({
+    ...cards.leeSinBlindMonk,
+    effects: cards.leeSinBlindMonk.effects.map((effect) => ({ ...effect, costEnergy: 0 }))
+  }, player.id, "irelia-activated-source");
+  player.legend = leeSin;
+  player.base = [irelia];
+  player.runes = [];
+
+  assert.equal(activateCard(game, leeSin.instanceId).ok, true);
+  assert.equal(game.pendingChoice?.effect, "declareActivatedTarget");
+  assert.equal(chooseEffectOption(game, irelia.instanceId).ok, true);
+  if (game.pendingPayment) assert.equal(confirmPayment(game).ok, true);
+  while (game.actionChain && !game.pendingChoice && !game.pendingPayment) {
+    assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
+  }
+
+  assert.equal(irelia.buffs, 1);
+  assert.equal(irelia.mightModifier, 1, "the activation declaration and resolution share one receipt");
+  assert.equal(currentMight(game, irelia), 6);
+});
+
+test("a move target and its destination reuse one target-choice event during resolution", () => {
+  const game = createGame({ interactive: true, manualActionChainPriority: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const destination = game.battlefields[0];
+  const irelia = instance(cards.sfd057ireliaFervent, player.id, "irelia-move-target");
+  const moveSpell = instance({ ...cards.rideTheWind, energy: 0, power: [] }, player.id, "irelia-move-spell");
+  player.base = [irelia];
+  player.hand = [moveSpell];
+  player.runes = [];
+
+  assert.equal(beginPlayCard(game, moveSpell.instanceId, "base").ok, true);
+  assert.equal(game.pendingChoice?.effect, "declarePlayTarget");
+  assert.equal(chooseEffectOption(game, irelia.instanceId).ok, true);
+  assert.equal(game.pendingChoice?.effect, "declareMoveDestination");
+  assert.equal(chooseEffectOption(game, destination.instanceId).ok, true);
+  assert.equal(confirmPayment(game).ok, true);
+  while (game.actionChain) {
+    if (game.pendingChoice?.effect === "triggerOrder") {
+      selectAndConfirmTriggerOrder(game);
+      continue;
+    }
+    assert.equal(game.pendingChoice?.effect || null, null);
+    assert.equal(game.pendingPayment, null);
+    assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
+  }
+
+  assert.equal(destination.units.some((card) => card.instanceId === irelia.instanceId), true);
+  assert.equal(irelia.mightModifier, 1, "choosing the move destination does not replay the target event");
+});
+
+test("resolution UI bookkeeping does not count as choosing its displayed unit", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const irelia = instance(cards.sfd057ireliaFervent, player.id, "irelia-mode-display");
+  player.base = [irelia];
+  game.pendingChoice = {
+    id: "irelia-mode-display-choice",
+    playerId: player.id,
+    card: irelia,
+    effect: "attachedUnusedMode",
+    prompt: "Choose a mode.",
+    options: [{ id: "rules-test-mode", label: "Rules test mode", cardId: irelia.instanceId }],
+    data: {},
+    finishSpell: false,
+    optional: false,
+    fromShowdownChain: false
+  };
+
+  assert.equal(chooseEffectOption(game, "rules-test-mode").ok, true);
+  assert.equal(irelia.mightModifier, 0, "showing a source card in a mode option is not a target choice");
+});
+
+test("a choice resumed after death replacement does not emit its chosen event again", () => {
+  const game = createGame({ interactive: true, manualActionChainPriority: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const irelia = instance(cards.sfd057ireliaFervent, player.id, "irelia-resumed-kill-target");
+  const firstHourglass = instance(cards.zhonyasHourglass, player.id, "irelia-resume-hourglass-one");
+  const secondHourglass = instance(cards.zhonyasHourglass, player.id, "irelia-resume-hourglass-two");
+  const source = instance(cards.vengeance, player.id, "irelia-resumed-kill-source");
+  player.base = [irelia, firstHourglass, secondHourglass];
+  player.hand = [source];
+  game.pendingChoice = {
+    id: "irelia-resumed-kill-choice",
+    playerId: player.id,
+    card: source,
+    effect: "killUnit",
+    prompt: "Choose a unit to kill.",
+    options: [{
+      id: irelia.instanceId,
+      label: irelia.name,
+      cardId: irelia.instanceId,
+      zoneChangeCounter: irelia.zoneChangeCounter || 0,
+      recordsChosenObjectEvent: true
+    }],
+    data: {},
+    finishSpell: false,
+    optional: false,
+    fromShowdownChain: false
+  };
+
+  assert.equal(chooseEffectOption(game, irelia.instanceId).ok, true);
+  let safety = 0;
+  while (["deathReplacementSource", "deathReplacementEvent"].includes(game.pendingChoice?.effect) && safety < 10) {
+    const replacement = game.pendingChoice.options.find((option) => option.id !== "decline");
+    assert.ok(replacement);
+    assert.equal(chooseEffectOption(game, replacement.id).ok, true);
+    safety += 1;
+  }
+  if (game.pendingChoice?.effect === "triggerOrder") selectAndConfirmTriggerOrder(game);
+  while (game.actionChain && !game.pendingChoice && !game.pendingPayment) {
+    assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
+    if (game.pendingChoice?.effect === "triggerOrder") selectAndConfirmTriggerOrder(game);
+  }
+
+  assert.equal(player.base.some((card) => card.instanceId === irelia.instanceId), true);
+  assert.equal(irelia.mightModifier, 1, "the resumed resolver inherits the original chosen-event receipt");
+});
+
+test("choosing the same object twice emits two events but neither declaration is counted again at resolution", () => {
+  const game = createGame({ interactive: true, manualActionChainPriority: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const jae = instance({ ...cards.sfd142jaeMedarda, might: 20 }, player.id, "jae-repeated-choice");
+  const fallingStar = instance({ ...cards.fallingStar, energy: 0, power: [] }, player.id, "jae-repeated-spell");
+  player.base = [jae];
+  player.hand = [fallingStar];
+  player.mainDeck = [
+    instance(cards.lonelyPoro, player.id, "jae-draw-one"),
+    instance(cards.lonelyPoro, player.id, "jae-draw-two"),
+    instance(cards.lonelyPoro, player.id, "jae-draw-three")
+  ];
+  player.runes = [];
+
+  assert.equal(beginPlayCard(game, fallingStar.instanceId, "base").ok, true);
+  assert.equal(chooseEffectOption(game, jae.instanceId).ok, true);
+  assert.equal(chooseEffectOption(game, jae.instanceId).ok, true);
+  assert.equal(confirmPayment(game).ok, true);
+  if (game.pendingChoice?.effect === "triggerOrder") selectAndConfirmTriggerOrder(game);
+  while (game.actionChain && !game.pendingChoice && !game.pendingPayment) {
+    assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
+    if (game.pendingChoice?.effect === "triggerOrder") selectAndConfirmTriggerOrder(game);
+  }
+  assert.equal(player.hand.length, 2, "Jae draws once for each of the two real target declarations");
+  assert.equal(jae.damage, 6, "both saved declarations still resolve their damage exactly once");
+});
+
+test("Spiritforged Repeat wrapper repeats every instruction of the next spell", () => {
+  const game = createGame({ interactive: false });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const spell = instance({
+    ...cards.sfd087premonition,
+    effects: [
+      { timing: "spell", kind: "draw", amount: 3 },
+      {
+        timing: "spell",
+        kind: "repeatCardEffects",
+        dynamicallyGranted: true,
+        repeatCost: { energy: 2, power: [] }
+      }
+    ]
+  }, player.id, "sfd-repeat-wrapper");
+  spell.declaredPlayChoices = [{ effect: "repeatCount", specKind: "repeatCardEffects", amount: 1 }];
+  player.hand = [];
+  player.mainDeck = Array.from({ length: 6 }, (_, index) => instance(cards.lonelyPoro, player.id, `sfd-repeat-draw-${index}`));
+
+  assert.equal(resolveEffect(game, player, spell), false);
+  assert.equal(player.hand.length, 6);
+});
+
+test("Void Hatchling may recycle the current top card before a reveal and then resumes that reveal", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const hatchling = instance(cards.sfd018voidHatchling, player.id, "void-hatchling-source");
+  const oldTop = instance(cards.lonelyPoro, player.id, "void-hatchling-old-top");
+  const newTop = instance(cards.gust, player.id, "void-hatchling-new-top");
+  const nextCard = instance(cards.backOff, player.id, "void-hatchling-next-card");
+  const voidRush = instance(cards.sfd188voidRush, player.id, "void-hatchling-reveal-spell");
+  player.base = [hatchling];
+  player.mainDeck = [oldTop, newTop, nextCard];
+
+  assert.equal(resolveEffect(game, player, voidRush), true);
+  assert.equal(game.pendingChoice?.effect, "recycleTopBeforeReveal");
+  assert.equal(chooseEffectOption(game, "recycle").ok, true);
+  assert.equal(game.pendingChoice?.effect, "revealTopBanishPlay");
+  assert.deepEqual(game.pendingChoice?.data?.revealedIds, [newTop.instanceId, nextCard.instanceId]);
+  assert.deepEqual(game.revealEvents.at(-1)?.cardIds, [newTop.instanceId, nextCard.instanceId]);
+  assert.equal(player.mainDeck.at(-1)?.instanceId, oldTop.instanceId);
+});
+
+test("Spiritforged 082-088 combat suppression, resource conversion, and battlefield scoring use shared contracts", () => {
+  const game = createGame({ interactive: false });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const field = game.battlefields[0];
+  const ezreal = instance(cards.sfd082ezrealDashing, player.id, "sfd-ezreal");
+  ezreal.combatRole = "attacker";
+  field.units = [ezreal];
+  assert.equal(currentCombatMight(game, field, ezreal, "attacker"), 3);
+
+  const anomaly = instance(cards.sfd083hextechAnomaly, player.id, "sfd-anomaly");
+  player.base = [anomaly];
+  player.runes = [
+    rune(DOMAINS.MIND, player.id, "sfd-convert-rune-1"),
+    rune(DOMAINS.BODY, player.id, "sfd-convert-rune-2")
+  ];
+  player.runePool = { energy: [], power: [] };
+  assert.equal(activateCard(game, anomaly.instanceId).ok, true);
+  assert.equal(player.runePool.energy.length, 2);
+  assert.equal(anomaly.exhausted, true);
+
+  const renata = instance({ ...cards.sfd088renataGlascMastermind }, player.id, "sfd-renata");
+  field.units = [renata];
+  player.runes = Array.from({ length: 8 }, (_, index) => rune(DOMAINS.MIND, player.id, `sfd-renata-rune-${index}`));
+  const scoreBefore = player.score;
+  assert.equal(activateCard(game, renata.instanceId, `${renata.instanceId}:score`).ok, true);
+  assert.equal(player.score, scoreBefore + 1);
 });

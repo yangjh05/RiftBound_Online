@@ -15,6 +15,44 @@ export async function fetchRooms(options = {}) {
   return readResponse(response);
 }
 
+export async function signUpAccount(accountId, password) {
+  const response = await postJson("/api/auth/signup", { accountId, password });
+  return readResponse(response);
+}
+
+export async function loginAccount(accountId, password) {
+  const response = await postJson("/api/auth/login", { accountId, password });
+  return readResponse(response);
+}
+
+export async function fetchAccountSession(token) {
+  const response = await fetch(apiUrl("/api/auth/session"), {
+    cache: "no-store",
+    headers: authorizationHeaders(token)
+  });
+  return readResponse(response);
+}
+
+export async function logoutAccount(token) {
+  const response = await fetch(apiUrl("/api/auth/logout"), {
+    method: "POST",
+    headers: authorizationHeaders(token)
+  });
+  return readResponse(response);
+}
+
+export async function saveAccountDeckStore(token, deckStore) {
+  const response = await fetch(apiUrl("/api/account/decks"), {
+    method: "PUT",
+    headers: {
+      ...authorizationHeaders(token),
+      "content-type": "application/json"
+    },
+    body: JSON.stringify({ deckStore })
+  });
+  return readResponse(response);
+}
+
 export async function createOnlineRoom(options = {}) {
   const response = await postJson("/api/rooms", { sideboardingEnabled: options.sideboardingEnabled === true });
   return readResponse(response);
@@ -190,6 +228,10 @@ function postJson(url, body) {
   });
 }
 
+function authorizationHeaders(token) {
+  return token ? { authorization: `Bearer ${token}` } : {};
+}
+
 function apiUrl(path) {
   return `${apiBaseUrl}${path}`;
 }
@@ -197,7 +239,10 @@ function apiUrl(path) {
 async function readResponse(response) {
   const payload = await response.json().catch(() => ({ ok: false, message: "Invalid server response." }));
   if (!response.ok || payload.ok === false) {
-    throw new Error(payload.message || `Request failed with ${response.status}.`);
+    const error = new Error(payload.message || `Request failed with ${response.status}.`);
+    error.code = payload.code || "request_failed";
+    error.status = response.status;
+    throw error;
   }
   return payload;
 }

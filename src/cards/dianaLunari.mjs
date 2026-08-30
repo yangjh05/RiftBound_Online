@@ -21,7 +21,7 @@ export default card({
       "power": [],
       "might": 3,
       "image": "https://exburst.dev/riftbound/cards/sd/UNL-079-219.webp",
-      "text": "When a showdown begins here, you may pay Energy 1. If you do, [Predict], then reveal the top card of your Main Deck. If it's a spell, draw it. (To Predict, look at the top card of your Main Deck. You may recycle it.)",
+      "text": "When a showdown begins here, you may pay [1] to [Predict], then reveal the top card of your Main Deck. If it's a spell, draw it. (To Predict, look at the top card of your Main Deck. You may recycle it.)",
       "effects": [
         {
           "timing": "showdownBeginsHere",

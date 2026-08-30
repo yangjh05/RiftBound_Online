@@ -95,7 +95,7 @@ test("one card can carry independent ability structures without changing their c
   const settClasses = new Set(cards.settTheBoss.effects.map((effect) => effectDefinition(effect).abilityClass));
   const rocketClasses = new Set(cards.superMegaDeathRocket.effects.map((effect) => effectDefinition(effect).abilityClass));
 
-  assert.deepEqual([...guardianClasses].sort(), ["activated", "passive"]);
+  assert.deepEqual([...guardianClasses].sort(), ["activated", "passive", "replacement"]);
   assert.deepEqual([...settClasses].sort(), ["replacement", "triggered"]);
   assert.deepEqual([...rocketClasses].sort(), ["instruction", "triggered"]);
 });
@@ -3776,12 +3776,17 @@ test("killed tokens cease to exist instead of entering trash", () => {
   const player = game.players[0];
   const opponent = game.players[1];
   const token = instance(cards.recruit, opponent.id, "oracle-killed-token");
+  token.effects = [{ timing: "death", kind: "draw", amount: 1 }];
+  const forbiddenDeathDraw = instance(cards.lonelyPoro, opponent.id, "oracle-token-death-draw");
+  opponent.mainDeck = [forbiddenDeathDraw];
   const killer = instance(cards.blastOfPower, player.id, "oracle-token-killer");
   game.battlefields = [testBattlefield("oracle-token-field", [token], opponent.id)];
 
   assert.equal(resolveEffect(game, player, killer), true);
   assert.equal(chooseEffectOption(game, token.instanceId).ok, true);
   assert.equal(opponent.trash.some((card) => card.instanceId === token.instanceId), false);
+  assert.equal(opponent.hand.some((card) => card.instanceId === forbiddenDeathDraw.instanceId), false,
+    "a token's own death trigger is removed because the token never reaches trash");
   assert.equal(locate(game, token.instanceId), null);
   assert.equal(evaluateRuleState(game).violations.some((violation) => violation.checkId === "token-zone"), false);
 });

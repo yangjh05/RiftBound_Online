@@ -18,9 +18,8 @@ export default card({
       ],
       "energy": 2,
       "power": [],
-      "might": 1,
-      "image": "https://exburst.dev/riftbound/cards/sd/SFD-051-221.webp",
-      "text": "[Equip] Calm Power (Calm Power: Attach this to a unit you control.)",
+      "image": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/d09a797345659a1853d6d12910cf3c634990ea0c-744x1039.png?accountingTag=RB",
+      "text": "[Equip] Calm Power (Calm Power : Attach this to a unit you control.)\nIf I would die, kill Guardian Angel instead. Heal me, exhaust me, and recall me.",
       "effects": [
         {
           "timing": "activated",
@@ -33,6 +32,11 @@ export default card({
           "kind": "attachedMight",
           "textSection": "mightBonus",
           "amount": 1
+        },
+        {
+          "timing": "replacement",
+          "kind": "saveFriendlyUnitByKillingThis",
+          "textSection": "effect"
         }
       ]
     });

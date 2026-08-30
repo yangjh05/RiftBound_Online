@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { cards, decklists, DOMAINS, makeRune } from "../src/cards.mjs";
 import { confirmFirstPlayer, createGame, draw, invalidateBottomDeckKnowledge, recordPublicTurnEvent, recycleMainDeckCards, selectChampion } from "../src/engine.mjs";
+import { DECK_RULES } from "../src/decks/rules.mjs";
 import { actionKey, activeActorId, applyAiAction, enumerateAiPolicyActions, enumerateLegalActions } from "../src/ai/actions.mjs";
 import { inferOpponentDeckBelief } from "../src/ai/belief.mjs";
 import { mutateBattlefieldSuite, mutateCardPackage, mutateDeck, mutateRuneDistribution, mutateSideboardPackage } from "../src/ai/deckbuilding.mjs";
@@ -10015,6 +10016,72 @@ test("a crashed self-play worker retries the identical seed and persists one han
   }
 });
 
+test("a self-play worker startup crash backs off and then recovers", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "riftbound-ai-worker-startup-retry-")
+  );
+  const markerPath = path.join(directory, "failed-once.marker");
+  const retries = [];
+  try {
+    const collected = await collectProcessPoolSelfPlay({
+      games: 1,
+      workers: 1,
+      processes: 1,
+      decks: decks.slice(0, 2),
+      model: createNeuralModel(),
+      workerPath: path.resolve(
+        "tests/fixtures/ai-selfplay-startup-flaky-worker.mjs"
+      ),
+      workerEnvironment: {
+        RIFTBOUND_STARTUP_WORKER_MARKER: markerPath
+      },
+      maximumWorkerStartupRetries: 2,
+      workerStartupRetryBaseDelayMs: 10,
+      onWorkerStartupRetry: (retry) => retries.push(retry)
+    });
+    assert.equal(collected.workerStats.collectedGames, 1);
+    assert.equal(retries.length, 1);
+    assert.equal(retries[0].retryAttempt, 1);
+    assert.equal(retries[0].delayMs, 10);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("repeated self-play worker startup crashes fail instead of respawning forever", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "riftbound-ai-worker-startup-failure-")
+  );
+  const retries = [];
+  try {
+    await assert.rejects(
+      collectProcessPoolSelfPlay({
+        games: 1,
+        workers: 1,
+        processes: 1,
+        decks: decks.slice(0, 2),
+        model: createNeuralModel(),
+        workerPath: path.resolve(
+          "tests/fixtures/ai-selfplay-startup-flaky-worker.mjs"
+        ),
+        workerEnvironment: {
+          RIFTBOUND_STARTUP_WORKER_MARKER:
+            path.join(directory, "always-fail.marker"),
+          RIFTBOUND_STARTUP_WORKER_ALWAYS_FAIL: "true"
+        },
+        maximumWorkerStartupRetries: 2,
+        workerStartupRetryBaseDelayMs: 10,
+        onWorkerStartupRetry: (retry) => retries.push(retry)
+      }),
+      (error) => error?.code === "AI_SELFPLAY_WORKER_INITIALIZATION_FAILED"
+        && error?.startupRetryAttempts === 2
+    );
+    assert.equal(retries.length, 2);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("streaming 50 large worker results keeps parent memory bounded and leaves no handoff directory", async () => {
   const directory = await mkdtemp(
     path.join(os.tmpdir(), "riftbound-ai-large-stream-")
@@ -12107,6 +12174,6 @@ test("advanced deck mutations preserve card count, rune count and unique battlef
   assert.equal(runesMutated.runes.length, deck.runes.length);
   assert.equal(fieldsMutated.battlefields.length, deck.battlefields.length);
   assert.equal(new Set(fieldsMutated.battlefields.map((field) => field.cardNumber)).size, fieldsMutated.battlefields.length);
-  assert.equal(sideboardMutated.sideboard.length <= 8, true);
+  assert.equal(sideboardMutated.sideboard.length <= DECK_RULES.sideboardMax, true);
   assert.equal(sideboardMutated.main.length, deck.main.length);
 });

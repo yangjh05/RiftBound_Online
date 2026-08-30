@@ -1,5 +1,8 @@
-export { DOMAINS, RUNE_COLORS, card, normalizeCardNumber } from "./cards/shared.mjs";
+export { DOMAINS, RUNE_COLORS, card, cardHasType, cardTypes, normalizeCardNumber } from "./cards/shared.mjs";
 import { DOMAINS, RUNE_COLORS } from "./cards/shared.mjs";
+import { spiritforgedCards } from "./cards/spiritforgedCards.mjs";
+import { unleashedCards } from "./cards/unleashedCards.mjs";
+import { vendettaCards } from "./cards/vendettaCards.mjs";
 import masterYiWujuBladesman from "./cards/masterYiWujuBladesman.mjs";
 import { ogsCards } from "./cards/ogsCards.mjs";
 import rengarTrophyHunter from "./cards/rengarTrophyHunter.mjs";
@@ -395,6 +398,9 @@ import settTheBoss3 from "./cards/settTheBoss3.mjs";
 
 export const cards = {
   ...ogsCards,
+  ...spiritforgedCards,
+  ...unleashedCards,
+  ...vendettaCards,
   masterYiWujuBladesman,
   rengarTrophyHunter,
   akshanMischievous,

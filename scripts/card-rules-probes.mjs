@@ -1,4 +1,6 @@
 import { cards } from "../src/cards.mjs";
+import { effectDefinition, effectKey } from "../src/effects/registry.mjs";
+import { effectIsEnabledByMutation } from "../src/effects/runtime.mjs";
 import {
   activateCard,
   beginPlayCard,
@@ -15,6 +17,18 @@ import {
   startTurn,
   togglePaymentRune
 } from "../src/engine.mjs";
+
+const SPIRITFORGED_EFFECT_KEYS = Object.freeze([...new Set(Object.values(cards)
+  .filter((card) => card.set === "Spiritforged")
+  .flatMap((card) => (card.effects || []).map(effectKey)))].sort());
+
+const UNLEASHED_EFFECT_KEYS = Object.freeze([...new Set(Object.values(cards)
+  .filter((card) => card.set === "Unleashed")
+  .flatMap((card) => (card.effects || []).map(effectKey)))].sort());
+
+const VENDETTA_EFFECT_KEYS = Object.freeze([...new Set(Object.values(cards)
+  .filter((card) => card.set === "Vendetta")
+  .flatMap((card) => (card.effects || []).map(effectKey)))].sort());
 
 const PROBE_EFFECT_COVERAGE = Object.freeze({
   FIRESTORM_FIELD_CHOICE_AND_BONUS: ["spell:dealDamageAllEnemyUnitsAtBattlefield", "static:globalBonusDamage"],
@@ -58,7 +72,19 @@ const PROBE_EFFECT_COVERAGE = Object.freeze({
     "static:entersExhausted",
     "static:hideWithEnergyInsteadOfPower",
     "static:opponentsCannotReadyByEffects"
-  ]
+  ],
+  SPIRITFORGED_GOLD_TOKEN_EFFECT: [
+    "activated:playToken",
+    "conquer:playToken",
+    "death:playToken",
+    "hold:playToken",
+    "onMove:playToken",
+    "onPlay:playToken",
+    "spell:playToken"
+  ],
+  SPIRITFORGED_COMPLETE_EFFECT_REGISTRY: SPIRITFORGED_EFFECT_KEYS,
+  UNLEASHED_COMPLETE_EFFECT_REGISTRY: UNLEASHED_EFFECT_KEYS,
+  VENDETTA_COMPLETE_EFFECT_REGISTRY: VENDETTA_EFFECT_KEYS
 });
 
 // These probes intentionally exercise the public engine API. Expected values are
@@ -66,6 +92,24 @@ const PROBE_EFFECT_COVERAGE = Object.freeze({
 // helper that performs the behavior under test.
 export async function runCardRuleBehaviorProbes() {
   return [
+    probe("SPIRITFORGED_COMPLETE_EFFECT_REGISTRY", {
+      cardCount: 221,
+      effectPairCount: 194,
+      missingDefinitions: []
+    }, spiritforgedCompleteEffectRegistry,
+    "Load every numbered Spiritforged card and verify its shared timing/kind pair has a registered engine contract."),
+    probe("UNLEASHED_COMPLETE_EFFECT_REGISTRY", {
+      cardCount: 219,
+      effectPairCount: 222,
+      missingDefinitions: []
+    }, unleashedCompleteEffectRegistry,
+    "Load every numbered Unleashed card and verify its shared timing/kind pair has a registered and mutation-enabled engine contract."),
+    probe("VENDETTA_COMPLETE_EFFECT_REGISTRY", {
+      cardCount: 166,
+      effectPairCount: 165,
+      missingDefinitions: []
+    }, vendettaCompleteEffectRegistry,
+    "Load every numbered Vendetta card and verify its shared timing/kind pair has a registered and mutation-enabled engine contract."),
     probe("FIRESTORM_FIELD_CHOICE_AND_BONUS", { choice: "dealDamageAllEnemyUnitsAtBattlefield", chosenDamage: 4, otherDamage: 0 }, firestormChoiceAndBonus,
       "Annie, Fiery at base; cast Firestorm; choose the first of two battlefields."),
     probe("SPELL_ABILITY_DAMAGE_PREVENTION", { damage: 0 }, preventedAreaDamage,
@@ -124,6 +168,8 @@ export async function runCardRuleBehaviorProbes() {
       "Buff an exhausted friendly unit with Arena Bar, then pay Body and exhaust Mistfall to ready it."),
     probe("LONELY_PORO_DEATHKNELL_ALONE", { killed: true, drawn: 1 }, lonelyPoroDeathknellAlone,
       "Kill a Lonely Poro while it is the only friendly unit at its location, then resolve its Deathknell draw."),
+    probe("SPIRITFORGED_GOLD_TOKEN_EFFECT", { gold: 1, exhausted: true, token: true }, spiritforgedGoldTokenEffect,
+      "Resolve Bushwhack's shared playToken instruction and verify the official Gold gear token enters exhausted."),
     probe("PRINTED_MULTI_PART_EFFECTS", {
       ballistaExhausted: true,
       guardianBuffs: [1, 1],
@@ -141,6 +187,48 @@ export async function runCardRuleBehaviorProbes() {
     }, playedEventRequiresResolution,
     "Put a high-cost spell on the Chain twice: counter the first copy and fully resolve the second while Lux and Ravenbloom Student observe it.")
   ];
+}
+
+function spiritforgedCompleteEffectRegistry() {
+  const spiritforged = Object.values(cards).filter((card) => card.set === "Spiritforged");
+  const missingDefinitions = spiritforged
+    .flatMap((card) => (card.effects || []).map((effect) => ({ card, effect })))
+    .filter(({ effect }) => !effectDefinition(effect) || !effectIsEnabledByMutation(effect))
+    .map(({ card, effect }) => `${card.cardNumber}:${effectKey(effect)}`)
+    .sort();
+  return {
+    cardCount: spiritforged.length,
+    effectPairCount: SPIRITFORGED_EFFECT_KEYS.length,
+    missingDefinitions
+  };
+}
+
+function unleashedCompleteEffectRegistry() {
+  const unleashed = Object.values(cards).filter((card) => card.set === "Unleashed");
+  const missingDefinitions = unleashed
+    .flatMap((card) => (card.effects || []).map((effect) => ({ card, effect })))
+    .filter(({ effect }) => !effectDefinition(effect) || !effectIsEnabledByMutation(effect))
+    .map(({ card, effect }) => `${card.cardNumber}:${effectKey(effect)}`)
+    .sort();
+  return {
+    cardCount: unleashed.length,
+    effectPairCount: UNLEASHED_EFFECT_KEYS.length,
+    missingDefinitions
+  };
+}
+
+function vendettaCompleteEffectRegistry() {
+  const vendetta = Object.values(cards).filter((card) => card.set === "Vendetta");
+  const missingDefinitions = vendetta
+    .flatMap((card) => (card.effects || []).map((effect) => ({ card, effect })))
+    .filter(({ effect }) => !effectDefinition(effect) || !effectIsEnabledByMutation(effect))
+    .map(({ card, effect }) => `${card.cardNumber}:${effectKey(effect)}`)
+    .sort();
+  return {
+    cardCount: vendetta.length,
+    effectPairCount: VENDETTA_EFFECT_KEYS.length,
+    missingDefinitions
+  };
 }
 
 function probe(id, expected, execute, reproduction) {
@@ -166,6 +254,21 @@ function probe(id, expected, execute, reproduction) {
       reproduction
     };
   }
+}
+
+function spiritforgedGoldTokenEffect() {
+  const { game, player } = ruleGame();
+  const spell = instance(cards.sfd004bushwhack, player.id, "probe-spiritforged-gold");
+  resolveEffect(game, player, spell);
+  for (let guard = 0; game.actionChain && guard < 8; guard += 1) {
+    passShowdown(game, game.actionChain.priorityPlayerId);
+  }
+  const gold = player.base.find((candidate) => candidate.name === "Gold");
+  return {
+    gold: player.base.filter((candidate) => candidate.name === "Gold").length,
+    exhausted: gold?.exhausted || false,
+    token: gold?.isToken || false
+  };
 }
 
 function firestormChoiceAndBonus() {

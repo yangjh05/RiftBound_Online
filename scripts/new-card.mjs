@@ -85,9 +85,9 @@ if (dryRun) {
 fs.writeFileSync(filePath, cardSource, "utf8");
 registerCard(key, fileName);
 console.log(`Created ${path.relative(root, filePath)} and registered '${key}' in src/cards.mjs.`);
-console.log("Next: fill exact text/effects, add focused engine tests, then run `npm run check`.");
+console.log("Next: fill exact text/effects, add focused engine tests, then run `npm run check:no-ai`.");
 if (args.timing === "onMove") {
-  console.log("This card will automatically join the movement interaction matrix in `npm run interactions` (also included by `npm run check`).");
+  console.log("This card will automatically join the movement interaction matrix in `npm run interactions` (also included by `npm run check:no-ai`).");
 }
 
 function parseArgs(argv) {

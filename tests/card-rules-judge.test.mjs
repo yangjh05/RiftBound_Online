@@ -54,6 +54,13 @@ test("text judge catches published numeric parameter drift", () => {
   assert.equal(deriveTextRuleFindings(leona).some((finding) => finding.code === "TEXT_MISSING_NEAR_VICTORY_READY"), true);
 });
 
+test("text judge recognizes Hunt granted by active Equipment effect text", () => {
+  const machete = structuredClone(cards.unl096huntersMachete);
+  assert.equal(deriveTextRuleFindings(machete).some((finding) => finding.code === "TEXT_MISSING_HUNT_KEYWORD"), false);
+  machete.effects = machete.effects.filter((effect) => !(effect.kind === "gainKeywords" && effect.keywords?.includes("Hunt")));
+  assert.equal(deriveTextRuleFindings(machete).some((finding) => finding.code === "TEXT_MISSING_HUNT_KEYWORD"), true);
+});
+
 test("frozen contracts catch card cost and effect drift", async () => {
   const annie = structuredClone(cards.annieFiery);
   const contracts = buildCardContracts([cards.annieFiery]);

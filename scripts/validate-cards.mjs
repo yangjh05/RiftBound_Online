@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { cards, rawDecklists, DOMAINS } from "../src/cards.mjs";
 import { validateDeckRecord } from "../src/decks/rules.mjs";
 import { EFFECT_TIMINGS, effectDefinition, effectKey } from "../src/effects/registry.mjs";
+import { cardHasType } from "../src/cards/shared.mjs";
 import { OFFICIAL_TOKEN_DEFINITIONS, officialTokenKinds } from "../src/rules/tokens.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -14,22 +15,45 @@ const VALID_TYPES = new Set(["unit", "spell", "gear", "battlefield", "legend", "
 const VALID_DOMAINS = new Set(Object.values(DOMAINS));
 const VALID_TIMINGS = new Set(EFFECT_TIMINGS);
 const MIGHT_MODIFIER_KINDS = new Set([
+  "buffAndUntargetable",
+  "burnBuffFromBurnedUnit",
+  "burnBuffSelf",
+  "doubleMightGrantReadyAbility",
   "battlefieldBuffUnitHere",
   "buffMovedUnit",
   "doubleMightTemporary",
+  "doubleSelfMight",
   "drawDiscardTypeBonus",
   "duelFriendlyEnemy",
   "enGarde",
   "enemyAttacksControlledBattlefieldMightReduction",
   "fromHiddenBuffSelf",
+  "gainMightKeywordsIfPowerSpent",
+  "gainMightKeywordsIfXpGainedThisTurn",
+  "giveKeyword",
   "highCostSpellBuffSelf",
   "ifEnemyAloneBuffAndXp",
   "matchFriendlyMight",
   "modifyEnemyHere",
   "modifyEnemyUnits",
+  "modifyAnotherFriendly",
   "modifyFriendlyAlone",
   "modifyFriendlyUnits",
   "modifyMight",
+  "modifyMightByDistinctTags",
+  "modifySelfIfFewerRunes",
+  "matchChosenUnitMightPlus",
+  "moveEnemyToFriendlyBattlefieldBuffIfExactlyTwo",
+  "payEnergyModifyFriendly",
+  "readySelfMight",
+  "replaceChosenDisableWithBuff",
+  "returnFriendlyOrWeakenEnemy",
+  "revealTopDrawUnitElseTrashBuffSelf",
+  "modifyNamedTagUnit",
+  "selfMightIfHighCostSpellPlayed",
+  "modifyTwoUnitsOpposite",
+  "payPowerModifySelfMight",
+  "modifySelfWhenChosenOrReadied",
   "modifySelfIfReadyEnemyHere",
   "modifySelfMight",
   "moonfall",
@@ -38,6 +62,9 @@ const MIGHT_MODIFIER_KINDS = new Set([
   "secondCardMightReadySelf",
   "selfBuff",
   "siphonPower"
+  ,"heroicCharge"
+  ,"curtainCall"
+  ,"payEnergyModifyUnitHere"
 ]);
 
 const errors = [];
@@ -95,7 +122,8 @@ for (const [key, card] of Object.entries(cards)) {
   const hasTurnLimitedMightText = /(?:Might this turn|this turn[^.\n]*Might)/i.test(card.text || "");
   const mightModifierEffects = (card.effects || []).filter((effect) => MIGHT_MODIFIER_KINDS.has(effect.kind) && effect.buff !== true);
   if (hasTurnLimitedMightText) {
-    expect(mightModifierEffects.some((effect) => effect.temporary === true), `${label}: text grants a turn-limited Might modifier, but no matching effect declares temporary: true.`);
+    const hasConditionScopedMight = (card.effects || []).some((effect) => effect.kind === "attachedThisTurnMight");
+    expect(hasConditionScopedMight || mightModifierEffects.some((effect) => effect.temporary === true), `${label}: text grants a turn-limited Might modifier, but no matching temporary or condition-scoped effect is declared.`);
     for (const effect of mightModifierEffects) {
       expect(effect.temporary === true, `${label}: '${effectKey(effect)}' changes Might under turn-limited text and must declare temporary: true.`);
     }
@@ -157,7 +185,7 @@ for (const [key, card] of Object.entries(cards)) {
         `${label}: effects[${index}] passive static effects cannot exhaust their source as an implicit cost.`);
     }
     if (definition?.sourceTypes?.length) {
-      expect(definition.sourceTypes.includes(card.type), `${label}: effects[${index}] '${pair}' is only valid on ${definition.sourceTypes.join(", ")} cards, not ${card.type}.`);
+      expect(definition.sourceTypes.some((type) => cardHasType(card, type)), `${label}: effects[${index}] '${pair}' is only valid on ${definition.sourceTypes.join(", ")} cards, not ${(card.types || [card.type]).join("/")}.`);
     }
     if (effect?.timing === "onMove" && definition) {
       expect(["sync", "choice"].includes(definition.flow), `${label}: effects[${index}] '${pair}' must declare flow: sync|choice in the effect registry.`);
@@ -193,8 +221,10 @@ for (const [deckId, deck] of Object.entries(rawDecklists)) {
 }
 
 const expectedOfficialTokens = ["recruit", "sprite", "sandSoldier", "mech", "gold", "reflection", "bird", "brush", "baronPit"];
-expect(JSON.stringify(officialTokenKinds()) === JSON.stringify(expectedOfficialTokens),
-  "Official token registry must contain exactly the nine Core Rules 184 token definitions in rule order.");
+expect(JSON.stringify(officialTokenKinds().filter((kind) => expectedOfficialTokens.includes(kind))) === JSON.stringify(expectedOfficialTokens),
+  "Official token registry must retain the nine Core Rules 184 token definitions in rule order.");
+expect(["tentacle", "shadowClone"].every((kind) => officialTokenKinds().includes(kind)),
+  "Official token registry must contain the Vendetta Tentacle and Shadow Clone definitions.");
 for (const [key, token] of Object.entries(OFFICIAL_TOKEN_DEFINITIONS)) {
   const label = `official token ${key} (${token.name})`;
   expect(token.isToken === true, `${label}: must be marked as a token Game Object.`);
@@ -207,6 +237,11 @@ for (const [key, token] of Object.entries(OFFICIAL_TOKEN_DEFINITIONS)) {
     validateEffectPayload(label, index, effect, definition, token.type);
   }
 }
+const goldToken = OFFICIAL_TOKEN_DEFINITIONS.gold;
+expect(goldToken?.effects?.some((effect) => effect.timing === "activated"
+  && effect.kind === "addPower"
+  && effect.resourceKind === "gold"),
+"Gold must identify its shared Add Power ability as a Gold resource so global Gold modifiers can apply without card-number branches.");
 
 for (const warning of warnings) console.warn(`Warning: ${warning}`);
 if (errors.length) {
@@ -255,6 +290,10 @@ function validateEffectPayload(label, index, effect, definition, sourceType = nu
     expect(effect.killFriendlyPermanentCost === true && effect.timing === "activated" && effect.kind === "addPower",
       `${label}: effects[${index}].killFriendlyPermanentCost is only supported by the shared activated Add Power cost contract.`);
   }
+  if (effect.killFriendlyUnitCost !== undefined) {
+    expect(effect.killFriendlyUnitCost === true && effect.timing === "activated",
+      `${label}: effects[${index}].killFriendlyUnitCost is only supported by activated abilities.`);
+  }
   if (effect.recycleSelfCost !== undefined) {
     expect(effect.recycleSelfCost === true && effect.timing === "activated" && effect.kind === "addPower" && sourceType === "rune",
       `${label}: effects[${index}].recycleSelfCost is only supported by the shared activated Rune Add Power cost contract.`);
@@ -263,7 +302,48 @@ function validateEffectPayload(label, index, effect, definition, sourceType = nu
     expect(["base", "battlefield"].includes(effect.sourceLocation),
       `${label}: effects[${index}].sourceLocation must be base or battlefield.`);
   }
+  if (effect.costRecycleTrashType !== undefined) {
+    expect(effect.timing === "activated" && (effect.costRecycleTrash || 0) > 0,
+      `${label}: effects[${index}].costRecycleTrashType requires an activated recycle-trash cost.`);
+    expect(VALID_TYPES.has(effect.costRecycleTrashType),
+      `${label}: effects[${index}].costRecycleTrashType is invalid '${effect.costRecycleTrashType}'.`);
+  }
+  if (effect.requiresCardTypePlayedThisTurn !== undefined) {
+    expect(effect.timing === "activated" && VALID_TYPES.has(effect.requiresCardTypePlayedThisTurn),
+      `${label}: effects[${index}].requiresCardTypePlayedThisTurn must name a valid card type on an activated ability.`);
+  }
+  if (effect.optionalReadyPower !== undefined) {
+    expect(effect.timing === "spell" && effect.kind === "playUnitToken" && Array.isArray(effect.optionalReadyPower),
+      `${label}: effects[${index}].optionalReadyPower is only valid on spell:playUnitToken.`);
+    for (const [powerIndex, requirement] of (effect.optionalReadyPower || []).entries()) {
+      validatePowerRequirement(label, `effects[${index}].optionalReadyPower[${powerIndex}]`, requirement);
+    }
+  }
   if (effect.additionalPower) validatePowerRequirement(label, `effects[${index}].additionalPower`, effect.additionalPower);
+  if (effect.costOptions !== undefined) {
+    expect(effect.timing === "activated" && Array.isArray(effect.costOptions) && effect.costOptions.length > 1,
+      `${label}: effects[${index}].costOptions must contain multiple activated-ability cost choices.`);
+    for (const [optionIndex, option] of (effect.costOptions || []).entries()) {
+      expect(Number.isInteger(option.energy || 0) && (option.energy || 0) >= 0,
+        `${label}: effects[${index}].costOptions[${optionIndex}].energy must be a non-negative integer.`);
+      for (const [powerIndex, requirement] of (option.power || []).entries()) {
+        validatePowerRequirement(label, `effects[${index}].costOptions[${optionIndex}].power[${powerIndex}]`, requirement);
+      }
+    }
+  }
+  if (effect.repeatCost !== undefined) {
+    expect(effect.repeatCost && typeof effect.repeatCost === "object" && !Array.isArray(effect.repeatCost),
+      `${label}: effects[${index}].repeatCost must be an object.`);
+    if (effect.repeatCost?.energy !== undefined) {
+      expect(Number.isFinite(effect.repeatCost.energy) && effect.repeatCost.energy >= 0,
+        `${label}: effects[${index}].repeatCost.energy must be non-negative numeric.`);
+    }
+    expect(Array.isArray(effect.repeatCost?.power || []),
+      `${label}: effects[${index}].repeatCost.power must be an array when present.`);
+    for (const [powerIndex, requirement] of (effect.repeatCost?.power || []).entries()) {
+      validatePowerRequirement(label, `effects[${index}].repeatCost.power[${powerIndex}]`, requirement);
+    }
+  }
   if (effect.domain) expect(VALID_DOMAINS.has(effect.domain), `${label}: effects[${index}].domain is invalid '${effect.domain}'.`);
   if (effect.domains) {
     expect(Array.isArray(effect.domains), `${label}: effects[${index}].domains must be an array.`);

@@ -21,7 +21,9 @@ export default card({
           "target": "unit",
           "amount": 6,
           "repeat": 2,
-          "minTargets": 0
+          "minTargets": 0,
+          "maxTargets": 2,
+          "selectRepeatedTargetsOnPlay": true
       }
   ]
 });

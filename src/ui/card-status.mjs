@@ -2,6 +2,7 @@ const COPY = {
   ko: {
     stunned: ["기절", "이번 턴 동안 전투 피해를 입히지 않습니다.", "종료 단계까지"],
     exhausted: ["탈진", "현재 탈진 상태입니다.", "다시 준비될 때까지"],
+    empowered: ["강화됨", "이 카드는 강화 상태이며, [강화됨] 효과가 적용됩니다.", "강화 해제될 때까지"],
     buff: ["버프", "버프 하나마다 위력이 +1 증가하며, 효과의 비용으로 소모될 수 있습니다.", "소모하거나 전장을 떠날 때까지"],
     temporaryMight: ["일시 위력", "이번 턴에 적용되는 위력 변경입니다.", "턴 종료까지"],
     lastingMight: ["위력 변경", "현재 카드에 지속 적용되는 위력 변경입니다.", "전장을 떠날 때까지"],
@@ -21,6 +22,7 @@ const COPY = {
   en: {
     stunned: ["Stunned", "This unit deals no combat damage this turn.", "Until the Ending Step"],
     exhausted: ["Exhausted", "This card is currently exhausted.", "Until it becomes ready"],
+    empowered: ["Empowered", "This card is Empowered, so its Empowered effects apply.", "Until it is disempowered"],
     buff: ["Buff", "Each buff grants +1 Might and may be spent by effects.", "Until spent or this leaves play"],
     temporaryMight: ["Temporary Might", "This Might modifier applies for the current turn.", "Until end of turn"],
     lastingMight: ["Might modifier", "This Might modifier persists on the card.", "Until this leaves play"],
@@ -69,6 +71,13 @@ export function cardStatusItems(card, options = {}) {
 
   if (card.stunned) items.push(item(locale, "stunned", "negative", copy.stunned[0]));
   if (card.exhausted) items.push(item(locale, "exhausted", "neutral", copy.exhausted[0]));
+  if ((Number(card.empoweredCount) || 0) > 0) {
+    const count = Number(card.empoweredCount) || 0;
+    const maximum = Math.max(count, Number(card.maxEmpowerCount) || 1);
+    const badge = maximum > 1 ? `${copy.empowered[0]} ${count}/${maximum}` : copy.empowered[0];
+    items.push(item(locale, "empowered", "positive", badge,
+      maximum > 1 ? `${copy.empowered[1]} (${count}/${maximum})` : copy.empowered[1]));
+  }
   if ((card.buffs || 0) > 0) {
     const amount = card.buffs || 0;
     items.push(item(locale, "buff", "positive", `${copy.buff[0]} ×${amount}`));

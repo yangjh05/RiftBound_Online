@@ -24,7 +24,7 @@ Spiritforged는 카드 번호순이나 도메인순으로 추가하지 않습니
 | Battlefield | 15 |
 | Legend | 12 |
 
-현재 저장소에는 Spiritforged 12장이 등록되어 있습니다. 이미 다음 기반은 일부 구현되어 있습니다.
+현재 저장소에는 Spiritforged 본세트 221장이 모두 등록되어 있습니다. 다음 기반과 효과군도 공용 엔진에 구현되어 있습니다.
 
 - `card.attachments`, `attachedToId`, Attach/Detach 이벤트와 이탈 시 분리
 - `textSection: "rules" | "effect" | "mightBonus"`에 따른 활성/비활성 처리
@@ -190,7 +190,7 @@ Repeat 비용과 모든 대상/모드는 카드가 체인에 올라가기 전에
 npm run import:cards -- --input data/cards/spiritforged-wave-01.json --dry-run
 npm run import:cards -- --input data/cards/spiritforged-wave-01.json
 npm run audit:effects -- --output tmp/spiritforged-wave-01-effects.json
-npm run check
+npm run check:no-ai
 ```
 
 ## 효과군 완료 조건
@@ -204,7 +204,7 @@ npm run check
 - [ ] interactive와 non-interactive 실행 결과가 같습니다.
 - [ ] 부착/토큰/결제 상태가 UI, snapshot, AI observation에 노출됩니다.
 - [ ] 같은 효과를 쓰는 모든 카드가 `implementationReferences`를 가집니다.
-- [ ] `npm run check`가 통과합니다.
+- [ ] `npm run check:no-ai`가 통과합니다. 이 명령은 AI 학습·신경망·AI 의사결정 검증을 제외합니다.
 
 ## 세트 완료 조건
 
@@ -213,4 +213,4 @@ npm run check
 - 누적 정오표가 모두 `effectiveText`에 반영됨
 - 모든 기믹군에 최소 1개의 대표 정상·거절·불법·대상 이탈·연쇄 상호작용 테스트가 있음
 - Spiritforged-era 덱으로 고정 시드 퍼즈와 생성 시나리오가 통과함
-- 최종 `npm run audit:set -- --set SFD`가 221/221을 보고하고 `npm run check`가 통과함
+- 최종 `npm run audit:set -- --set SFD`가 221/221을 보고하고 `npm run check:no-ai`가 통과함

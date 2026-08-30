@@ -20,7 +20,7 @@ export default card({
       "energy": 2,
       "power": [],
       "image": "https://exburst.dev/riftbound/cards/sd/SFD-136-221.webp",
-      "text": "[Reaction] (Play any time, even before spells and abilities resolve.)\n[Repeat] Energy 2 (You may pay the additional cost to repeat this spell's effect.)\nCounter a spell unless its controller pays Energy 2.",
+      "text": "[Reaction] (Play any time, even before spells and abilities resolve.)\n[Repeat] Energy 2 (You may pay the additional cost to repeat this spell's effect.)\nCounter a spell unless its controller pays Energy 2 .",
       "effects": [
         {
           "timing": "spell",

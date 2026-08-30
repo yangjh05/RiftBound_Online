@@ -12,7 +12,7 @@ export default card({
       "keywords": [],
       "power": [],
       "image": "https://exburst.dev/riftbound/cards/sd/SFD-208-221.webp",
-      "text": "While you control this battlefield, friendly legends have \"Exhaust: Attach an Equipment you control to a unit you control.\"",
+      "text": "While you control this battlefield, friendly legends have \"Exhaust : Attach an Equipment you control to a unit you control.\"",
       "effects": [
         {
           "timing": "battlefieldControl",

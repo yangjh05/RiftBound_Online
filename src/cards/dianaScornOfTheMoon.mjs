@@ -14,9 +14,12 @@ export default card({
       "tags": [
         "Diana"
       ],
+      "keywords": [
+        "Reaction"
+      ],
       "power": [],
       "image": "https://exburst.dev/riftbound/cards/sd/image_fx_1773677896097.webp",
-      "text": "[Reaction][>] Exhaust: [Add] Energy 1. Spend this Energy only during showdowns. (Abilities that add resources can't be reacted to.)",
+      "text": "[Reaction][>] Exhaust : [Add] Energy 1 . Spend this Energy only during showdowns. (Abilities that add resources can't be reacted to.)",
       "effects": [
         {
           "timing": "activated",

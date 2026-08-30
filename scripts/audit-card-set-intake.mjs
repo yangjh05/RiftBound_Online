@@ -74,6 +74,31 @@ export const SET_INTAKE_CONFIG = Object.freeze({
         url: "https://playriftbound.com/en-us/news/announcements/vendetta-errata-updates/"
       })
     ])
+  }),
+  UNL: Object.freeze({
+    name: "Unleashed",
+    implementationOrder: Object.freeze([
+      Object.freeze({ id: "source-baseline", label: "공식 목록·유효 문구·누적 정오표 고정", dependencies: [], canaries: [] }),
+      Object.freeze({ id: "hidden", label: "Hidden·뒷면 카드·공개 반응 흐름", dependencies: ["source-baseline"], canaries: ["UNL-138/219"] }),
+      Object.freeze({ id: "tokens", label: "동물·Sprite·Gold·Reflection 토큰 생태계", dependencies: ["source-baseline"], canaries: ["UNL-145/219"] }),
+      Object.freeze({ id: "xp-level", label: "XP 추가 비용·Level·전투 승리 보상", dependencies: ["source-baseline"], canaries: ["UNL-095/219", "UNL-140/219"] }),
+      Object.freeze({ id: "temporary-death", label: "Temporary·사망 추적·사망 대체·지연 효과", dependencies: ["tokens"], canaries: ["UNL-007/219", "UNL-073/219", "UNL-172/219"] }),
+      Object.freeze({ id: "movement", label: "Ganking·복수 유닛 이동·이동 비용 선언", dependencies: ["hidden"], canaries: ["UNL-045/219"] }),
+      Object.freeze({ id: "repeat", label: "서로 다른 Repeat 비용·모드·대상 사전 선언", dependencies: ["xp-level"], canaries: ["UNL-182/219"] }),
+      Object.freeze({ id: "trash-zone", label: "폐기장 사용·조종권·추방 연계", dependencies: ["temporary-death"], canaries: ["UNL-165/219", "UNL-168/219"] }),
+      Object.freeze({ id: "battlefield", label: "전장 유발·전장 토큰 교체·턴당 최초 사건", dependencies: ["movement", "tokens"], canaries: ["UNL-215/219"] }),
+      Object.freeze({ id: "bulk-verification", label: "효과군별 일괄 등록·UI·한국어·비AI 전체 검증", dependencies: ["repeat", "trash-zone", "battlefield"], canaries: [] })
+    ]),
+    errataSources: Object.freeze([
+      Object.freeze({
+        publishedAt: "2026-04-03",
+        url: "https://playriftbound.com/en-us/news/rules-and-releases/unleashed-errata-updates/"
+      }),
+      Object.freeze({
+        publishedAt: "2026-07-23",
+        url: "https://playriftbound.com/en-us/news/announcements/vendetta-errata-updates/"
+      })
+    ])
   })
 });
 
@@ -81,42 +106,104 @@ export const MECHANIC_FAMILIES = Object.freeze([
   Object.freeze({
     id: "attachment-ecosystem",
     label: "Equipment/Attach/Detach 상호작용",
+    sets: ["SFD"],
     matches: (card) => /\bEquipment\b|attach|detach/i.test(card.rulesText)
   }),
   Object.freeze({
     id: "equip",
     label: "Equip 장비",
+    sets: ["SFD"],
     matches: (card) => card.type === "gear" && /\[Equip\]/i.test(card.rulesText)
   }),
   Object.freeze({
     id: "quick-draw",
     label: "Quick-Draw 및 부여",
+    sets: ["SFD"],
     matches: (card) => /\[Quick-Draw\]/i.test(card.rulesText)
   }),
   Object.freeze({
     id: "weaponmaster",
     label: "Weaponmaster 및 부여",
+    sets: ["SFD"],
     matches: (card) => /\[Weaponmaster\]/i.test(card.rulesText)
   }),
   Object.freeze({
     id: "repeat",
     label: "Repeat 및 비용 변경/부여",
+    sets: ["SFD"],
     matches: (card) => /\[Repeat\]/i.test(card.rulesText)
   }),
   Object.freeze({
     id: "gold",
     label: "Gold 생성/변경",
+    sets: ["SFD"],
     matches: (card) => /\bGold\b/i.test(card.rulesText)
   }),
   Object.freeze({
     id: "mech-token",
     label: "Mech 토큰 생성",
+    sets: ["SFD"],
     matches: (card) => /Mech unit token/i.test(card.rulesText)
   }),
   Object.freeze({
     id: "sand-soldier-token",
     label: "Sand Soldier 토큰 생성",
+    sets: ["SFD"],
     matches: (card) => /Sand Soldier unit token/i.test(card.rulesText)
+  }),
+  Object.freeze({
+    id: "hidden-facedown",
+    label: "Hidden·뒷면 카드",
+    sets: ["UNL"],
+    matches: (card) => /\[Hidden\]|facedown|hide\b/i.test(card.rulesText)
+  }),
+  Object.freeze({
+    id: "unleashed-tokens",
+    label: "동물·Sprite·Gold·Reflection 토큰",
+    sets: ["UNL"],
+    matches: (card) => /(?:Bird|Cat|Dog|Poro|Sprite|Gold|Reflection) (?:unit|gear )?token/i.test(card.rulesText)
+  }),
+  Object.freeze({
+    id: "xp-level",
+    label: "XP·Level 연계",
+    sets: ["UNL"],
+    matches: (card) => /\bXP\b|\[Level\]/i.test(card.rulesText)
+  }),
+  Object.freeze({
+    id: "temporary",
+    label: "Temporary 생성·상호작용",
+    sets: ["UNL"],
+    matches: (card) => /\[Temporary\]|\bTemporary\b/i.test(card.rulesText)
+  }),
+  Object.freeze({
+    id: "unleashed-repeat",
+    label: "Repeat·복수 모드",
+    sets: ["UNL"],
+    matches: (card) => /\[Repeat\]|\brepeat\b/i.test(card.rulesText)
+  }),
+  Object.freeze({
+    id: "movement-ganking",
+    label: "이동·Ganking",
+    sets: ["UNL"],
+    matches: (card) => /\[Ganking\]|\bmove\b/i.test(card.rulesText)
+  }),
+  Object.freeze({
+    id: "death-replacement",
+    label: "사망·처치·대체 효과",
+    sets: ["UNL"],
+    matches: (card) => /\[Deathknell\]|\bdies?\b|\bkill\b|banish it instead/i.test(card.rulesText)
+  }),
+  Object.freeze({
+    id: "trash-play",
+    label: "폐기장 사용·회수",
+    sets: ["UNL"],
+    matches: (card) => /\btrash\b/i.test(card.rulesText)
+  }),
+  Object.freeze({
+    id: "battlefield-replacement",
+    label: "전장 토큰·전장 교체",
+    sets: ["UNL"],
+    matches: (card) => /Battlefield token|replace (?:a|the) battlefield/i.test(card.rulesText)
   })
 ]);
 
@@ -170,7 +257,9 @@ export function buildSetIntakeReport({
     return counts;
   }, {})).map(([type, count]) => ({ type, count }));
 
-  const mechanics = MECHANIC_FAMILIES.map((family) => {
+  const mechanics = MECHANIC_FAMILIES
+    .filter((family) => !family.sets?.length || family.sets.includes(normalizedSetId))
+    .map((family) => {
     const members = officialCards.filter(family.matches);
     const implementedMembers = members.filter((card) => registeredByNumber.has(card.cardNumber));
     return {
@@ -182,7 +271,7 @@ export function buildSetIntakeReport({
       cardNumbers: members.map((card) => card.cardNumber),
       implementedCardNumbers: implementedMembers.map((card) => card.cardNumber)
     };
-  });
+    });
 
   const config = SET_INTAKE_CONFIG[normalizedSetId] || null;
   const warnings = [];
@@ -343,26 +432,26 @@ async function fetchOfficialRulesDate() {
 function loadGallerySnapshot(filePath) {
   const snapshot = JSON.parse(fs.readFileSync(filePath, "utf8"));
   const items = snapshot.cards || snapshot.items || [];
-  const sets = snapshot.sets || [];
+  const sets = snapshot.sets || (snapshot.set ? [snapshot.set] : []);
   return { items, sets };
 }
 
 function latestLocalRulesDate() {
   const rulesDir = path.join(ROOT, "spec", "rules");
   const dates = fs.readdirSync(rulesDir)
-    .map((fileName) => fileName.match(/^core-rules-(\d{4}-\d{2}-\d{2})\.json$/)?.[1])
+    .map((fileName) => fileName.match(/^core-rules(?:-catalog)?-(\d{4}-\d{2}-\d{2})\.json$/)?.[1])
     .filter(Boolean)
     .sort();
   return dates.at(-1) || null;
 }
 
 function normalizeGalleryCard(card) {
-  if (card.rulesText != null) {
+  if (card.rulesText != null || card.effectiveText != null || card.printedText != null) {
     return {
-      cardNumber: String(card.cardNumber || card.publicCode || ""),
+      cardNumber: String(card.cardNumber || card.collectorNumber || card.publicCode || ""),
       name: card.name || "",
       type: card.type || card.cardType?.type?.[0]?.id || null,
-      rulesText: String(card.rulesText || "")
+      rulesText: String(card.effectiveText || card.rulesText || card.printedText || "")
     };
   }
   return {

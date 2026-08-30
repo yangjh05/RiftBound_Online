@@ -346,6 +346,16 @@ export async function collectProcessPoolSelfPlay(options) {
       ? Math.floor(Number(options.maximumTaskRetries))
       : 2
   );
+  const maximumWorkerStartupRetries = Math.max(
+    0,
+    Number.isFinite(Number(options.maximumWorkerStartupRetries))
+      ? Math.floor(Number(options.maximumWorkerStartupRetries))
+      : 4
+  );
+  const workerStartupRetryBaseDelayMs = Math.max(
+    10,
+    Number(options.workerStartupRetryBaseDelayMs) || 1_000
+  );
   const maximumGamesPerProcess = Math.max(
     0,
     Number.isFinite(Number(options.maximumGamesPerProcess))
@@ -364,6 +374,8 @@ export async function collectProcessPoolSelfPlay(options) {
   const slots = Array.from({ length: maximumProcessCount }, () => null);
   const retryAttempts = new Map();
   const retryTasks = [];
+  const startupRetryAttempts = new Map();
+  const startupRetryTimers = new Map();
   let nextTaskIndex = 0;
   let completedTasks = 0;
   let desiredProcessCount = initialProcessCount;
@@ -464,6 +476,7 @@ export async function collectProcessPoolSelfPlay(options) {
     clearInterval(heartbeat);
     clearInterval(scheduler);
     clearInterval(scaleScheduler);
+    clearWorkerStartupRetryTimers();
     await rm(handoffDirectory, { recursive: true, force: true }).catch(() => {});
   }
 
@@ -488,7 +501,8 @@ export async function collectProcessPoolSelfPlay(options) {
       recovering: false,
       retryTask,
       waitingForMemory: false,
-      retireRequested: false
+      retireRequested: false,
+      startupRetryDelayMs: null
     };
     slots[slotIndex] = slot;
     peakProcessCount = Math.max(
@@ -502,7 +516,12 @@ export async function collectProcessPoolSelfPlay(options) {
       if (slot.expectedExit) {
         const pendingRetry = slot.retryTask;
         const retiring = slot.retireRequested === true;
+        const startupRetryDelayMs = slot.startupRetryDelayMs;
         slots[slotIndex] = null;
+        if (Number.isFinite(startupRetryDelayMs)) {
+          scheduleWorkerStartupRetry(slotIndex, startupRetryDelayMs);
+          return;
+        }
         if (pendingRetry && retiring) retryTasks.unshift(pendingRetry);
         if (!settled && !retiring
           && ((!draining && !assignmentClosed) || pendingRetry)
@@ -545,6 +564,7 @@ export async function collectProcessPoolSelfPlay(options) {
     }
     if (message?.type === "ready") {
       slot.ready = true;
+      startupRetryAttempts.delete(slot.slotIndex);
       if (slot.retryTask) {
         const retryTask = slot.retryTask;
         slot.retryTask = null;
@@ -836,6 +856,7 @@ export async function collectProcessPoolSelfPlay(options) {
       slotIndex < slots.length && needed > 0;
       slotIndex += 1) {
       if (slots[slotIndex]) continue;
+      if (startupRetryTimers.has(slotIndex)) continue;
       spawnSlot(slotIndex);
       needed -= 1;
     }
@@ -973,6 +994,10 @@ export async function collectProcessPoolSelfPlay(options) {
     slot.recovering = true;
     const task = slot.task || slot.retryTask;
     if (!task) {
+      if (slot.ready !== true) {
+        retryWorkerStartup(slot, error, recovery);
+        return;
+      }
       if (recovery.alreadyExited === true) {
         slots[slot.slotIndex] = null;
         if (slot.retireRequested !== true
@@ -1049,6 +1074,67 @@ export async function collectProcessPoolSelfPlay(options) {
     }
   }
 
+  function retryWorkerStartup(slot, error, recovery = {}) {
+    const slotIndex = slot.slotIndex;
+    const attempts = startupRetryAttempts.get(slotIndex) || 0;
+    if (!selfPlayTaskRetryAllowed(attempts, maximumWorkerStartupRetries)) {
+      error.code ||= "AI_SELFPLAY_WORKER_INITIALIZATION_FAILED";
+      error.workerSlotIndex = slotIndex;
+      error.startupRetryAttempts = attempts;
+      fail(error);
+      return;
+    }
+    const retryAttempt = attempts + 1;
+    startupRetryAttempts.set(slotIndex, retryAttempt);
+    const delayMs = Math.max(
+      workerStartupRetryBaseDelayMs * (2 ** Math.min(attempts, 4)),
+      Number(recovery.retryDelayMs) || 0
+    );
+    options.onWorkerStartupRetry?.({
+      slotIndex,
+      retryAttempt,
+      maximumWorkerStartupRetries,
+      delayMs,
+      exitCode: error?.exitCode ?? null,
+      signal: error?.signal || null,
+      reason: error?.message || String(error)
+    });
+    slot.startupRetryDelayMs = delayMs;
+    slot.expectedExit = true;
+    slot.task = null;
+    slot.retryTask = null;
+    slot.startedAt = null;
+    if (recovery.alreadyExited === true) {
+      slots[slotIndex] = null;
+      scheduleWorkerStartupRetry(slotIndex, delayMs);
+      return;
+    }
+    if (slot.child.connected) {
+      sendChildMessage(slot.child, { type: "shutdown" });
+    } else {
+      slot.child.kill();
+    }
+    const child = slot.child;
+    setTimeout(() => {
+      if (slots[slotIndex] === slot && !child.killed) child.kill();
+    }, 5_000).unref?.();
+  }
+
+  function scheduleWorkerStartupRetry(slotIndex, delayMs) {
+    if (settled || startupRetryTimers.has(slotIndex)) return;
+    const timer = setTimeout(() => {
+      startupRetryTimers.delete(slotIndex);
+      if (settled || draining || assignmentClosed || slots[slotIndex]) return;
+      spawnSlot(slotIndex);
+    }, Math.max(0, Number(delayMs) || 0));
+    startupRetryTimers.set(slotIndex, timer);
+  }
+
+  function clearWorkerStartupRetryTimers() {
+    for (const timer of startupRetryTimers.values()) clearTimeout(timer);
+    startupRetryTimers.clear();
+  }
+
   function detectStopRequest() {
     if (draining || !options.stopRequestPath) return draining;
     if (!existsSync(options.stopRequestPath)) return false;
@@ -1095,6 +1181,7 @@ export async function collectProcessPoolSelfPlay(options) {
     clearInterval(heartbeat);
     clearInterval(scheduler);
     clearInterval(scaleScheduler);
+    clearWorkerStartupRetryTimers();
     for (const slot of slots.filter(Boolean)) {
       if (slot.child.connected) slot.child.disconnect();
       slot.child.kill();

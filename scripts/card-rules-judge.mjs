@@ -28,6 +28,9 @@ const DEFAULT_REPORT_PATH = path.join(ROOT, "artifacts", "card-rules-report.json
 const ENGINE_PATH = path.join(ROOT, "src", "engine.mjs");
 const OFFICIAL_OGS_PATH = path.join(ROOT, "spec", "cards", "ogs-official-2026-07-14.json");
 const OFFICIAL_GALLERY_PATH = path.join(ROOT, "spec", "cards", "official-gallery-2026-07-14.json");
+const OFFICIAL_SPIRITFORGED_PATH = path.join(ROOT, "spec", "cards", "spiritforged-official-2026-08-29.json");
+const OFFICIAL_UNLEASHED_PATH = path.join(ROOT, "spec", "cards", "unleashed-official-2026-08-29.json");
+const OFFICIAL_VENDETTA_PATH = path.join(ROOT, "spec", "cards", "vendetta-official-2026-08-29.json");
 const CORE_RULES_PATH = path.join(ROOT, "spec", "rules", "core-rules-2026-03-30.json");
 const CORE_RULES_CATALOG_PATH = path.join(ROOT, "spec", "rules", "core-rules-catalog-2026-03-30.json");
 const CORE_RULE_FAMILIES_PATH = path.join(ROOT, "spec", "rules", "core-rules-families-2026-03-30.json");
@@ -108,6 +111,7 @@ export async function judgeCardRules(options = {}) {
   findings.push(...validateCardContracts(cardPool, contracts));
   for (const card of cardPool) {
     const published = publishedCardRecord(card.cardNumber, officialCardSnapshots);
+    findings.push(...derivePublishedCardFindings(card, published));
     findings.push(...deriveTextRuleFindings({
       ...card,
       text: published?.rulesText ? normalizePublishedRulesText(published.rulesText) : card.text
@@ -174,6 +178,42 @@ export async function judgeCardRules(options = {}) {
   };
 }
 
+export function derivePublishedCardFindings(card, published) {
+  if (!published) return [];
+  const findings = [];
+  const label = `${card.cardNumber} ${card.name}`;
+  const structuredSnapshot = Object.hasOwn(published, "effectiveText") || Object.hasOwn(published, "printedText");
+  if (!structuredSnapshot) return findings;
+
+  const scalarFields = ["type", "energy", "might"];
+  for (const field of scalarFields) {
+    if ((card[field] ?? null) === (published[field] ?? null)) continue;
+    findings.push(cardFinding(card, "PUBLISHED_METADATA_MISMATCH", `${label}: ${field} differs from the official snapshot.`, published[field] ?? null, card[field] ?? null));
+  }
+  if (Boolean(card.isChampion) !== Boolean(published.isChampion)) {
+    findings.push(cardFinding(card, "PUBLISHED_METADATA_MISMATCH", `${label}: champion status differs from the official snapshot.`, Boolean(published.isChampion), Boolean(card.isChampion)));
+  }
+  for (const field of ["domains", "power"]) {
+    if (JSON.stringify(card[field] || []) === JSON.stringify(published[field] || [])) continue;
+    findings.push(cardFinding(card, "PUBLISHED_METADATA_MISMATCH", `${label}: ${field} differs from the official snapshot.`, published[field] || [], card[field] || []));
+  }
+  for (const field of ["tags", "keywords"]) {
+    const missing = (published[field] || []).filter((value) => !(card[field] || []).includes(value));
+    if (!missing.length) continue;
+    findings.push(cardFinding(card, "PUBLISHED_METADATA_MISSING", `${label}: official ${field} are missing.`, missing, card[field] || []));
+  }
+  if (card.type !== "legend" && card.name !== published.name) {
+    findings.push(cardFinding(card, "PUBLISHED_NAME_MISMATCH", `${label}: name differs from the official snapshot.`, published.name, card.name));
+  }
+  if (card.text !== published.rulesText) {
+    findings.push(cardFinding(card, "PUBLISHED_TEXT_MISMATCH", `${label}: local rules text differs from the official effective text.`, published.rulesText, card.text));
+  }
+  if (meaningfulAttachedEffectText(published.effectText) && !(card.effects || []).some((effect) => effect.textSection === "effect")) {
+    findings.push(cardFinding(card, "PUBLISHED_EFFECT_TEXT_UNMAPPED", `${label}: attached Effect Text has no declarative textSection:effect behavior.`));
+  }
+  return findings;
+}
+
 export function runCardMutationAudit(cardPool, contracts) {
   const expectedByNumber = new Map((contracts?.cards || []).map((contract) => [contract.cardNumber, contract]));
   const survivors = [];
@@ -201,7 +241,7 @@ export function analyzePublishedSourceCoverage(cardPool, snapshots) {
         authority: snapshot.source?.authority || null,
         title: snapshot.source?.title || null,
         url: snapshot.source?.url || null,
-        rulesText: card.rulesText || null
+        rulesText: publishedRulesText(card)
       });
     }
   }
@@ -368,6 +408,7 @@ export function deriveTextRuleFindings(card) {
   const text = normalizeRulesText(card.text || "");
   const label = `${card.cardNumber} ${card.name}`;
   const effects = cardBehaviorEffects(card);
+  const textWithoutParentheticalReminders = stripParentheticalText(text);
 
   if (!effects.length && !card.additionalCost && card.type !== "rune" && text && text !== "-" && !isKeywordOnlyRulesText(card, text)) {
     findings.push(cardFinding(card, "TEXT_UNMAPPED_RULES", `${label}: meaningful rules text has neither a shared effect nor a declarative additional cost.`));
@@ -379,13 +420,19 @@ export function deriveTextRuleFindings(card) {
   }
 
   for (const [trait, pattern] of ABILITY_TRAIT_RULES) {
-    if (!pattern.test(text) || effects.some((effect) => effect.timing === "activated" && hasAbilityTrait(effect, trait))) continue;
+    if (!pattern.test(textWithoutParentheticalReminders)
+      || effects.some((effect) => effect.timing === "activated" && hasAbilityTrait(effect, trait))) continue;
     findings.push(cardFinding(card, `TEXT_MISSING_${trait.toUpperCase()}_ABILITY_TRAIT`, `${label}: activated ability text declares ${trait}, but the activated effect does not.`));
   }
 
   for (const rule of TEXT_TRIGGER_RULES) {
-    if (!rule.pattern.test(text) || effects.some((effect) => rule.timings.includes(effect.timing)
+    if (!rule.pattern.test(textWithoutParentheticalReminders) || effects.some((effect) => rule.timings.includes(effect.timing)
       || (rule.id === "ON_PLAY" && effect.timing === "keyword" && ["predict", "quickDrawAttach", "weaponmaster"].includes(effect.kind))
+      || (rule.id === "ON_PLAY" && effect.timing === "static" && effect.kind === "conditionalEnterReady")
+      || (rule.id === "ON_PLAY" && effect.timing === "cardPlayed" && effect.includeSelf)
+      || (rule.id === "CONQUER" && effect.timing === "spell" && effect.kind === "moveAttachGrantConquerRecall")
+      || (["CONQUER", "HOLD"].includes(rule.id) && effect.timing === "static"
+        && effect.kind === "gainKeywords" && (effect.keywords || []).includes("Hunt"))
       || (effect.timing === "keyword" && effect.kind === "huntGainXp" && ["CONQUER", "HOLD"].includes(rule.id)))) continue;
     findings.push(cardFinding(card, `TEXT_MISSING_${rule.id}_TIMING`, `${label}: trigger sentence has no compatible shared timing (${rule.timings.join(" or ")}).`));
   }
@@ -442,10 +489,16 @@ export function deriveTextRuleFindings(card) {
     }
   }
 
-  if (/\bWhen I attack\b/i.test(text) && !effects.some((effect) => effect.timing === "attackOrDefend" && (!effect.role || effect.role === "attacker"))) {
+  if (/\bWhen I attack\b/i.test(textWithoutParentheticalReminders) && !effects.some((effect) =>
+    (effect.timing === "attackOrDefend" && (!effect.role || effect.role === "attacker"))
+    || effect.timing === "attack"
+    || (effect.timing === "static" && effect.kind === "doubleMightOneOnOneCombat"))) {
     findings.push(cardFinding(card, "TEXT_MISSING_ATTACK_TRIGGER", `${label}: attack trigger text has no attacker attackOrDefend effect.`));
   }
-  if (/\bWhen I defend\b/i.test(text) && !effects.some((effect) => effect.timing === "attackOrDefend" && (!effect.role || effect.role === "defender"))) {
+  if (/\bWhen I defend\b/i.test(textWithoutParentheticalReminders) && !effects.some((effect) =>
+    (effect.timing === "attackOrDefend" && (!effect.role || effect.role === "defender"))
+    || effect.timing === "defend"
+    || (effect.timing === "static" && effect.kind === "doubleMightOneOnOneCombat"))) {
     findings.push(cardFinding(card, "TEXT_MISSING_DEFEND_TRIGGER", `${label}: defend trigger text has no defender attackOrDefend effect.`));
   }
   if (/\bWhen you conquer, you may discard 1 to return this from your trash to your hand\b/i.test(text)
@@ -480,13 +533,18 @@ export function deriveTextRuleFindings(card) {
   const tokenMatch = /Play\s+(a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+[^.\n]*?unit tokens?/i.exec(text);
   if (tokenMatch) {
     const count = parseNumber(tokenMatch[1]);
-    const tokenEffect = effects.find((candidate) => candidate.kind === "playUnitToken" || candidate.tokenCardNumber);
+    const tokenEffect = effects.find((candidate) => [
+      "playUnitToken",
+      "playReflectionCopies",
+      "playReflectionCopy",
+      "discardExhaustPlayReflectionCopy"
+    ].includes(candidate.kind) || candidate.tokenCardNumber || candidate.tokenKind);
     if (!tokenEffect || (tokenEffect.count || 1) !== count) {
       findings.push(cardFinding(card, "TEXT_TOKEN_COUNT_MISMATCH", `${label}: token count does not match the card text.`, count, tokenEffect?.count || (tokenEffect ? 1 : null)));
     }
   }
   if (/They can be played to your base or to battlefields you control/i.test(text)) {
-    const tokenEffect = effects.find((candidate) => candidate.kind === "playUnitToken" || candidate.tokenCardNumber);
+    const tokenEffect = effects.find((candidate) => candidate.kind === "playUnitToken" || candidate.tokenCardNumber || candidate.tokenKind);
     if (tokenEffect?.destination !== "chooseEachBaseOrControlledBattlefield") {
       findings.push(cardFinding(card, "TEXT_TOKEN_DESTINATION_MISMATCH", `${label}: token placement choices are not represented by the shared destination contract.`, "chooseEachBaseOrControlledBattlefield", tokenEffect?.destination ?? null));
     }
@@ -744,6 +802,16 @@ function normalizeRulesText(text) {
     .trim();
 }
 
+function stripParentheticalText(text) {
+  let result = String(text);
+  let previous;
+  do {
+    previous = result;
+    result = result.replace(/\([^()]*\)/g, " ");
+  } while (result !== previous);
+  return result;
+}
+
 function leadingKeywordAmount(text, keyword) {
   const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = new RegExp(`(?:^|\\n)\\s*(?:\\[\\s*)?${escaped}(?:\\s+(\\d+))?(?:\\s*\\])?\\b`, "i").exec(text);
@@ -752,7 +820,10 @@ function leadingKeywordAmount(text, keyword) {
 }
 
 function hasKeyword(card, keyword) {
-  return (card.keywords || []).some((item) => item.toLowerCase() === keyword.toLowerCase());
+  if ((card.keywords || []).some((item) => item.toLowerCase() === keyword.toLowerCase())) return true;
+  return cardBehaviorEffects(card).some((effect) => effect.timing === "static"
+    && effect.kind === "gainKeywords"
+    && (effect.keywords || []).some((item) => item.toLowerCase() === keyword.toLowerCase()));
 }
 
 function hasTrait(card, trait) {
@@ -782,17 +853,42 @@ function readContracts() {
 }
 
 function readOfficialCardSnapshots() {
-  return [readJsonIfExists(OFFICIAL_OGS_PATH), readJsonIfExists(OFFICIAL_GALLERY_PATH)].filter(Boolean);
+  return [
+    readJsonIfExists(OFFICIAL_OGS_PATH),
+    readJsonIfExists(OFFICIAL_GALLERY_PATH),
+    readJsonIfExists(OFFICIAL_SPIRITFORGED_PATH),
+    readJsonIfExists(OFFICIAL_UNLEASHED_PATH),
+    readJsonIfExists(OFFICIAL_VENDETTA_PATH)
+  ].filter(Boolean);
 }
 
 function publishedCardRecord(cardNumber, snapshots = readOfficialCardSnapshots()) {
   const records = new Map();
   for (const snapshot of snapshots || []) {
-    for (const card of snapshot.cards || []) records.set(card.cardNumber, card);
+    for (const card of snapshot.cards || []) records.set(card.cardNumber, normalizedPublishedCardRecord(card));
   }
   if (records.has(cardNumber)) return records.get(cardNumber);
   const variant = /^(OGN-\d+)[bs]\/298$/i.exec(cardNumber || "");
   return variant ? records.get(`${variant[1]}/298`) || null : null;
+}
+
+function normalizedPublishedCardRecord(card) {
+  if (!card) return null;
+  return {
+    ...card,
+    rulesText: publishedRulesText(card)
+  };
+}
+
+function publishedRulesText(card) {
+  const printed = card?.effectiveText || card?.rulesText || card?.printedText || "";
+  const effect = meaningfulAttachedEffectText(card?.effectText);
+  return [printed, effect].filter(Boolean).join("\n") || null;
+}
+
+function meaningfulAttachedEffectText(value) {
+  const text = String(value || "").trim();
+  return /[A-Za-z]/.test(text) ? text : "";
 }
 
 function normalizePublishedRulesText(text) {

@@ -21,13 +21,13 @@ export default card({
       "energy": 5,
       "power": [
         {
-          "domain": DOMAINS.ANY,
+          "domain": DOMAINS.CHAOS,
           "amount": 1
         }
       ],
       "might": 5,
       "image": "https://exburst.dev/riftbound/cards/sd/SFD-146-221.webp",
-      "text": "While I'm in combat, friendly spells cost Energy 1Power less to a minimum of Energy 1, and enemy spells cost Energy 1Power more.",
+      "text": "While I'm in combat, friendly spells cost Energy 1 Power less to a minimum of Energy 1 , and enemy spells cost Energy 1 Power more.",
       "effects": [
         {
           "timing": "combatStatic",

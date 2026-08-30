@@ -1,6 +1,6 @@
 export function cardEffects(card, timing) {
   return [...(card?.effects || []), ...(card?.appendedEffects || [])]
-    .filter((effect) => effect.timing === timing && effectIsEnabled(effect, card));
+    .filter((effect) => effect?.timing === timing && effectIsEnabled(effect, card));
 }
 
 export function firstCardEffect(card, timing, kind) {
@@ -9,7 +9,7 @@ export function firstCardEffect(card, timing, kind) {
 
 export function hasAnyEffect(card, timing, kind) {
   return [...(card?.effects || []), ...(card?.appendedEffects || [])]
-    .some((effect) => effect.timing === timing && effect.kind === kind && effectIsEnabled(effect, card));
+    .some((effect) => effect?.timing === timing && effect.kind === kind && effectIsEnabled(effect, card));
 }
 
 export function hasStaticEffect(card, kind) {
@@ -32,6 +32,10 @@ export function replacementEffect(card, kind) {
 
 export function effectIsEnabled(effect, card = null) {
   if (!effect) return false;
+  const empoweredCount = Number(card?.empoweredCount) || 0;
+  if (effect.requiresEmpowered && empoweredCount < 1) return false;
+  if (effect.requiresNotEmpowered && empoweredCount > 0) return false;
+  if (effect.requiresEmpoweredCount != null && empoweredCount < effect.requiresEmpoweredCount) return false;
   const textSection = effect.textSection || "rules";
   if (card?.attachedToId && textSection === "rules") return false;
   // Printed Effect Text is never an ability of the attachment itself. While

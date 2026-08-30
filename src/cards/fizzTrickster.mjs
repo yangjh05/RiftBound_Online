@@ -21,13 +21,13 @@ export default card({
       "energy": 3,
       "power": [
         {
-          "domain": DOMAINS.ANY,
+          "domain": DOMAINS.CHAOS,
           "amount": 1
         }
       ],
       "might": 3,
       "image": "https://exburst.dev/riftbound/cards/sd/SFD-140-221.webp",
-      "text": "When you play me, you may play a spell from your trash with Energy cost no more than Energy 3, ignoring its Energy cost. Recycle that spell after you play it. (You must still pay its Power cost.)",
+      "text": "When you play me, you may play a spell from your trash with Energy cost no more than [3], ignoring its Energy cost. Then recycle it. (You must still pay its Power cost.)",
       "effects": [
         {
           "timing": "onPlay",

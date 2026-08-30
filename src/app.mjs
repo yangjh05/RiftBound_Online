@@ -1,5 +1,6 @@
 import {
   beginPlayCard,
+  beginPlayCardFromTrash,
   beginPlayChampion,
   activateCard,
   cancelPayment,
@@ -44,10 +45,11 @@ import {
   gameLogVisibleToViewer,
   handCountVisibleToViewer
 } from "./rules/visibility.mjs";
-import { cards, DOMAINS, makeRune, rawDecklists, RUNE_COLORS, runeCardsForDomain } from "./cards.mjs";
+import { cards, cardHasType, DOMAINS, makeRune, rawDecklists, RUNE_COLORS, runeCardsForDomain } from "./cards.mjs";
 import {
   DECK_RULES,
   cardCount as deckCardCount,
+  championMatchesLegend,
   isChampionDeckCard as isChampionDeckCardByRule,
   mainDeckCount as deckMainDeckCount,
   normalizeCountEntries as normalizeDeckCountEntries,
@@ -56,6 +58,7 @@ import {
   sideboardCount as deckSideboardCount,
   validateDeckRecord as validateDeckRecordByRule
 } from "./decks/rules.mjs";
+import { deckRecordFromText, formatDeckText } from "./decks/text-format.mjs";
 import { beginNextMatchGame, createMatchState, recordMatchGame, submitSideboardConfiguration } from "./match.mjs";
 import {
   configureOnlineServer,
@@ -65,13 +68,18 @@ import {
   fetchAiGenerations,
   fetchAiSpectatorReplay,
   fetchAiSpectatorReplays,
+  fetchAccountSession,
   fetchRooms,
   joinOnlineRoom,
   leaveOnlineRoom,
+  loginAccount,
+  logoutAccount,
   openRoomEvents,
   persistAiReplay,
+  saveAccountDeckStore,
   sendOnlineCommand,
   setOnlineReady,
+  signUpAccount,
   submitOnlineDeck
 } from "./net/client.mjs";
 import {
@@ -138,6 +146,7 @@ import {
 
 const LOCAL_SERVER_HOSTNAMES = new Set(["127.0.0.1", "localhost"]);
 const DECK_STORAGE_KEY = "riftbound.deckStore.v1";
+const AUTH_STORAGE_KEY = "riftbound.accountSession.v1";
 const ONLINE_STORAGE_KEY = "riftbound.onlineSeat.v1";
 const SETTINGS_STORAGE_KEY = "riftbound.settings.v1";
 const TUTORIAL_STORAGE_KEY = "riftbound.tutorial.v1";
@@ -149,7 +158,8 @@ const LOCALIZED_CARD_NAMES = [...ALL_CARDS]
   .map((card) => [card.name, translateCardName(card, LOCALES.KO)]);
 let settings = loadSettings();
 let tutorialRecord = loadTutorialRecord();
-let deckStore = loadDeckStore();
+let auth = loadAuthState();
+let deckStore = loadDeckStore(accountDeckStorageKey(auth.user?.id));
 let appView = "menu";
 let online = loadOnlineSeat();
 online.rooms = [];
@@ -165,17 +175,22 @@ online.refreshTimer = null;
 let onlineSelectedCardId = null;
 let deckEditor = {
   selectedDeckId: deckStore.activeDeckIds[0] || deckStore.decks[0]?.id,
+  pendingDeleteDeckId: null,
   search: "",
   selectedCardNumber: null,
-  poolId: "origins-era",
+  poolId: "vendetta-era",
   packId: "all",
   type: "all",
   domain: "all",
   maxEnergy: "all",
   aiRecommendation: null,
+  transferNotice: null,
+  transferDialog: null,
   mobileView: "list",
   mobileTab: "deck"
 };
+let deckSyncTimer = null;
+let deckSyncQueue = Promise.resolve(true);
 let game = createGame({ interactive: true, randomFirstPlayer: true, manualActionChainPriority: true });
 let logOpen = false;
 let handOpen = false;
@@ -285,7 +300,8 @@ function cardText(card) {
 }
 
 function cardType(card) {
-  return translateType(card?.type, locale());
+  const types = Array.isArray(card?.types) && card.types.length ? card.types : [card?.type];
+  return [...new Set(types.filter(Boolean).map((type) => translateType(type, locale())))].join(" / ");
 }
 
 function cardTags(card) {
@@ -732,6 +748,7 @@ function menuView() {
       <section class="menu-hero">
         <p class="eyebrow visible">Riftbound Online</p>
         <h1>Riftbound</h1>
+        ${accountMenuPanel()}
         <div class="settings-row" aria-label="${t("settings", locale())}">
           <label>
             <span>${t("language", locale())}</span>
@@ -799,6 +816,80 @@ function menuView() {
         ${validPair ? "" : `<p class="deck-warning">${locale() === LOCALES.KO ? `토너먼트에서 사용 가능한 덱 2개가 필요합니다. 주 덱은 정확히 ${DECK_RULES.tournamentMainExact}장, 사이드보드는 최대 ${DECK_RULES.sideboardMax}장, 룬은 ${DECK_RULES.runeExact}장, 전장은 ${DECK_RULES.battlefieldsExact}장이어야 합니다.` : `Two tournament-legal decks are required: exactly ${DECK_RULES.tournamentMainExact} Main Deck cards, up to ${DECK_RULES.sideboardMax} Sideboard cards, ${DECK_RULES.runeExact} Runes, and ${DECK_RULES.battlefieldsExact} Battlefields.`}</p>`}
       </section>
     </main>
+  `;
+}
+
+function accountMenuPanel() {
+  const korean = locale() === LOCALES.KO;
+  if (auth.user) {
+    const syncText = {
+      saving: korean ? "덱을 서버에 저장하는 중…" : "Saving decks to the server…",
+      saved: korean ? "계정 덱이 서버에 저장됨" : "Account decks saved on the server",
+      error: korean ? "서버 저장 실패" : "Server save failed",
+      idle: korean ? "계정별 덱 보관 사용 중" : "Account deck storage is active"
+    }[auth.syncStatus] || (korean ? "계정별 덱 보관 사용 중" : "Account deck storage is active");
+    return `
+      <section class="account-panel signed-in" aria-label="${korean ? "계정" : "Account"}">
+        <div class="account-identity">
+          <span>${korean ? "로그인 계정" : "Signed in"}</span>
+          <strong>${escapeHtml(auth.user.accountId)}</strong>
+          <small class="account-sync sync-${auth.syncStatus}">${escapeHtml(syncText)}</small>
+        </div>
+        <button type="button" class="secondary" data-action="auth-logout" ${auth.status === "working" ? "disabled" : ""}>${korean ? "로그아웃" : "Sign out"}</button>
+      </section>
+      ${auth.error ? `<p class="account-message error" role="alert">${escapeHtml(auth.error)}</p>` : ""}
+      ${auth.notice ? `<p class="account-message success" role="status">${escapeHtml(auth.notice)}</p>` : ""}
+    `;
+  }
+  const signingUp = auth.mode === "signup";
+  if (!auth.panelOpen) {
+    return `
+      <section class="account-panel account-compact signed-out" aria-label="${korean ? "로그인 및 회원가입" : "Sign in and create account"}">
+        <div class="account-compact-copy">
+          <strong>${korean ? "계정 덱 보관" : "Account decks"}</strong>
+          <small>${korean ? "서버에 내 덱 저장" : "Save decks on the server"}</small>
+        </div>
+        <div class="account-mode-tabs" role="tablist">
+          <button type="button" data-action="auth-mode" data-mode="login">${korean ? "로그인" : "Sign in"}</button>
+          <button type="button" data-action="auth-mode" data-mode="signup">${korean ? "회원가입" : "Create account"}</button>
+        </div>
+        ${auth.notice ? `<p class="account-message success" role="status">${escapeHtml(auth.notice)}</p>` : ""}
+      </section>
+    `;
+  }
+  return `
+    <section class="account-panel signed-out" aria-label="${korean ? "로그인 및 회원가입" : "Sign in and create account"}">
+      <div class="account-panel-head">
+        <div>
+          <strong>${korean ? "내 덱을 어디서든 이어서 사용하세요" : "Keep your decks across devices"}</strong>
+          <small>${korean ? "계정별 덱은 이 서버에 안전하게 보관됩니다." : "Your account decks are stored on this server."}</small>
+        </div>
+        <div class="account-mode-tabs" role="tablist">
+          <button type="button" class="${!signingUp ? "active" : ""}" data-action="auth-mode" data-mode="login">${korean ? "로그인" : "Sign in"}</button>
+          <button type="button" class="${signingUp ? "active" : ""}" data-action="auth-mode" data-mode="signup">${korean ? "회원가입" : "Create account"}</button>
+        </div>
+        <button type="button" class="account-panel-close" data-action="auth-close" aria-label="${korean ? "계정 창 닫기" : "Close account panel"}">×</button>
+      </div>
+      <div class="account-form">
+        <label>
+          <span>${korean ? "아이디" : "Account ID"}</span>
+          <input data-action="auth-account-id" value="${escapeHtml(auth.accountId)}" autocomplete="username" minlength="3" maxlength="24" placeholder="${korean ? "3~24자 아이디" : "3–24 characters"}" ${auth.status === "working" ? "disabled" : ""} />
+        </label>
+        <label>
+          <span>${korean ? "비밀번호" : "Password"}</span>
+          <input data-action="auth-password" type="password" value="${escapeHtml(auth.password)}" autocomplete="${signingUp ? "new-password" : "current-password"}" minlength="8" maxlength="128" placeholder="${korean ? "8자 이상" : "At least 8 characters"}" ${auth.status === "working" ? "disabled" : ""} />
+        </label>
+        ${signingUp ? `<label>
+          <span>${korean ? "비밀번호 확인" : "Confirm password"}</span>
+          <input data-action="auth-password-confirm" type="password" value="${escapeHtml(auth.passwordConfirm)}" autocomplete="new-password" minlength="8" maxlength="128" placeholder="${korean ? "비밀번호를 다시 입력" : "Enter password again"}" ${auth.status === "working" ? "disabled" : ""} />
+        </label>` : ""}
+        <button type="button" class="primary account-submit" data-action="auth-submit" ${auth.status === "working" ? "disabled" : ""}>${auth.status === "working"
+          ? (korean ? "처리 중…" : "Please wait…")
+          : signingUp ? (korean ? "계정 만들기" : "Create account") : (korean ? "로그인" : "Sign in")}</button>
+      </div>
+      ${auth.error ? `<p class="account-message error" role="alert">${escapeHtml(auth.error)}</p>` : ""}
+      ${auth.notice ? `<p class="account-message success" role="status">${escapeHtml(auth.notice)}</p>` : ""}
+    </section>
   `;
 }
 
@@ -1148,7 +1239,7 @@ function tutorialMenuView() {
 function deckPickerOptions(playableDecks, selectedId) {
   if (!playableDecks.length) return `<option value="">${t("noPlayableDecks", locale())}</option>`;
   return playableDecks.map((deck) => `
-    <option value="${deck.id}" ${deck.id === selectedId ? "selected" : ""}>${escapeHtml(localizedDeckName(deck.name))}</option>
+    <option value="${escapeHtml(deck.id)}" ${deck.id === selectedId ? "selected" : ""}>${escapeHtml(localizedDeckName(deck.name))}</option>
   `).join("");
 }
 
@@ -1342,6 +1433,7 @@ function deckEditorView() {
           <div>
             <h1>${t("deckSelect", locale())}</h1>
             <p>편집할 덱을 선택하세요.</p>
+            ${deckEditor.transferNotice?.tone === "error" ? `<p class="deck-transfer-notice error" role="alert">${escapeHtml(deckEditor.transferNotice.message)}</p>` : ""}
           </div>
         </div>
         <div class="deck-slot-grid">
@@ -1350,11 +1442,19 @@ function deckEditorView() {
             <span class="big-plus">+</span>
             <strong>새 덱 만들기</strong>
           </button>
+          <button class="deck-slot import-deck-slot" data-action="deck-import-open">
+            <span class="deck-import-icon" aria-hidden="true">TEXT</span>
+            <strong>${locale() === LOCALES.KO ? "덱 텍스트 가져오기" : "Import Deck Text"}</strong>
+            <span>${locale() === LOCALES.KO ? "복사한 덱 리스트를 붙여넣으세요." : "Paste a copied deck list."}</span>
+            <span class="deck-import-cta">${locale() === LOCALES.KO ? "붙여넣기 창 열기" : "Open paste field"}</span>
+          </button>
         </div>
       </section>
       <section class="deck-editor-panel">
         ${selectedDeck ? deckEditorContent(selectedDeck, selectedCard) : `<div class="empty-editor"><h2>덱을 선택하세요</h2></div>`}
       </section>
+      ${deckDeleteConfirmationView()}
+      ${deckTextTransferView()}
     </main>
   `;
 }
@@ -1366,14 +1466,20 @@ function deckEditorContent(deck, selectedCard) {
       <button class="deck-mobile-back" data-action="deck-mobile-list">← ${locale() === LOCALES.KO ? "덱 목록" : "Decks"}</button>
       <div class="deck-name-row">
         <input class="deck-name-input" data-action="deck-name" value="${escapeHtml(localizedDeckName(deck.name))}" maxlength="48" />
+        <span class="deck-owner-badge ${deck.isDefault ? "default" : "personal"}">${deck.isDefault
+          ? (locale() === LOCALES.KO ? "기본 덱 · 수정 시 내 덱으로 복사" : "Default · copied to My Decks when edited")
+          : (auth.user ? (locale() === LOCALES.KO ? "내 계정 덱" : "My account deck") : (locale() === LOCALES.KO ? "이 기기에 저장된 내 덱" : "My deck on this device"))}</span>
         <span class="${validation.playable ? "valid-pill" : "invalid-pill"}">${validation.playable ? t("playable", locale()) : t("notPlayable", locale())}</span>
       </div>
       <div class="deck-editor-actions">
         <button data-action="deck-ai-recommend">선택 카드풀 AI 추천</button>
         <button data-action="deck-set-active" data-slot="0" ${validation.playable ? "" : "disabled"}>플레이어 1 덱으로 사용</button>
         <button data-action="deck-set-active" data-slot="1" ${validation.playable ? "" : "disabled"}>플레이어 2 덱으로 사용</button>
+        <button data-action="deck-export-open">${locale() === LOCALES.KO ? "덱 텍스트 복사" : "Copy Deck Text"}</button>
+        ${deck.isDefault ? "" : `<button class="danger" data-action="deck-delete-request">${locale() === LOCALES.KO ? "덱 삭제" : "Delete deck"}</button>`}
         <button class="primary" data-action="deck-save">저장</button>
       </div>
+      ${deckEditor.transferNotice ? `<p class="deck-transfer-notice ${deckEditor.transferNotice.tone}" role="${deckEditor.transferNotice.tone === "error" ? "alert" : "status"}">${escapeHtml(deckEditor.transferNotice.message)}</p>` : ""}
     </div>
     <nav class="deck-mobile-tabs" aria-label="${locale() === LOCALES.KO ? "덱 편집 단계" : "Deck editor sections"}">
       <button class="${deckEditor.mobileTab === "deck" ? "active" : ""}" data-action="deck-mobile-tab" data-tab="deck">${locale() === LOCALES.KO ? "덱 구성" : "Deck"}</button>
@@ -1397,6 +1503,69 @@ function deckEditorContent(deck, selectedCard) {
   `;
 }
 
+function deckDeleteConfirmationView() {
+  const deck = deckStore.decks.find((candidate) => candidate.id === deckEditor.pendingDeleteDeckId);
+  if (!deck || deck.isDefault || deck.id.startsWith("default-")) return "";
+  const name = escapeHtml(localizedDeckName(deck.name));
+  return `
+    <div class="deck-delete-modal">
+      <section class="deck-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="deck-delete-title" aria-describedby="deck-delete-description">
+        <span class="deck-delete-kicker">${locale() === LOCALES.KO ? "내 덱 삭제" : "Delete My Deck"}</span>
+        <h2 id="deck-delete-title">${locale() === LOCALES.KO ? "이 덱을 삭제하시겠습니까?" : "Delete this deck?"}</h2>
+        <p id="deck-delete-description">${locale() === LOCALES.KO
+          ? "삭제한 덱은 복구할 수 없습니다. 사용 중인 덱이라면 해당 자리에 기본 덱이 자동으로 지정됩니다."
+          : "This cannot be undone. If the deck is active, a default deck will replace it automatically."}</p>
+        <strong class="deck-delete-name">${name}</strong>
+        <div class="actions">
+          <button data-action="deck-delete-cancel" autofocus>${locale() === LOCALES.KO ? "취소" : "Cancel"}</button>
+          <button class="danger" data-action="deck-delete-confirm">${locale() === LOCALES.KO ? "영구 삭제" : "Delete permanently"}</button>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function deckTextTransferView() {
+  const dialog = deckEditor.transferDialog;
+  if (!dialog) return "";
+  const importing = dialog.mode === "import";
+  const korean = locale() === LOCALES.KO;
+  return `
+    <div class="deck-transfer-modal">
+      <section class="deck-transfer-dialog" role="dialog" aria-modal="true" aria-labelledby="deck-transfer-title">
+        <div class="deck-transfer-heading">
+          <div>
+            <span>${importing ? (korean ? "덱 가져오기" : "Import Deck") : (korean ? "덱 내보내기" : "Export Deck")}</span>
+            <h2 id="deck-transfer-title">${importing
+              ? (korean ? "덱 텍스트를 붙여넣으세요" : "Paste deck text")
+              : (korean ? "덱 텍스트를 복사하세요" : "Copy deck text")}</h2>
+          </div>
+          <button class="deck-transfer-close" data-action="deck-transfer-close" aria-label="${t("close", locale())}">×</button>
+        </div>
+        <p>${importing
+          ? (korean ? "Legend, Champion, MainDeck, Battlefields, Rune Pool, Sideboard 형식의 전체 목록을 붙여넣으세요." : "Paste the complete Legend, Champion, MainDeck, Battlefields, Rune Pool, and Sideboard list.")
+          : (korean ? "아래 내용을 그대로 복사해 다른 곳에 저장하거나 다시 가져올 수 있습니다." : "Copy the text below to save it elsewhere or import it again later.")}</p>
+        <textarea
+          class="deck-transfer-text"
+          data-action="deck-transfer-text"
+          aria-label="${importing ? (korean ? "가져올 덱 텍스트" : "Deck text to import") : (korean ? "내보낼 덱 텍스트" : "Exported deck text")}"
+          spellcheck="false"
+          ${importing ? "" : "readonly"}
+          placeholder="Legend:\n1 Master Yi, Wuju Bladesman\n\nChampion:\n1 Master Yi, Tempered\n\nMainDeck:\n3 First Mate"
+        >${escapeHtml(dialog.text || "")}</textarea>
+        ${dialog.error ? `<p class="deck-transfer-message error" role="alert">${escapeHtml(dialog.error)}</p>` : ""}
+        ${dialog.notice ? `<p class="deck-transfer-message success" role="status">${escapeHtml(dialog.notice)}</p>` : ""}
+        <div class="actions">
+          <button data-action="deck-transfer-close">${korean ? "닫기" : "Close"}</button>
+          ${importing
+            ? `<button class="primary" data-action="deck-import-confirm" ${dialog.text?.trim() ? "" : "disabled"}>${korean ? "이 텍스트로 덱 만들기" : "Create Deck From Text"}</button>`
+            : `<button class="primary" data-action="deck-export-copy">${korean ? "전체 텍스트 복사" : "Copy All Text"}</button>`}
+        </div>
+      </section>
+    </div>
+  `;
+}
+
 function deckSelectCard(deck) {
   const validation = validateDeckRecord(deck);
   const hero = deckHeroCard(deck);
@@ -1405,10 +1574,13 @@ function deckSelectCard(deck) {
     .filter(Boolean)
     .join(" / ");
   return `
-    <button class="deck-slot ${deck.id === deckEditor.selectedDeckId ? "selected" : ""}" data-action="deck-select" data-deck="${deck.id}">
+    <button class="deck-slot ${deck.id === deckEditor.selectedDeckId ? "selected" : ""}" data-action="deck-select" data-deck="${escapeHtml(deck.id)}">
       ${hero?.image ? `<img src="${hero.image}" alt="${cardName(hero)}" loading="lazy" />` : `<span class="deck-card-back"></span>`}
       ${activeLabels ? `<em>${activeLabels}</em>` : ""}
       <strong>${escapeHtml(localizedDeckName(deck.name))}</strong>
+      <span class="deck-owner-label ${deck.isDefault ? "default" : "personal"}">${deck.isDefault
+        ? (locale() === LOCALES.KO ? "기본 덱" : "Default")
+        : (locale() === LOCALES.KO ? "내 덱" : "My Deck")}</span>
       <span>${mainDeckCount(deck)}/${DECK_RULES.tournamentMainExact} ${t("main", locale())} · ${sideboardCount(deck)}/${DECK_RULES.sideboardMax} ${locale() === LOCALES.KO ? "사이드보드" : "SB"}</span>
       <small class="${validation.playable ? "valid-text" : "invalid-text"}">${validation.playable ? t("playable", locale()) : t("cannotPlayDeck", locale())}</small>
     </button>
@@ -1464,8 +1636,10 @@ function deckActionButtonsForCard(card, deck) {
   } else if (["unit", "spell", "gear"].includes(card.type)) {
     const count = cardCount(deck.main, card.cardNumber);
     const sideCountValue = cardCount(deck.sideboard, card.cardNumber);
-    buttons.push(`<button data-action="deck-add-main" data-card-number="${card.cardNumber}" ${registeredNameCount(deck, card.name) >= DECK_RULES.maxCopies || mainDeckCount(deck) >= DECK_RULES.tournamentMainExact ? "disabled" : ""}>주 덱 추가 ${count}/${DECK_RULES.maxCopies}</button>`);
-    buttons.push(`<button data-action="deck-add-sideboard" data-card-number="${card.cardNumber}" ${registeredNameCount(deck, card.name) >= DECK_RULES.maxCopies || sideboardCount(deck) >= DECK_RULES.sideboardMax ? "disabled" : ""}>${locale() === LOCALES.KO ? "사이드보드 추가" : "Add to Sideboard"} ${sideCountValue}/${DECK_RULES.maxCopies}</button>`);
+    const unlimited = cardAllowsUnlimitedCopies(card);
+    const maximumLabel = unlimited ? "∞" : DECK_RULES.maxCopies;
+    buttons.push(`<button data-action="deck-add-main" data-card-number="${card.cardNumber}" ${(!unlimited && registeredNameCount(deck, card.name) >= DECK_RULES.maxCopies) || mainDeckCount(deck) >= DECK_RULES.tournamentMainExact ? "disabled" : ""}>주 덱 추가 ${count}/${maximumLabel}</button>`);
+    buttons.push(`<button data-action="deck-add-sideboard" data-card-number="${card.cardNumber}" ${(!unlimited && registeredNameCount(deck, card.name) >= DECK_RULES.maxCopies) || sideboardCount(deck) >= DECK_RULES.sideboardMax ? "disabled" : ""}>${locale() === LOCALES.KO ? "사이드보드 추가" : "Add to Sideboard"} ${sideCountValue}/${maximumLabel}</button>`);
   }
   return buttons.join("") || `<button disabled>추가할 수 없음</button>`;
 }
@@ -1498,7 +1672,7 @@ function deckCompositionPanel(deck) {
     </div>
     <div class="deck-zone-block sideboard-deck-block">
       <div class="deck-zone-title"><strong>${locale() === LOCALES.KO ? "사이드보드" : "Sideboard"}</strong><span>${sideboardCount(deck)}/${DECK_RULES.sideboardMax}</span></div>
-      ${deck.sideboard.map(([number, count]) => compactDeckRow(cardByNumber(number), count, "sideboard")).join("") || `<p class="empty">${locale() === LOCALES.KO ? "사이드 카드를 최대 8장 추가할 수 있습니다." : "Add up to 8 sideboard cards."}</p>`}
+      ${deck.sideboard.map(([number, count]) => compactDeckRow(cardByNumber(number), count, "sideboard")).join("") || `<p class="empty">${locale() === LOCALES.KO ? `사이드 카드를 최대 ${DECK_RULES.sideboardMax}장 추가할 수 있습니다.` : `Add up to ${DECK_RULES.sideboardMax} sideboard cards.`}</p>`}
     </div>
     <div class="deck-zone-block rune-deck-block">
       <div class="deck-zone-title"><strong>${t("runeDeck", locale())}</strong><span>${runeDeckCount(deck)}/${DECK_RULES.runeExact}</span></div>
@@ -1611,7 +1785,8 @@ function libraryCard(card, deck) {
   const mainCount = cardCount(deck.main, card.cardNumber);
   const runeCardCount = card.type === "rune" ? cardCount(deck.runes, card.cardNumber) : 0;
   const displayedCount = card.type === "rune" ? runeCardCount : mainCount;
-  const disabled = ["unit", "spell", "gear"].includes(card.type) && mainCount >= DECK_RULES.maxCopies;
+  const disabled = ["unit", "spell", "gear"].includes(card.type)
+    && !cardAllowsUnlimitedCopies(card) && mainCount >= DECK_RULES.maxCopies;
   return `
     <button class="library-card ${deckEditor.selectedCardNumber === card.cardNumber ? "selected" : ""}" data-action="deck-card-focus" data-card-number="${card.cardNumber}">
       ${card.image ? `<img src="${card.image}" alt="${cardName(card)}" loading="lazy" />` : `<span class="deck-card-back"></span>`}
@@ -1623,26 +1798,40 @@ function libraryCard(card, deck) {
   `;
 }
 
-function loadDeckStore() {
+function loadDeckStore(storageKey = accountDeckStorageKey()) {
   const fallback = defaultDeckStore();
   try {
-    const parsed = JSON.parse(localStorage.getItem(DECK_STORAGE_KEY) || "null");
+    const parsed = JSON.parse(localStorage.getItem(storageKey) || "null");
     if (!parsed || !Array.isArray(parsed.decks)) return fallback;
     const fallbackById = new Map(fallback.decks.map((deck) => [deck.id, deck]));
-    const storedDecks = parsed.decks.length
-      ? parsed.decks.map(normalizeDeckRecord).map((deck) => {
-        const currentDefault = fallbackById.get(deck.id);
-        if (deck.id.startsWith("default-") && currentDefault && deck.source !== currentDefault.source) {
-          return currentDefault;
-        }
-        return deck;
-      })
-      : [];
-    const storedIds = new Set(storedDecks.map((deck) => deck.id));
-    const decks = [...storedDecks, ...fallback.decks.filter((deck) => !storedIds.has(deck.id))];
-    const activeDeckIds = Array.isArray(parsed.activeDeckIds) && parsed.activeDeckIds.length >= 2
-      ? parsed.activeDeckIds
+    const personalDecks = [];
+    const migratedActiveIds = new Map();
+    for (const value of parsed.decks) {
+      const deck = normalizeDeckRecord(value);
+      const currentDefault = fallbackById.get(deck.id);
+      if (!currentDefault) {
+        personalDecks.push(deck);
+        continue;
+      }
+      const changedDefault = deck.source === currentDefault.source
+        && (deck.name !== currentDefault.name || !sameDeckConfiguration(deck, currentDefault));
+      if (!changedDefault) continue;
+      const migrated = normalizeDeckRecord({
+        ...deck,
+        id: newDeckId(),
+        name: personalDeckName(deck.name),
+        isDefault: false
+      });
+      personalDecks.push(migrated);
+      migratedActiveIds.set(deck.id, migrated.id);
+    }
+    const personalById = new Map(personalDecks.map((deck) => [deck.id, deck]));
+    const decks = [...fallback.decks, ...personalById.values()];
+    const proposedActiveIds = Array.isArray(parsed.activeDeckIds) && parsed.activeDeckIds.length >= 2
+      ? parsed.activeDeckIds.slice(0, 2).map((id) => migratedActiveIds.get(id) || id)
       : fallback.activeDeckIds;
+    const availableIds = new Set(decks.map((deck) => deck.id));
+    const activeDeckIds = proposedActiveIds.map((id, index) => availableIds.has(id) ? id : fallback.activeDeckIds[index]);
     return { decks, activeDeckIds };
   } catch {
     return fallback;
@@ -1673,6 +1862,7 @@ function deckRecordFromRaw(id, name, rawDeck) {
     main: (rawDeck.main || []).map(([cardNumber, count]) => [cardNumber, count]),
     sideboard: (rawDeck.sideboard || []).map(([cardNumber, count]) => [cardNumber, count]),
     runes: (rawDeck.runes || []).map(([domain, count]) => [domain, count]),
+    isDefault: id.startsWith("default-"),
     createdAt: Date.now(),
     updatedAt: Date.now()
   });
@@ -1688,6 +1878,7 @@ function normalizeDeckRecord(deck) {
     main: normalizeCountEntries(deck.main),
     sideboard: normalizeCountEntries(deck.sideboard),
     runes: normalizeRuneEntries(deck.runes),
+    isDefault: Boolean(deck.isDefault || String(deck.id || "").startsWith("default-")),
     createdAt: deck.createdAt || Date.now(),
     updatedAt: deck.updatedAt || Date.now()
   };
@@ -1707,8 +1898,252 @@ function normalizeRuneEntries(entries) {
   return normalizeCountEntries(normalized);
 }
 
-function saveDeckStore() {
-  localStorage.setItem(DECK_STORAGE_KEY, JSON.stringify(deckStore));
+function saveDeckStore(options = {}) {
+  localStorage.setItem(accountDeckStorageKey(), JSON.stringify(deckStore));
+  if (options.sync !== false) scheduleAccountDeckSync();
+}
+
+function loadAuthState() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(AUTH_STORAGE_KEY) || "null");
+    const token = String(stored?.token || "");
+    const user = stored?.user?.id && stored?.user?.accountId
+      ? { id: String(stored.user.id), accountId: String(stored.user.accountId), createdAt: Number(stored.user.createdAt) || 0 }
+      : null;
+    return createAuthState({
+      token,
+      user,
+      status: token && user ? "checking" : "signed-out"
+    });
+  } catch {
+    return createAuthState();
+  }
+}
+
+function createAuthState(overrides = {}) {
+  return {
+    token: "",
+    user: null,
+    status: "signed-out",
+    mode: "login",
+    accountId: "",
+    password: "",
+    passwordConfirm: "",
+    error: "",
+    notice: "",
+    syncStatus: "idle",
+    panelOpen: !window.matchMedia?.("(max-width: 760px)").matches,
+    ...overrides
+  };
+}
+
+function saveAuthState() {
+  if (!auth.token || !auth.user) {
+    localStorage.removeItem(AUTH_STORAGE_KEY);
+    return;
+  }
+  localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify({
+    token: auth.token,
+    user: auth.user
+  }));
+}
+
+function accountDeckStorageKey(userId = auth?.user?.id) {
+  return userId ? `${DECK_STORAGE_KEY}.account.${userId}` : DECK_STORAGE_KEY;
+}
+
+async function restoreAccountSession() {
+  if (!auth.token || !auth.user) return;
+  auth.status = "checking";
+  try {
+    configureOnlineServer(await defaultMultiplayerServer());
+    const result = await fetchAccountSession(auth.token);
+    completeAuthentication(result, {
+      notice: locale() === LOCALES.KO ? `${result.user.accountId} 계정의 덱을 불러왔습니다.` : `Loaded decks for ${result.user.accountId}.`
+    });
+  } catch (error) {
+    clearAuthenticatedState();
+    auth.error = accountErrorText(error);
+  }
+  render();
+}
+
+async function submitAuthentication() {
+  if (auth.status === "working") return;
+  auth.error = "";
+  auth.notice = "";
+  const accountId = auth.accountId.trim();
+  if (accountId.length < 3) {
+    auth.error = locale() === LOCALES.KO ? "아이디를 3자 이상 입력해 주세요." : "Enter an account ID with at least 3 characters.";
+    render();
+    return;
+  }
+  if (auth.password.length < 8) {
+    auth.error = locale() === LOCALES.KO ? "비밀번호를 8자 이상 입력해 주세요." : "Enter a password with at least 8 characters.";
+    render();
+    return;
+  }
+  if (auth.mode === "signup" && auth.password !== auth.passwordConfirm) {
+    auth.error = locale() === LOCALES.KO ? "비밀번호 확인이 일치하지 않습니다." : "The password confirmation does not match.";
+    render();
+    return;
+  }
+
+  const guestDeckStore = auth.mode === "signup" ? accountDeckStorePayload() : null;
+  auth.status = "working";
+  render();
+  try {
+    configureOnlineServer(await defaultMultiplayerServer());
+    const result = auth.mode === "signup"
+      ? await signUpAccount(accountId, auth.password)
+      : await loginAccount(accountId, auth.password);
+    completeAuthentication(result, {
+      additionalDeckStore: guestDeckStore,
+      notice: auth.mode === "signup"
+        ? (locale() === LOCALES.KO ? "회원가입이 완료되었습니다. 내 덱이 이 계정에 저장됩니다." : "Your account is ready. Your decks will be saved to it.")
+        : (locale() === LOCALES.KO ? "로그인했습니다. 계정에 저장된 덱을 불러왔습니다." : "Signed in and loaded your saved decks.")
+    });
+    if (auth.mode === "signup") await flushAccountDeckSync();
+  } catch (error) {
+    auth.status = "signed-out";
+    auth.error = accountErrorText(error);
+  } finally {
+    auth.password = "";
+    auth.passwordConfirm = "";
+    render();
+  }
+}
+
+function completeAuthentication(result, options = {}) {
+  const serverStore = result.deckStore || { decks: [], activeDeckIds: [] };
+  const additional = options.additionalDeckStore || { decks: [], activeDeckIds: [] };
+  const personalById = new Map();
+  for (const deck of [...(serverStore.decks || []), ...(additional.decks || [])]) {
+    const normalized = normalizeDeckRecord({ ...deck, isDefault: false });
+    if (!normalized.id.startsWith("default-")) personalById.set(normalized.id, normalized);
+  }
+  auth.token = result.token || auth.token;
+  auth.user = result.user;
+  auth.status = "signed-in";
+  auth.error = "";
+  auth.notice = options.notice || "";
+  auth.syncStatus = "idle";
+  auth.accountId = result.user.accountId;
+  saveAuthState();
+  applyAccountDeckStore({
+    decks: [...personalById.values()],
+    activeDeckIds: additional.activeDeckIds?.length ? additional.activeDeckIds : serverStore.activeDeckIds
+  });
+}
+
+function applyAccountDeckStore(value) {
+  const defaults = defaultDeckStore();
+  const personal = (Array.isArray(value?.decks) ? value.decks : [])
+    .map((deck) => normalizeDeckRecord({ ...deck, isDefault: false }))
+    .filter((deck) => !deck.id.startsWith("default-"));
+  const decks = [...defaults.decks, ...new Map(personal.map((deck) => [deck.id, deck])).values()];
+  const available = new Set(decks.map((deck) => deck.id));
+  const proposed = Array.isArray(value?.activeDeckIds) ? value.activeDeckIds.slice(0, 2) : [];
+  const activeDeckIds = [0, 1].map((index) => available.has(proposed[index]) ? proposed[index] : defaults.activeDeckIds[index]);
+  deckStore = { decks, activeDeckIds };
+  deckEditor.selectedDeckId = activeDeckIds[0] || decks[0]?.id;
+  deckEditor.selectedCardNumber = deckHeroCard(getSelectedDeckRecord())?.cardNumber || null;
+  saveDeckStore({ sync: false });
+}
+
+async function signOutAccount() {
+  if (!auth.user || auth.status === "working") return;
+  const token = auth.token;
+  auth.status = "working";
+  render();
+  await flushAccountDeckSync();
+  try {
+    await logoutAccount(token);
+  } catch {
+    // Local sign-out still completes if the server is temporarily unavailable.
+  }
+  clearAuthenticatedState();
+  auth.notice = locale() === LOCALES.KO ? "로그아웃했습니다." : "Signed out.";
+  render();
+}
+
+function clearAuthenticatedState() {
+  if (deckSyncTimer) clearTimeout(deckSyncTimer);
+  deckSyncTimer = null;
+  auth = createAuthState({ notice: auth.notice || "" });
+  saveAuthState();
+  deckStore = loadDeckStore(DECK_STORAGE_KEY);
+  deckEditor.selectedDeckId = deckStore.activeDeckIds[0] || deckStore.decks[0]?.id;
+  deckEditor.selectedCardNumber = deckHeroCard(getSelectedDeckRecord())?.cardNumber || null;
+}
+
+function accountDeckStorePayload() {
+  return {
+    decks: deckStore.decks
+      .filter((deck) => !deck.isDefault && !deck.id.startsWith("default-"))
+      .map((deck) => structuredClone({ ...deck, isDefault: false })),
+    activeDeckIds: deckStore.activeDeckIds.slice(0, 2)
+  };
+}
+
+function scheduleAccountDeckSync() {
+  if (!auth.token || !auth.user) return;
+  auth.syncStatus = "saving";
+  if (deckSyncTimer) clearTimeout(deckSyncTimer);
+  deckSyncTimer = setTimeout(() => {
+    deckSyncTimer = null;
+    void enqueueAccountDeckSync();
+  }, 450);
+}
+
+function flushAccountDeckSync() {
+  if (deckSyncTimer) clearTimeout(deckSyncTimer);
+  deckSyncTimer = null;
+  return enqueueAccountDeckSync();
+}
+
+function enqueueAccountDeckSync() {
+  if (!auth.token || !auth.user) return Promise.resolve(true);
+  const token = auth.token;
+  const payload = accountDeckStorePayload();
+  auth.syncStatus = "saving";
+  deckSyncQueue = deckSyncQueue
+    .catch(() => false)
+    .then(async () => {
+      try {
+        await saveAccountDeckStore(token, payload);
+        if (auth.token === token) {
+          auth.syncStatus = "saved";
+          auth.error = "";
+        }
+        return true;
+      } catch (error) {
+        if (auth.token === token) {
+          auth.syncStatus = "error";
+          auth.error = locale() === LOCALES.KO
+            ? `덱을 서버에 저장하지 못했습니다: ${accountErrorText(error)}`
+            : `Could not save decks to the server: ${accountErrorText(error)}`;
+        }
+        return false;
+      } finally {
+        if (appView === "menu") render();
+      }
+    });
+  return deckSyncQueue;
+}
+
+function accountErrorText(error) {
+  const korean = locale() === LOCALES.KO;
+  const byCode = {
+    account_exists: korean ? "이미 사용 중인 아이디입니다." : "That account ID is already in use.",
+    invalid_credentials: korean ? "아이디 또는 비밀번호가 올바르지 않습니다." : "The account ID or password is incorrect.",
+    invalid_account_id: korean ? "아이디는 문자·숫자·점·밑줄·하이픈으로 3~24자여야 합니다." : "Use 3–24 letters, numbers, dots, underscores, or hyphens.",
+    invalid_password: korean ? "비밀번호는 8~128자여야 합니다." : "Passwords must be 8–128 characters.",
+    invalid_session: korean ? "로그인이 만료되었습니다. 다시 로그인해 주세요." : "Your sign-in expired. Please sign in again.",
+    expired_session: korean ? "로그인이 만료되었습니다. 다시 로그인해 주세요." : "Your sign-in expired. Please sign in again."
+  };
+  return byCode[error?.code]
+    || (korean ? localizeKoreanNetworkError(error?.message || "서버에 연결하지 못했습니다.") : (error?.message || "Could not connect to the server."));
 }
 
 function loadOnlineSeat() {
@@ -1911,7 +2346,7 @@ function activeDeckRecords() {
 }
 
 function createNewDeckRecord() {
-  const id = `deck-${Date.now()}`;
+  const id = newDeckId();
   return normalizeDeckRecord({
     id,
     name: "새 덱",
@@ -1924,6 +2359,158 @@ function createNewDeckRecord() {
   });
 }
 
+function openDeckImportDialog() {
+  deckEditor.transferNotice = null;
+  deckEditor.transferDialog = { mode: "import", text: "", error: "", notice: "" };
+}
+
+function openDeckExportDialog(deck) {
+  if (!deck) return;
+  try {
+    deckEditor.transferNotice = null;
+    deckEditor.transferDialog = {
+      mode: "export",
+      text: formatDeckText(deck, { cardByNumber, championMatchesLegend }),
+      error: "",
+      notice: ""
+    };
+  } catch (error) {
+    deckEditor.transferNotice = {
+      tone: "error",
+      message: locale() === LOCALES.KO
+        ? `덱 텍스트를 만들지 못했습니다: ${error?.message || error}`
+        : `Could not create deck text: ${error?.message || error}`
+    };
+  }
+}
+
+function importDeckTextValue(text) {
+  try {
+    const imported = deckRecordFromText(text, {
+      cards: ALL_CARDS,
+      cardNames: (card) => [translateCardName(card, LOCALES.KO)],
+      cardAllowed: (card) => cardAllowedInPool(card, deckEditor.poolId),
+      championMatchesLegend
+    });
+    const record = normalizeDeckRecord({
+      ...imported,
+      id: newDeckId(),
+      name: importedDeckName(imported),
+      source: "Pasted deck text",
+      isDefault: false,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    });
+    deckStore.decks.push(record);
+    deckEditor.selectedDeckId = record.id;
+    deckEditor.selectedCardNumber = deckHeroCard(record)?.cardNumber || null;
+    deckEditor.mobileView = "edit";
+    deckEditor.mobileTab = "deck";
+    deckEditor.transferDialog = null;
+    deckEditor.transferNotice = {
+      tone: "success",
+      message: locale() === LOCALES.KO
+        ? "붙여넣은 텍스트로 새 덱을 만들었습니다."
+        : "Created a new deck from the pasted text."
+    };
+    saveDeckStore();
+  } catch (error) {
+    const details = Array.isArray(error?.issues) ? error.issues.join(" · ") : String(error?.message || error);
+    if (deckEditor.transferDialog?.mode === "import") {
+      deckEditor.transferDialog.error = locale() === LOCALES.KO
+        ? `덱을 가져오지 못했습니다: ${details}`
+        : `Could not import the deck: ${details}`;
+      deckEditor.transferDialog.notice = "";
+    }
+  }
+}
+
+function importedDeckName(imported) {
+  const legend = cardByNumber(imported?.legend);
+  const baseName = legend ? cardName(legend) : (locale() === LOCALES.KO ? "가져온" : "Imported");
+  return `${baseName} ${locale() === LOCALES.KO ? "덱" : "Deck"}`.slice(0, 48);
+}
+
+async function copyDeckTransferText() {
+  const dialog = deckEditor.transferDialog;
+  if (dialog?.mode !== "export") return;
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error("Clipboard API unavailable");
+    await navigator.clipboard.writeText(dialog.text);
+    dialog.error = "";
+    dialog.notice = locale() === LOCALES.KO ? "전체 덱 텍스트를 복사했습니다." : "Copied all deck text.";
+  } catch (error) {
+    const textarea = app.querySelector('textarea[data-action="deck-transfer-text"]');
+    textarea?.focus();
+    textarea?.select();
+    const copied = Boolean(textarea && document.execCommand?.("copy"));
+    dialog.notice = copied
+      ? (locale() === LOCALES.KO ? "전체 덱 텍스트를 복사했습니다." : "Copied all deck text.")
+      : "";
+    dialog.error = copied
+      ? ""
+      : (locale() === LOCALES.KO ? "자동 복사가 차단되었습니다. 텍스트 필드에서 직접 복사해 주세요." : "Automatic copying was blocked. Copy directly from the text field.");
+  }
+  render();
+}
+
+function newDeckId() {
+  if (globalThis.crypto?.randomUUID) return `deck-${globalThis.crypto.randomUUID()}`;
+  return `deck-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function personalDeckName(name) {
+  const localized = localizedDeckName(name || (locale() === LOCALES.KO ? "새 덱" : "New Deck"));
+  const suffix = locale() === LOCALES.KO ? " (내 덱)" : " (My Deck)";
+  return localized.endsWith(suffix) ? localized : `${localized}${suffix}`.slice(0, 48);
+}
+
+function ensureSelectedDeckIsPersonal() {
+  const selected = getSelectedDeckRecord();
+  if (!selected?.isDefault) return selected;
+  const copy = normalizeDeckRecord({
+    ...structuredClone(selected),
+    id: newDeckId(),
+    name: personalDeckName(selected.name),
+    isDefault: false,
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  });
+  deckStore.decks.push(copy);
+  deckStore.activeDeckIds = deckStore.activeDeckIds.map((id) => id === selected.id ? copy.id : id);
+  deckEditor.selectedDeckId = copy.id;
+  return copy;
+}
+
+function deletePersonalDeck(deckId) {
+  const index = deckStore.decks.findIndex((deck) => deck.id === deckId);
+  const deck = deckStore.decks[index];
+  if (!deck || deck.isDefault || deck.id.startsWith("default-")) {
+    deckEditor.pendingDeleteDeckId = null;
+    return false;
+  }
+
+  deckStore.decks.splice(index, 1);
+  const defaults = defaultDeckStore();
+  const availableIds = new Set(deckStore.decks.map((candidate) => candidate.id));
+  deckStore.activeDeckIds = deckStore.activeDeckIds.map((activeId, slotIndex) => {
+    if (activeId !== deck.id && availableIds.has(activeId)) return activeId;
+    const defaultId = defaults.activeDeckIds[slotIndex];
+    if (availableIds.has(defaultId)) return defaultId;
+    return deckStore.decks.find((candidate) => validateDeckRecord(candidate).playable)?.id || deckStore.decks[0]?.id || "";
+  });
+
+  const nextDeck = deckStore.decks[Math.min(index, deckStore.decks.length - 1)] || deckStore.decks[0] || null;
+  deckEditor.selectedDeckId = nextDeck?.id || null;
+  deckEditor.selectedCardNumber = deckHeroCard(nextDeck)?.cardNumber || null;
+  deckEditor.aiRecommendation = null;
+  deckEditor.transferNotice = null;
+  deckEditor.pendingDeleteDeckId = null;
+  saveDeckStore();
+  void flushAccountDeckSync();
+  return true;
+}
+
 function selectedDeckLibraryCard() {
   return cardByNumber(deckEditor.selectedCardNumber) || deckHeroCard(getSelectedDeckRecord());
 }
@@ -1933,7 +2520,7 @@ function filteredDeckCards() {
   return ALL_CARDS.filter((card) => {
     if (!cardAllowedInPool(card, deckEditor.poolId)) return false;
     if (deckEditor.packId !== "all" && packForCard(card)?.id !== deckEditor.packId) return false;
-    if (deckEditor.type !== "all" && card.type !== deckEditor.type) return false;
+    if (deckEditor.type !== "all" && !cardHasType(card, deckEditor.type)) return false;
     if (deckEditor.domain !== "all" && !(card.domains || []).includes(deckEditor.domain)) return false;
     if (deckEditor.maxEnergy !== "all" && Number(card.energy ?? 0) > Number(deckEditor.maxEnergy)) return false;
     return !query || cardSearchText(card, locale()).toLowerCase().includes(query);
@@ -1971,6 +2558,15 @@ function registeredNameCount(deck, name) {
   ), 0);
 }
 
+function uiCardEffects(card) {
+  if (!Array.isArray(card?.effects)) return [];
+  return card.effects.filter((effect) => effect && typeof effect === "object");
+}
+
+function cardAllowsUnlimitedCopies(card) {
+  return uiCardEffects(card).some((effect) => effect.timing === "static" && effect.kind === "unlimitedDeckCopies");
+}
+
 function runeDeckCount(deck) {
   return deckRuneDeckCount(deck);
 }
@@ -1984,7 +2580,7 @@ function cardCount(entries, cardNumber) {
 }
 
 function mutateSelectedDeck(mutator) {
-  const deck = getSelectedDeckRecord();
+  const deck = ensureSelectedDeckIsPersonal();
   if (!deck) return;
   mutator(deck);
   deck.updatedAt = Date.now();
@@ -2005,7 +2601,8 @@ function addMainDeckCard(deck, cardNumber) {
   const card = cardByNumber(cardNumber);
   if (!card || !["unit", "spell", "gear"].includes(card.type)) return;
   const count = cardCount(deck.main, cardNumber);
-  if (mainDeckCount(deck) >= DECK_RULES.tournamentMainExact || registeredNameCount(deck, card.name) >= DECK_RULES.maxCopies) return;
+  if (mainDeckCount(deck) >= DECK_RULES.tournamentMainExact
+    || (!cardAllowsUnlimitedCopies(card) && registeredNameCount(deck, card.name) >= DECK_RULES.maxCopies)) return;
   setCountEntry(deck.main, cardNumber, count + 1);
 }
 
@@ -2016,7 +2613,8 @@ function removeMainDeckCard(deck, cardNumber) {
 function addSideboardCard(deck, cardNumber) {
   const card = cardByNumber(cardNumber);
   if (!card || !["unit", "spell", "gear"].includes(card.type)) return;
-  if (sideboardCount(deck) >= DECK_RULES.sideboardMax || registeredNameCount(deck, card.name) >= DECK_RULES.maxCopies) return;
+  if (sideboardCount(deck) >= DECK_RULES.sideboardMax
+    || (!cardAllowsUnlimitedCopies(card) && registeredNameCount(deck, card.name) >= DECK_RULES.maxCopies)) return;
   setCountEntry(deck.sideboard, cardNumber, cardCount(deck.sideboard, cardNumber) + 1);
 }
 
@@ -3150,7 +3748,7 @@ function gamePanel(player) {
         ${realtimeFeedbackOverlay()}
         <div class="location-band" data-scroll-key="battlefield-scroll">
           <span>${t("battlefield", locale())}</span>
-          <section class="battlefield-mat" aria-label="${t("battlefields", locale())}">
+          <section class="battlefield-mat ${game.battlefields.length > 2 ? "has-extra-battlefields" : ""}" aria-label="${t("battlefields", locale())}">
             ${battlefieldColumns()}
           </section>
         </div>
@@ -3356,7 +3954,9 @@ function paymentPanel() {
           <strong>${displayCard.cardNumber ? cardName(displayCard) : localizedDynamicText(displayCard.name)}</strong>
           <span>${payment.source === "effectEnergy"
             ? t("effectPayment", locale())
-            : payment.source === "hideCard" ? t("payCost", locale()) : t("playCost", locale())}</span>
+            : payment.source === "activatedAbility"
+              ? (locale() === LOCALES.KO ? "활성화 비용" : "Activation cost")
+              : payment.source === "hideCard" ? t("payCost", locale()) : t("playCost", locale())}</span>
         </aside>
         <div class="payment-cost-area">
           ${optionalPaymentControls(payment)}
@@ -3382,6 +3982,7 @@ function paymentCostSummary(player, card, payment, energyNeeded, poolEnergySelec
   const parts = [t("costFor", locale(), { name: cardName(card) })];
   if (energyNeeded > 0) parts.push(`${t("energy", locale())} ${(payment.energyRuneIds || []).length + poolEnergySelected}/${energyNeeded}`);
   if (totalPowerAmount(powerCost) > 0) parts.push(`${t("power", locale())} ${powerProgress(player, card, payment)}`);
+  if ((payment.xpCost || 0) > 0) parts.push(`XP ${player.xp || 0}/${payment.xpCost}`);
   if (parts.length === 1) parts.push(t("noCost", locale()));
   return parts.join(" - ");
 }
@@ -3649,9 +4250,12 @@ function graveyardPanel(playerId) {
       </div>
       <div class="cards graveyard-cards" data-scroll-key="graveyard-${player.id}">
         ${player.trash.map((card) => `
-          <article class="${imageCardClass(card, "graveyard-card")}" data-card-id="${card.instanceId}">
-            ${cardImage(card)}
-          </article>
+          <div class="graveyard-card-entry">
+            <article class="${imageCardClass(card, "graveyard-card")}" data-card-id="${card.instanceId}">
+              ${cardImage(card)}
+            </article>
+            ${player.id === viewerPlayerId() ? trashActions(card, player).join("") : ""}
+          </div>
         `).join("") || `<p class="empty">${t("trashEmpty", locale())}</p>`}
       </div>
     </section>
@@ -3724,9 +4328,11 @@ function choicePanel() {
   if (choice.effect === "alphaStrikeDamage") return alphaStrikeDamagePanel(choice);
   if (choice.effect === "payDeflect") return deflectPaymentPanel(choice);
   if (choice.effect === "predictChoice") return predictChoicePanel(choice);
+  if (choice.effect === "observedTopDeckSelfAbility") return observedTopDeckSelfAbilityPanel(choice);
   if (choice.effect === "acknowledgeReveal") return revealConfirmationPanel(choice);
   const instruction = choiceEffectInstruction(choice);
   const repeatProgress = repeatedDamageProgress(choice);
+  const searchable = choice.options.length > 12;
   return `
     <section class="choice-panel modal-panel ${choice.effect === "sabotage" ? "reveal-panel" : ""}">
       <div class="section-head">
@@ -3739,9 +4345,19 @@ function choicePanel() {
         ${choice.optional ? `<button data-action="decline-effect">${t("decline", locale())}</button>` : ""}
       </div>
       ${choiceRevealedCards(choice)}
-      <div class="choice-grid">
+      ${searchable ? `
+        <label class="choice-search">
+          <span>${locale() === LOCALES.KO ? "선택지 검색" : "Search choices"}</span>
+          <input type="search" data-action="choice-search" autocomplete="off"
+            placeholder="${locale() === LOCALES.KO ? "카드 이름이나 선택지 입력" : "Type a card name or choice"}"
+            aria-controls="pending-choice-grid" />
+          <small data-choice-search-count>${locale() === LOCALES.KO ? `전체 ${choice.options.length}개` : `${choice.options.length} total`}</small>
+        </label>
+      ` : ""}
+      <div class="choice-grid" id="pending-choice-grid">
         ${choice.options.map(choiceOptionButton).join("")}
       </div>
+      ${searchable ? `<p class="choice-search-empty" data-choice-search-empty hidden>${locale() === LOCALES.KO ? "일치하는 선택지가 없습니다." : "No matching choices."}</p>` : ""}
     </section>
   `;
 }
@@ -3864,6 +4480,48 @@ function predictChoicePanel(choice) {
   `;
 }
 
+function observedTopDeckSelfAbilityPanel(choice) {
+  const preview = choice.card;
+  const descriptions = locale() === LOCALES.KO
+    ? {
+        "banish-play": "이 카드를 추방한 뒤 표시된 대체 비용으로 즉시 사용합니다.",
+        banish: "이 카드를 추방하지만 사용하지 않습니다.",
+        leave: "이 카드를 주 덱에 그대로 두고 원래 효과 처리를 계속합니다."
+      }
+    : {
+        "banish-play": "Banish this card, then immediately play it for the shown replacement cost.",
+        banish: "Banish this card without playing it.",
+        leave: "Leave this card in the Main Deck and continue the original effect."
+      };
+  return `
+    <section class="choice-panel modal-panel predict-choice-panel observed-top-deck-choice-panel">
+      <div class="section-head">
+        <div>
+          <h2>${cardName(preview)}</h2>
+          <span>${locale() === LOCALES.KO
+            ? "주 덱 위에서 확인한 이 카드를 어떻게 처리할지 선택해 주세요."
+            : choice.prompt}</span>
+        </div>
+      </div>
+      <div class="predict-choice-content">
+        <div class="predict-card-preview">
+          ${choiceOptionImage({ cardId: preview.instanceId, card: preview, revealed: true, label: cardName(preview) })}
+          <strong>${cardName(preview)}</strong>
+          <button type="button" class="choice-card-view" data-action="view-choice-card" data-card-id="${preview.instanceId}">${t("viewFullCard", locale())}</button>
+        </div>
+        <div class="predict-actions observed-top-deck-actions">
+          ${choice.options.map((option) => `
+            <button type="button" class="predict-action ${option.id === "banish-play" ? "keep-action" : option.id === "banish" ? "recycle-action" : ""}" data-action="choose-effect" data-choice="${option.id}">
+              <strong>${localizedChoiceOptionLabel(option)}</strong>
+              <span>${descriptions[option.id] || ""}</span>
+            </button>
+          `).join("")}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
 function localizedChoicePrompt(choice) {
   if (choice.effect === "triggerOrder") return t("triggerOrderHelp", locale());
   if (locale() === "en") return choice.prompt;
@@ -3920,11 +4578,15 @@ function choiceOptionButton(option) {
   const context = option.cardId ? choiceCardContext(option.cardId, preview) : null;
   const ownership = choiceOwnership(context, preview);
   const location = context ? choiceLocationLabel(context) : "";
+  const selectionState = option.selected
+    ? (locale() === LOCALES.KO ? "다시 선택하도록 지정됨" : "Marked to remake")
+    : "";
   return `
     <div class="choice-option-wrap">
-      <button type="button" class="choice-option ${option.cardId ? `card-choice-option choice-owner-${ownership.tone}` : "text-choice-option"} ${option.disabled ? "disabled-choice" : ""}" data-action="choose-effect" data-choice="${option.id}" data-card-id="${option.cardId || ""}" ${option.disabled ? "disabled" : ""}>
+      <button type="button" class="choice-option ${option.cardId ? `card-choice-option choice-owner-${ownership.tone}` : "text-choice-option"} ${option.selected ? "is-selected" : ""} ${option.confirmControlledChoices ? "confirm-choice-option" : ""} ${option.disabled ? "disabled-choice" : ""}" data-action="choose-effect" data-choice="${option.id}" data-card-id="${option.cardId || ""}" ${option.confirmControlledChoices ? "" : `aria-pressed="${Boolean(option.selected)}"`} ${option.disabled ? "disabled aria-disabled=\"true\"" : ""}>
         ${option.cardId ? choiceOptionImage(option) : ""}
         <span class="choice-card-name">${label}</span>
+        ${selectionState ? `<small class="choice-selection-state">${selectionState}</small>` : ""}
         ${option.cardId ? `<span class="choice-card-context"><b>${ownership.label}</b>${location ? `<small>${location}</small>` : ""}</span>` : ""}
       </button>
       ${preview && !preview.redacted ? `<button type="button" class="choice-card-view" data-action="view-choice-card" data-card-id="${preview.instanceId}">${t("viewFullCard", locale())}</button>` : ""}
@@ -3994,7 +4656,7 @@ function localizedChoiceOptionLabel(option) {
   if (labels[localAbilityId]) return labels[localAbilityId];
   if (labels[option.id]) return labels[option.id];
   if (/^Pay Energy \d+$/i.test(option.label || "")) return option.label.replace(/^Pay Energy/i, t("payEnergy", locale()));
-  if (/^(Do not|Decline|Keep cards)/i.test(option.label || "")) return t("decline", locale());
+  if (/^(Decline|Keep cards)/i.test(option.label || "")) return t("decline", locale());
   return localizeKoreanChoiceLabel(localizedDynamicText(option.label));
 }
 
@@ -4056,10 +4718,10 @@ function choiceEffectInstruction(choice) {
       moveDestination: `${sourceName}: 선택한 유닛의 이동 목적지를 선택하세요.`,
       chooseBattlefield: `${sourceName}: 이 효과가 적용될 전장을 선택하세요.`,
       moonfallEnemyMove: `${sourceName}: 선택한 전장으로 적 유닛을 이동할지 선택하세요.`,
-      counterSpell: `${sourceName}: 무효화할 체인의 주문을 선택하세요.`,
-      counterChainCard: `${sourceName}: 무효화할 체인의 주문을 선택하세요.`,
-      counterUnlessPayEnergy: `${sourceName}: 조종자가 에너지를 지불하지 않으면 무효화할 주문을 선택하세요.`,
-      counterUnlessPay: `${sourceName}: 조종자가 에너지를 지불하지 않으면 무효화할 주문을 선택하세요.`,
+      counterSpell: `${sourceName}: 차단할 체인의 주문을 선택하세요.`,
+      counterChainCard: `${sourceName}: 차단할 체인의 주문을 선택하세요.`,
+      counterUnlessPayEnergy: `${sourceName}: 조종자가 에너지를 지불하지 않으면 차단할 주문을 선택하세요.`,
+      counterUnlessPay: `${sourceName}: 조종자가 에너지를 지불하지 않으면 차단할 주문을 선택하세요.`,
       alphaStrike: `${sourceName}: 선제 피해를 입힐 아군 유닛을 선택하세요.`,
       trashSpell: `${sourceName}: 폐기장에서 사용할 주문을 선택하세요.`,
       alphaStrikeDamage: `${sourceName}: 합법적인 적 유닛들에게 피해를 배정하세요.`,
@@ -4731,8 +5393,7 @@ function championSelectPanel() {
 }
 
 function championChoice(player, champion) {
-  const legendTags = new Set((player.legend?.tags || []).filter((tag) => !["Champion", "Signature", "Signature Spell", "Action", "Reaction", "Unit", "Spell", "Gear"].includes(tag)));
-  const matchesLegend = (champion.tags || []).some((tag) => legendTags.has(tag));
+  const matchesLegend = championMatchesLegend(champion, player.legend);
   const disabled = !matchesLegend || game.championSelectPlayerId !== player.id || (isOnlineGame() && player.id !== viewerPlayerId()) || !viewerCanAct() || champion.redacted;
   return `
     <article class="image-card champion-choice" data-card-id="${champion.instanceId}">
@@ -4858,6 +5519,7 @@ function playerSide(player, side) {
           <div class="player-stats" data-scroll-key="player-stats-${player.id}">
             <span class="xp-stat">${t("level", locale())} ${player.xp || 0}</span>
             <span class="deck-stat" data-effect="${drawAnimation ? "draw" : ""}" aria-label="${t("deck", locale())} ${player.mainDeck.length}">${t("deck", locale())} <b>${player.mainDeck.length}</b></span>
+            ${(player.burnOuts || 0) > 0 ? `<span class="burnout-stat" title="${locale() === LOCALES.KO ? "소진될 때마다 상대가 1점을 획득합니다." : "Each Burn Out gives an opponent 1 point."}">${locale() === LOCALES.KO ? "소진" : "Burn Out"} <b>${player.burnOuts}</b></span>` : ""}
             <span class="hand-stat">${t("hand", locale())} ${handCountVisibleToViewer(game, player, viewerPlayerId())}</span>
             <button class="trash-button" data-action="toggle-graveyard" data-player="${player.id}" title="${t("viewTrashTitle", locale(), { name: playerName(player) })}">
               ${t("trash", locale())} ${player.trash.length}
@@ -5083,7 +5745,7 @@ function viewerCanAct() {
 }
 
 function visibleBattlefields() {
-  const fields = game.battlefields.slice(0, 2);
+  const fields = [...game.battlefields];
   return viewerPlayerId() === game.players[1]?.id ? fields.reverse() : fields;
 }
 
@@ -5161,7 +5823,7 @@ function cardStatusBadges(card) {
 
 function cardStatusClassNames(card) {
   return visibleCardStatuses(card)
-    .filter((status) => ["stunned", "buff", "temporaryMight", "lastingMight", "keywords", "cannotMove"].includes(status.kind))
+    .filter((status) => ["stunned", "empowered", "buff", "temporaryMight", "lastingMight", "keywords", "cannotMove"].includes(status.kind))
     .map((status) => `status-${status.kind.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`)
     .join(" ");
 }
@@ -5414,6 +6076,12 @@ function statusLine(card) {
   if (card.exhausted) items.push(t("exhausted", locale()));
   if (card.damage) items.push(`${card.damage} ${t("damageShort", locale())}`);
   if (card.stunned) items.push(t("stunned", locale()));
+  if ((card.empoweredCount || 0) > 0) {
+    const maximum = Math.max(card.empoweredCount || 0, card.maxEmpowerCount || 1);
+    items.push(maximum > 1
+      ? `${locale() === LOCALES.KO ? "강화됨" : "Empowered"} ${card.empoweredCount}/${maximum}`
+      : (locale() === LOCALES.KO ? "강화됨" : "Empowered"));
+  }
   if (card.buffs) items.push(t("buff", locale()));
   if (card.mightModifier) items.push(`${card.mightModifier > 0 ? "+" : ""}${card.mightModifier} ${t("might", locale())}`);
   return `<span class="status-line">${items.join(" / ")}</span>`;
@@ -5532,7 +6200,21 @@ function selectedActions(card, context) {
   if (context.zone === "legend") return activatedActions(card);
   if (context.zone === "rune") return activatedActions(card);
   if (context.zone === "hidden") return hiddenActions(card, context);
+  if (context.zone === "trash") return trashActions(card, player);
   return [];
+}
+
+function trashActions(card, player) {
+  if (!player || player.id !== viewerPlayerId()) return [];
+  return uiLegalActions
+    .filter((action) => action.kind === "beginPlayCardFromTrash" && action.cardId === card.instanceId)
+    .map((command) => {
+      const field = game.battlefields.find((candidate) => candidate.instanceId === command.destination);
+      const label = locale() === LOCALES.KO
+        ? `폐기장에서 사용${field ? ` → ${battlefieldName(field)}` : " → 기지"}`
+        : `Play from trash${field ? ` → ${battlefieldName(field)}` : " → Base"}`;
+      return `<button class="graveyard-play-button" data-action="begin-play-from-trash" data-card="${card.instanceId}" data-destination="${command.destination}">${label}</button>`;
+    });
 }
 
 function handActions(card, player) {
@@ -5700,7 +6382,7 @@ function pruneMoveSelection() {
 }
 
 function activationBlockedReason(card) {
-  const activatedEffects = (card.effects || []).filter((effect) => effect.timing === "activated");
+  const activatedEffects = uiCardEffects(card).filter((effect) => effect.timing === "activated");
   if (!activatedEffects.length) return "";
   if (!activatedEffects.some((effect) => effect.abilityKeywords?.includes("Reaction"))
     && !card.tags?.includes("Reaction") && !card.keywords?.includes("Reaction")) return "";
@@ -5792,7 +6474,7 @@ function runeSummary(player) {
 
 function runeChip(rune) {
   const spent = rune.exhausted ? " spent" : "";
-  const canRecycle = (rune.effects || []).some((effect) => effect.timing === "activated" && effect.kind === "addPower" && effect.exhaust === false);
+  const canRecycle = uiCardEffects(rune).some((effect) => effect.timing === "activated" && effect.kind === "addPower" && effect.exhaust === false);
   return `
     <button type="button" class="rune rune-card-chip${spent}" data-action="select-card" data-card="${rune.instanceId}" style="--rune:${rune.color}" title="${cardText(rune)}">
       ${rune.image ? `<img src="${rune.image}" alt="${cardName(rune)}" loading="lazy" />` : `<span class="rune-swatch"></span>`}
@@ -5908,7 +6590,7 @@ function hasKeyword(card, keyword) {
   if ((card.keywords || []).some((item) => item.toLowerCase() === keyword.toLowerCase())) return true;
   const player = game.players.find((candidate) => candidate.id === card.controllerId)
     || game.players.find((candidate) => candidate.id === card.ownerId);
-  for (const effect of card.effects || []) {
+  for (const effect of uiCardEffects(card)) {
     if (effect.timing !== "levelStatic" || effect.kind !== "gainKeywords") continue;
     if ((player?.xp || 0) < (effect.level || 0)) continue;
     if ((effect.keywords || []).some((item) => item.toLowerCase() === keyword.toLowerCase())) return true;
@@ -6123,6 +6805,11 @@ app.addEventListener("click", (event) => {
       handOpen = false;
       dispatchGameCommand({ kind: "beginPlayCard", cardId: card, destination }, () => beginPlayCard(game, card, destination));
     }
+    if (action === "begin-play-from-trash") {
+      graveyardOpenPlayerId = null;
+      dispatchGameCommand({ kind: "beginPlayCardFromTrash", cardId: card, destination }, () =>
+        beginPlayCardFromTrash(game, card, destination));
+    }
     if (action === "begin-champion") {
       handOpen = false;
       dispatchGameCommand({ kind: "beginPlayChampion", destination }, () => beginPlayChampion(game, destination));
@@ -6165,6 +6852,23 @@ app.addEventListener("click", (event) => {
 });
 
 app.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && appView === "decks" && deckEditor.transferDialog) {
+    event.preventDefault();
+    deckEditor.transferDialog = null;
+    render();
+    return;
+  }
+  if (event.key === "Escape" && appView === "decks" && deckEditor.pendingDeleteDeckId) {
+    event.preventDefault();
+    deckEditor.pendingDeleteDeckId = null;
+    render();
+    return;
+  }
+  if (event.key === "Enter" && event.target instanceof HTMLInputElement && event.target.dataset.action?.startsWith("auth-")) {
+    event.preventDefault();
+    void submitAuthentication();
+    return;
+  }
   if (!['Enter', ' '].includes(event.key)) return;
   const cardNode = event.target.closest?.("[data-card-id][role='button']");
   if (!cardNode || !app.contains(cardNode)) return;
@@ -6176,8 +6880,34 @@ app.addEventListener("keydown", (event) => {
 app.addEventListener("input", (event) => {
   try {
     const target = event.target;
+    if (target instanceof HTMLTextAreaElement && target.dataset.action === "deck-transfer-text") {
+      if (deckEditor.transferDialog) {
+        deckEditor.transferDialog.text = target.value;
+        deckEditor.transferDialog.error = "";
+        deckEditor.transferDialog.notice = "";
+      }
+      const confirm = app.querySelector('[data-action="deck-import-confirm"]');
+      if (confirm) confirm.disabled = !target.value.trim();
+      return;
+    }
     if (!(target instanceof HTMLInputElement)) return;
     const action = target.dataset.action;
+    if (action === "choice-search") {
+      const panel = target.closest(".choice-panel");
+      const normalized = target.value.trim().toLocaleLowerCase(locale() === LOCALES.KO ? "ko-KR" : "en-US");
+      const options = [...(panel?.querySelectorAll(".choice-grid > .choice-option") || [])];
+      let visible = 0;
+      for (const option of options) {
+        const matches = !normalized || option.textContent.toLocaleLowerCase(locale() === LOCALES.KO ? "ko-KR" : "en-US").includes(normalized);
+        option.hidden = !matches;
+        if (matches) visible += 1;
+      }
+      const count = panel?.querySelector("[data-choice-search-count]");
+      if (count) count.textContent = locale() === LOCALES.KO ? `${visible}개 표시` : `${visible} shown`;
+      const empty = panel?.querySelector("[data-choice-search-empty]");
+      if (empty) empty.hidden = visible !== 0;
+      return;
+    }
     if (action === "replay-seek" && replayMode) {
       pauseReplayPlayback();
       applyReplayFrame(Number(target.value));
@@ -6197,6 +6927,21 @@ app.addEventListener("input", (event) => {
     }
     if (action === "online-code-input") {
       online.joinCode = target.value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+      return;
+    }
+    if (action === "auth-account-id") {
+      auth.accountId = target.value;
+      auth.error = "";
+      return;
+    }
+    if (action === "auth-password") {
+      auth.password = target.value;
+      auth.error = "";
+      return;
+    }
+    if (action === "auth-password-confirm") {
+      auth.passwordConfirm = target.value;
+      auth.error = "";
       return;
     }
     if (action === "deck-search") {
@@ -6287,11 +7032,33 @@ function renderDeckSearchOnly() {
 function handleShellClick(event) {
   const button = event.target.closest("button");
   if (!button) return;
-  const { action, deck, cardNumber, domain, slot, room, tab, tutorial } = button.dataset;
-  if (action === "menu-home") appView = "menu";
+  const { action, deck, cardNumber, domain, slot, room, tab, tutorial, mode } = button.dataset;
+  if (action === "auth-mode" && ["login", "signup"].includes(mode)) {
+    auth.mode = mode;
+    auth.panelOpen = true;
+    auth.password = "";
+    auth.passwordConfirm = "";
+    auth.error = "";
+    auth.notice = "";
+  }
+  if (action === "auth-close") {
+    auth.panelOpen = false;
+    auth.password = "";
+    auth.passwordConfirm = "";
+    auth.error = "";
+  }
+  if (action === "auth-submit") void submitAuthentication();
+  if (action === "auth-logout") void signOutAccount();
+  if (action === "menu-home") {
+    appView = "menu";
+    deckEditor.transferDialog = null;
+    deckEditor.pendingDeleteDeckId = null;
+  }
   if (action === "menu-decks") {
     appView = "decks";
     deckEditor.mobileView = "list";
+    deckEditor.transferDialog = null;
+    deckEditor.pendingDeleteDeckId = null;
   }
   if (action === "menu-multiplayer") {
     connectDefaultMultiplayer();
@@ -6315,12 +7082,18 @@ function handleShellClick(event) {
   if (action === "online-ready") onlineReady();
   if (action === "online-leave") onlineLeaveRoom();
   if (action === "deck-select") {
+    deckEditor.transferNotice = null;
+    deckEditor.transferDialog = null;
+    deckEditor.pendingDeleteDeckId = null;
     deckEditor.selectedDeckId = deck;
     deckEditor.selectedCardNumber = deckHeroCard(getSelectedDeckRecord())?.cardNumber || null;
     deckEditor.mobileView = "edit";
     deckEditor.mobileTab = "deck";
   }
   if (action === "deck-new") {
+    deckEditor.transferNotice = null;
+    deckEditor.transferDialog = null;
+    deckEditor.pendingDeleteDeckId = null;
     const record = createNewDeckRecord();
     deckStore.decks.push(record);
     deckEditor.selectedDeckId = record.id;
@@ -6331,7 +7104,21 @@ function handleShellClick(event) {
   }
   if (action === "deck-mobile-list") deckEditor.mobileView = "list";
   if (action === "deck-mobile-tab" && ["deck", "runes", "cards", "detail"].includes(tab)) deckEditor.mobileTab = tab;
-  if (action === "deck-save") saveDeckStore();
+  if (action === "deck-delete-request") {
+    const selected = getSelectedDeckRecord();
+    if (selected && !selected.isDefault && !selected.id.startsWith("default-")) deckEditor.pendingDeleteDeckId = selected.id;
+  }
+  if (action === "deck-delete-cancel") deckEditor.pendingDeleteDeckId = null;
+  if (action === "deck-delete-confirm") deletePersonalDeck(deckEditor.pendingDeleteDeckId);
+  if (action === "deck-save") {
+    saveDeckStore();
+    void flushAccountDeckSync();
+  }
+  if (action === "deck-import-open") openDeckImportDialog();
+  if (action === "deck-export-open") openDeckExportDialog(getSelectedDeckRecord());
+  if (action === "deck-transfer-close") deckEditor.transferDialog = null;
+  if (action === "deck-import-confirm") importDeckTextValue(deckEditor.transferDialog?.text || "");
+  if (action === "deck-export-copy") void copyDeckTransferText();
   if (action === "deck-ai-recommend") void runDeckAiRecommendation();
   if (action === "deck-ai-apply") {
     const changes = deckEditor.aiRecommendation?.changes || [];
@@ -6464,6 +7251,7 @@ function coachDecisionCard(item) {
 enableLocalPresentationPreview();
 loadAiCheckpoint();
 loadAiGenerationCatalog();
+void restoreAccountSession();
 
 if (online.mode === "online" && online.roomId && online.playerToken) {
   connectOnlineEvents();
@@ -6647,6 +7435,51 @@ function activeAiGeneration() {
 function activeAiGames() {
   return neuralAiModel?.gamesTrained ?? aiModel.gamesTrained ?? 0;
 }
+
+// Browser smoke tests use the same production renderers without repeatedly
+// rebuilding the full 823-card deck editor DOM.
+window.__riftboundCardRenderAudit = (cardNumber) => {
+  const card = CARD_BY_NUMBER.get(cardNumber);
+  if (!card) return null;
+  const previousLocale = settings.locale;
+  settings.locale = LOCALES.KO;
+  try {
+    const auditDeck = {
+      id: "card-render-audit",
+      name: "Card render audit",
+      legend: null,
+      battlefields: [],
+      main: [],
+      sideboard: [],
+      runes: []
+    };
+    const renderedCard = {
+      ...structuredClone(card),
+      instanceId: `render-audit-${card.cardNumber}`,
+      ownerId: game.players[0]?.id || "p1",
+      controllerId: game.players[0]?.id || "p1",
+      exhausted: false,
+      damage: 0,
+      stunned: false,
+      buffs: 0,
+      mightModifier: 0,
+      attachments: []
+    };
+    return {
+      cardNumber: card.cardNumber,
+      name: cardName(card),
+      text: cardText(card),
+      type: cardType(card),
+      image: card.image || null,
+      libraryHtml: libraryCard(card, auditDeck),
+      detailHtml: deckDetailCard(card, auditDeck),
+      modalHtml: fullCardModal(renderedCard)
+    };
+  } finally {
+    settings.locale = previousLocale;
+  }
+};
+window.__riftboundCardRenderAuditNumbers = () => ALL_CARDS.map((card) => card.cardNumber);
 
 window.addEventListener("error", (event) => {
   reportUiException(event.error || event.message, "window error");

@@ -147,6 +147,10 @@ function advanceUntil(game, predicate, limit = 20) {
       passShowdown(game, game.showdown.priorityPlayerId);
       continue;
     }
+    if (game.actionChain) {
+      passShowdown(game, game.actionChain.priorityPlayerId);
+      continue;
+    }
     break;
   }
   return predicate();
@@ -1982,6 +1986,24 @@ test("global, resource, and zone-changing spell families preserve literal outcom
     resolveEffect(game, player, instance(cards.possession, player.id, "possession"));
     assert.equal(player.base.includes(enemy), true);
     assert.equal(enemy.controllerId, player.id);
+    assert.equal(enemy.exhausted, true);
+  }
+
+  {
+    const game = ruleGame({ interactive: false });
+    const player = game.players[0];
+    const opponent = game.players[1];
+    const enemy = plainUnit(opponent.id, "hostile-takeover-enemy", 3);
+    enemy.exhausted = true;
+    game.battlefields = [battlefield("hostile-takeover-field", [enemy], opponent.id)];
+    resolveEffect(game, player, instance(cards.sfd202hostileTakeover, player.id, "hostile-takeover"));
+    assert.equal(game.battlefields[0].units.includes(enemy), true);
+    assert.equal(enemy.controllerId, player.id);
+    assert.equal(enemy.exhausted, false);
+    assert.equal(game.battlefields[0].controlledBy, player.id);
+    assert.equal(endTurn(game).ok, true);
+    assert.equal(opponent.base.includes(enemy), true);
+    assert.equal(enemy.controllerId, opponent.id);
   }
 
   {
@@ -2016,6 +2038,299 @@ test("global, resource, and zone-changing spell families preserve literal outcom
     assert.equal(player.trash.includes(ordinary), true);
     assert.equal(player.hideIgnoringCostsUntilTurnSequence, game.turnSequence);
   }
+});
+
+test("Spiritforged attached effect text remains executable after attachment", () => {
+  function attachWithForge(game, player, unit, gear) {
+    game.battlefields.push({
+      ...instance(cards.forgeOfTheFluft, player.id, `forge-${gear.instanceId}`),
+      units: [],
+      hidden: [],
+      controlledBy: player.id
+    });
+    player.base.push(gear);
+    assert.equal(activateCard(game, player.legend.instanceId).ok, true);
+    assert.equal(unit.attachments.some((attachment) => attachment.instanceId === gear.instanceId), true);
+  }
+
+  {
+    const game = ruleGame({ interactive: false });
+    const player = game.players[0];
+    const opponent = game.players[1];
+    const carrier = plainUnit(player.id, "rabadon-carrier", 3);
+    const crown = instance(cards.sfd191rabadonsDeathcrown, player.id, "rabadons-deathcrown");
+    const target = plainUnit(opponent.id, "rabadon-damage-target", 20);
+    player.base = [carrier];
+    opponent.base = [target];
+    attachWithForge(game, player, carrier, crown);
+    const spell = plainSpell(player.id, "rabadon-spell");
+    assert.equal(applyDamage(game, player, spell, target, 2), 5);
+  }
+
+  {
+    const game = ruleGame({ interactive: false });
+    const player = game.players[0];
+    const carrier = plainUnit(player.id, "shurelya-carrier", 3);
+    const ally = plainUnit(player.id, "shurelya-ally", 3);
+    const requiem = instance(cards.sfd192shurelyasRequiem, player.id, "shurelyas-requiem");
+    const source = battlefield("shurelya-source", [carrier, ally], player.id);
+    const destination = battlefield("shurelya-destination", [], player.id);
+    game.battlefields = [source, destination];
+    attachWithForge(game, player, carrier, requiem);
+    const move = moveUnits(game, [ally.instanceId, carrier.instanceId], destination.instanceId);
+    assert.equal(move.ok, true, move.message || "Shurelya grants Ganking to itself and other friendly units here");
+  }
+
+  {
+    const game = ruleGame({ interactive: false });
+    const player = game.players[0];
+    const carrier = plainUnit(player.id, "brutalizer-carrier", 3);
+    const brutalizer = instance(cards.sfd042brutalizer, player.id, "brutalizer");
+    player.base = [carrier];
+    attachWithForge(game, player, carrier, brutalizer);
+    assert.equal(currentMight(game, carrier), 6, "the attached-this-turn bonus stacks with printed attached Might");
+    assert.equal(endTurn(game).ok, true);
+    assert.equal(currentMight(game, carrier), 4, "the attached-this-turn bonus expires on the next turn");
+  }
+
+  {
+    const game = ruleGame({ interactive: false });
+    const player = game.players[0];
+    const opponent = game.players[1];
+    const carrier = plainUnit(player.id, "sacred-shears-carrier", 2);
+    const shears = instance(cards.sfd172sacredShears, player.id, "sacred-shears");
+    const drawCard = plainSpell(player.id, "sacred-shears-draw");
+    player.base = [carrier];
+    player.mainDeck = [drawCard];
+    attachWithForge(game, player, carrier, shears);
+    resolveEffect(game, opponent, instance(cards.finalSpark, opponent.id, "sacred-shears-damage"));
+    assert.equal(player.trash.some((card) => card.instanceId === carrier.instanceId), true);
+    assert.equal(player.hand.some((card) => card.instanceId === drawCard.instanceId), true,
+      "Sacred Shears grants its attached unit a Deathknell draw");
+  }
+});
+
+test("Skyfall of Areion makes every attached hold and conquer effect interchangeable", () => {
+  function skyfallCarrier(playerId, id) {
+    const unit = plainUnit(playerId, id, 3);
+    unit.effects = [
+      { timing: "hold", kind: "draw", amount: 2 },
+      { timing: "conquer", kind: "buffSelf", amount: 2 }
+    ];
+    return unit;
+  }
+
+  function attachSkyfall(game, player, unit) {
+    const skyfall = instance(cards.sfd030skyfallOfAreion, player.id, `skyfall-${unit.instanceId}`);
+    game.battlefields.push({
+      ...instance(cards.forgeOfTheFluft, player.id, `skyfall-forge-${unit.instanceId}`),
+      units: [],
+      hidden: [],
+      controlledBy: player.id
+    });
+    player.base.push(skyfall);
+    assert.equal(activateCard(game, player.legend.instanceId).ok, true);
+    assert.equal(unit.attachments.some((attachment) => attachment.instanceId === skyfall.instanceId), true);
+  }
+
+  {
+    const game = ruleGame({ interactive: false });
+    const player = game.players[0];
+    const opponent = game.players[1];
+    const unit = skyfallCarrier(player.id, "skyfall-conquer-carrier");
+    const draws = [plainSpell(player.id, "skyfall-conquer-draw-1"), plainSpell(player.id, "skyfall-conquer-draw-2")];
+    player.base = [unit];
+    player.mainDeck = draws;
+    game.battlefields = [battlefield("skyfall-conquer-field", [], opponent.id)];
+    attachSkyfall(game, player, unit);
+    assert.equal(moveUnits(game, [unit.instanceId], "skyfall-conquer-field").ok, true);
+    assert.equal(advanceUntil(game, () => unit.buffs === 1 && player.hand.length === 2), true,
+      `a conquest resolves both effects (buffs=${unit.buffs}, hand=${player.hand.length}, log=${game.log.join(" | ")})`);
+  }
+
+  {
+    const game = ruleGame({ interactive: false });
+    const player = game.players[0];
+    const unit = skyfallCarrier(player.id, "skyfall-hold-carrier");
+    const draws = [plainSpell(player.id, "skyfall-hold-draw-1"), plainSpell(player.id, "skyfall-hold-draw-2")];
+    player.mainDeck = draws;
+    game.battlefields = [battlefield("skyfall-hold-field", [unit], player.id)];
+    attachSkyfall(game, player, unit);
+    startTurn(game);
+    assert.equal(unit.buffs, 1, "a hold resolves the converted conquer effect");
+    assert.equal(player.hand.length, 2, "a hold still resolves the printed hold effect");
+  }
+});
+
+test("Unleashed triggered costs are paid exactly once before their effects resolve", () => {
+  {
+    const game = ruleGame({ interactive: false });
+    const player = game.players[0];
+    const opponent = game.players[1];
+    const conqueror = plainUnit(player.id, "deceiver-conqueror", 3);
+    const discarded = plainSpell(player.id, "deceiver-discarded");
+    const kept = plainSpell(player.id, "deceiver-kept");
+    const deceiver = instance(cards.unl199deceiver, player.id, "deceiver-legend");
+    const field = battlefield("deceiver-field", [], opponent.id);
+    player.legend = deceiver;
+    player.base = [conqueror];
+    player.hand = [discarded, kept];
+    game.battlefields = [field];
+
+    assert.equal(moveUnits(game, [conqueror.instanceId], field.instanceId).ok, true);
+    assert.equal(advanceUntil(game, () => player.hand.length === 1
+      && field.units.some((unit) => unit.cardNumber === "TOKEN-REFLECTION")), true,
+      `Deceiver's conquer trigger resolves (${game.log.join(" | ")})`);
+    const reflection = field.units.find((unit) => unit.cardNumber === "TOKEN-REFLECTION");
+    assert.equal(player.hand.length, 1, `Deceiver discards exactly one chosen cost card (${game.log.join(" | ")})`);
+    assert.equal(player.trash.some((card) => card.instanceId === discarded.instanceId), true);
+    assert.equal(deceiver.exhausted, true);
+    assert.ok(reflection, "Deceiver creates the Reflection after its compound cost is paid");
+    assert.equal(reflection.exhausted, false);
+    assert.equal(reflection.keywords.includes("Temporary"), true);
+    assert.equal(reflection.might, conqueror.might);
+  }
+
+  {
+    const game = ruleGame({ interactive: false });
+    const player = game.players[0];
+    const opponent = game.players[1];
+    const conqueror = plainUnit(player.id, "green-father-conqueror", 3);
+    const greenFather = instance(cards.unl195greenFather, player.id, "green-father-legend");
+    const energy = rune(DOMAINS.CALM, player.id, "green-father-energy");
+    const field = battlefield("green-father-field", [], opponent.id);
+    player.legend = greenFather;
+    player.base = [conqueror];
+    player.runes = [energy];
+    game.battlefields = [field];
+
+    assert.equal(moveUnits(game, [conqueror.instanceId], field.instanceId).ok, true);
+    assert.equal(advanceUntil(game, () => game.battlefields[0].cardNumber === "TOKEN-BRUSH"), true,
+      `Green Father's conquer trigger resolves (exhausted=${greenFather.exhausted}, field=${game.battlefields[0].cardNumber || game.battlefields[0].id}; ${game.log.join(" | ")})`);
+    assert.equal(greenFather.exhausted, true);
+    assert.equal(game.battlefields[0].cardNumber, "TOKEN-BRUSH",
+      "Green Father resolves after the shared exhaust-cost step instead of asking to exhaust twice");
+  }
+
+  {
+    const game = ruleGame({ interactive: false });
+    const player = game.players[0];
+    const played = freeToPlay(plainUnit(player.id, "blood-rose-played", 2));
+    const bloodRose = instance(cards.unl109bloodRose, player.id, "blood-rose");
+    const energy = rune(DOMAINS.FURY, player.id, "blood-rose-energy");
+    player.base = [bloodRose];
+    player.hand = [played];
+    player.runes = [energy];
+
+    assert.equal(playCard(game, played.instanceId, "base").ok, true);
+    assert.equal(player.xp, 1, "Blood Rose gains XP after paying one Energy once");
+    assert.equal(energy.exhausted, true);
+  }
+
+  {
+    const game = ruleGame({ interactive: false });
+    const player = game.players[0];
+    const opponent = game.players[1];
+    const khaZix = instance(cards.unl119khaZixEvolvingHunter, player.id, "khazix-evolving");
+    const enemy = plainUnit(opponent.id, "khazix-target", 9);
+    player.base = [khaZix];
+    player.xp = 3;
+    game.battlefields = [battlefield("khazix-field", [enemy], opponent.id)];
+
+    assert.equal(moveUnits(game, [khaZix.instanceId], "khazix-field").ok, true);
+    assert.equal(advanceUntil(game, () => player.xp === 0 && enemy.damage === currentMight(game, khaZix)), true);
+    assert.equal(player.xp, 0, "Kha'Zix spends exactly 3 XP");
+  }
+
+  {
+    const game = ruleGame({ interactive: false });
+    const player = game.players[0];
+    const gloomist = instance(cards.unl193gloomist, player.id, "gloomist-legend");
+    const drawn = plainSpell(player.id, "gloomist-draw");
+    player.legend = gloomist;
+    player.mainDeck = [drawn];
+    game.battlefields = [battlefield("gloomist-field", [plainUnit(player.id, "gloomist-holder")], player.id)];
+
+    startTurn(game);
+    assert.equal(gloomist.exhausted, true);
+    assert.equal(player.hand.some((card) => card.instanceId === drawn.instanceId), true,
+      "Gloomist draws after the shared exhaust cost has already been paid");
+  }
+});
+
+test("Deceiver lets its controller declare the copied unit and discard cost before finalization", () => {
+  const game = ruleGame({ interactive: true });
+  const player = game.players[0];
+  const opponent = game.players[1];
+  const conqueror = plainUnit(player.id, "deceiver-interactive-conqueror", 4);
+  const kept = plainSpell(player.id, "deceiver-interactive-kept");
+  const discarded = plainSpell(player.id, "deceiver-interactive-discarded");
+  const deceiver = instance(cards.unl199deceiver, player.id, "deceiver-interactive-legend");
+  const field = battlefield("deceiver-interactive-field", [], opponent.id);
+  player.legend = deceiver;
+  player.base = [conqueror];
+  player.hand = [kept, discarded];
+  game.battlefields = [field];
+
+  assert.equal(moveUnits(game, [conqueror.instanceId], field.instanceId).ok, true);
+  for (let step = 0; step < 12 && game.pendingChoice?.effect !== "declareOptionalTrigger"; step += 1) {
+    assert.ok(game.showdown || game.actionChain, "the conquest stays on a visible Chain until its trigger is declared");
+    const chain = game.showdown || game.actionChain;
+    assert.equal(passShowdown(game, chain.priorityPlayerId).ok, true);
+  }
+  assert.equal(game.pendingChoice?.effect, "declareOptionalTrigger");
+  assert.equal(chooseEffectOption(game, "use-optional-trigger").ok, true);
+
+  assert.equal(game.pendingChoice?.effect, "discardExhaustPlayReflectionCopy");
+  assert.equal(chooseEffectOption(game, conqueror.instanceId).ok, true);
+  assert.equal(game.pendingChoice?.effect, "declareTriggerCost");
+  assert.deepEqual(
+    game.pendingChoice.options.filter((option) => option.cardId).map((option) => option.cardId),
+    [kept.instanceId, discarded.instanceId],
+    "the cost prompt exposes every card in hand instead of silently choosing one"
+  );
+  assert.equal(chooseEffectOption(game, discarded.instanceId).ok, true);
+
+  assert.equal(player.hand.some((card) => card.instanceId === kept.instanceId), true);
+  assert.equal(player.hand.some((card) => card.instanceId === discarded.instanceId), false);
+  assert.equal(player.trash.some((card) => card.instanceId === discarded.instanceId), true);
+  assert.equal(deceiver.exhausted, true);
+  assert.equal(advanceUntil(game, () => field.units.some((unit) => unit.cardNumber === "TOKEN-REFLECTION"), 30), true);
+  const reflection = field.units.find((unit) => unit.cardNumber === "TOKEN-REFLECTION");
+  assert.equal(reflection?.might, conqueror.might);
+  assert.equal(reflection?.exhausted, false);
+});
+
+test("Hostile Takeover starts combat when another enemy remains and recalls at end of turn", () => {
+  const game = ruleGame({ interactive: true });
+  const player = game.players[0];
+  const opponent = game.players[1];
+  const stolen = plainUnit(opponent.id, "hostile-combat-stolen", 10);
+  const defender = plainUnit(opponent.id, "hostile-combat-defender", 1);
+  const field = battlefield("hostile-combat-field", [stolen, defender], opponent.id);
+  game.battlefields = [field];
+
+  resolveEffect(game, player, instance(cards.sfd202hostileTakeover, player.id, "hostile-combat-takeover"));
+  assert.equal(chooseEffectOption(game, stolen.instanceId).ok, true);
+  assert.equal(stolen.controllerId, player.id);
+  assert.equal(game.showdown?.battlefieldId, field.instanceId);
+  assert.equal(game.showdown?.attackerId, player.id);
+
+  for (let index = 0; index < 30 && (game.showdown || game.actionChain || game.pendingChoice); index += 1) {
+    if (game.pendingChoice) {
+      const option = game.pendingChoice.options.find((candidate) => !["skip", "decline"].includes(candidate.id))
+        || game.pendingChoice.options[0];
+      assert.ok(option);
+      assert.equal(chooseEffectOption(game, option.id).ok, true);
+      continue;
+    }
+    const chain = game.showdown || game.actionChain;
+    assert.equal(passShowdown(game, chain.priorityPlayerId).ok, true);
+  }
+  const ended = endTurn(game);
+  assert.equal(ended.ok, true, ended.message);
+  assert.equal(opponent.base.some((card) => card.instanceId === stolen.instanceId), true);
+  assert.equal(stolen.controllerId, opponent.id);
 });
 
 test("targeted and multi-player spell families preserve conditional and staged outcomes", () => {
@@ -2223,9 +2538,11 @@ test("complex spell continuations and battlefield static permissions complete ev
     const game = ruleGame({ interactive: true });
     const player = game.players[0];
     const opponent = game.players[1];
-    const opposingSpell = plainSpell(opponent.id, "mystic-reversal-target", 4);
-    opposingSpell.declaredPlayTargets = [{ effect: "damageUnit", targetId: "old-target" }];
-    opposingSpell.declaredPlayChoices = [{ effect: "mode", optionId: "old-mode" }];
+    const oldTarget = plainUnit(player.id, "old-target", 3);
+    player.base = [oldTarget];
+    const opposingSpell = instance({ ...cards.stupefy, energy: 4 }, opponent.id, "mystic-reversal-target");
+    opposingSpell.declaredPlayTargets = [{ effect: "modifyMight", targetId: oldTarget.instanceId }];
+    opposingSpell.declaredPlayChoices = [];
     game.phase = "showdown";
     game.showdown = {
       battlefieldId: "mystic-reversal-field",
@@ -2245,7 +2562,12 @@ test("complex spell continuations and battlefield static permissions complete ev
     assert.equal(opposingSpell.controllerId, player.id);
     assert.equal(game.pendingChoice?.effect, "gainControlNewChoices");
     chooseEffectOption(game, "new");
-    assert.deepEqual(opposingSpell.declaredPlayTargets, []);
+    assert.equal(game.pendingChoice?.effect, "gainControlChoiceSelection");
+    chooseEffectOption(game, "target:0");
+    chooseEffectOption(game, "confirm-controlled-choices");
+    assert.equal(game.pendingChoice?.effect, "declarePlayTarget");
+    chooseEffectOption(game, oldTarget.instanceId);
+    assert.deepEqual(opposingSpell.declaredPlayTargets, [{ effect: "modifyMight", targetId: oldTarget.instanceId }]);
     assert.deepEqual(opposingSpell.declaredPlayChoices, []);
   }
 

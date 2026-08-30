@@ -19,7 +19,7 @@ export default card({
       "energy": 3,
       "power": [
         {
-          "domain": DOMAINS.ANY,
+          "domain": DOMAINS.CHAOS,
           "amount": 1
         }
       ],

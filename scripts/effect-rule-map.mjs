@@ -19,9 +19,10 @@ export const EFFECT_RULE_FAMILIES = Object.freeze([
   family("replace-action", ["438"], kindMatches(/save|replace/i)),
   family("choices", ["355", "402"], (effect) => {
     const definition = effectDefinition(effect);
-    return Boolean(definition?.targetProvider || definition?.declaration || effect.target || effect.optional);
+    return Boolean(definition?.targetProvider || definition?.declaration || definition?.flow === "choice" || effect.target || effect.optional
+      || effect.kind === "nameCard");
   }),
-  family("costs-and-payment", ["356", "357", "358", "403", "404", "405"], (effect) => /cost|pay|spend|reduction|ignore/i.test(effect.kind)
+  family("costs-and-payment", ["356", "357", "358", "403", "404", "405"], (effect) => /cost|pay|spend|reduction|discount|ignore/i.test(effect.kind)
     || Boolean(effect.additionalPower || effect.costEnergy || effect.costRecycleTrash || effect.spendBuff || effect.exhaustSelf)),
   family("draw", ["413"], kindMatches(/draw/i)),
   family("exhaust", ["414"], kindMatches(/exhaust/i)),
@@ -45,14 +46,14 @@ export const EFFECT_RULE_FAMILIES = Object.freeze([
   family("swap", ["433"], kindMatches(/swap/i)),
   family("attachment", ["434", "716", "718.5.d", "719.3.a"], kindMatches(/attach|equip/i)),
   family("predict", ["436"], kindMatches(/predict/i)),
-  family("prevent", ["437"], kindMatches(/prevent|cant|cannot/i)),
+  family("prevent", ["437"], kindMatches(/prevent|protect|cant|cannot/i)),
   family("create-token", ["439", "180", "182.1.d", "183"], kindMatches(/token|recruit/i)),
   family("recall", ["449", "450", "451"], kindMatches(/return.*Base|recall/i)),
   family("zone-change", ["110", "416.1.c"], kindMatches(/return.*Hand|returnTrash|returnHidden|possession|steal/i)),
   family("scoring", ["462", "464", "465", "466", "467"], (effect) => /score|conquer|hold|gainPoint|victory/i.test(`${effect.timing}:${effect.kind}`)),
   family("might-and-layers", ["137.1", "468", "472", "709", "710"], (effect) => /might/i.test(effect.kind)
     || (Number.isFinite(effect.amount) && !ACTUAL_BUFF_KINDS.has(effect.kind) && !/draw|damage|channel|ready|recycle|energy|point|xp/i.test(effect.kind))),
-  family("keywords", ["721"], kindMatches(/keyword|shield|deflect|assault|ganking|tank|temporary/i)),
+  family("keywords", ["721"], kindMatches(/keyword|shield|deflect|assault|ganking|accelerate|tank|temporary|tags/i)),
   family("runes-and-power", ["164", "430"], kindMatches(/rune|power/i)),
   family("control", ["188", "187.6"], kindMatches(/control|possession|steal/i)),
   family("temporary-expiration", ["317.2.c"], (effect) => effect.temporary === true || /temporary|thisTurn/i.test(effect.kind)),
@@ -60,6 +61,8 @@ export const EFFECT_RULE_FAMILIES = Object.freeze([
   family("battlefield-flow", ["187", "319.8", "341", "344"], (effect) => /battlefield|showdown/i.test(`${effect.timing}:${effect.kind}`)),
   family("xp", ["728", "729", "730"], (effect) => /xp/i.test(effect.kind) || Number.isFinite(effect.xp)),
   family("copy-and-linked-effects", ["393", "395", "397"], kindMatches(/copy/i)),
+  family("deck-copy-limit", ["103.2.b"], (effect) => effect.kind === "unlimitedDeckCopies"),
+  family("granted-abilities", ["363", "376", "377"], kindMatches(/gainActivatedAbility/i)),
   family("named-mass-kill", ["355", "428"], (effect) => effect.kind === "divineJudgment"),
   family("extra-turn-queue", ["317.3"], (effect) => effect.kind === "extraTurn"),
   family("named-group-choice-draw", ["355", "413"], (effect) => effect.kind === "partyFavors"),

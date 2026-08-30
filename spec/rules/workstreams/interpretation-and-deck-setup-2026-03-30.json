@@ -42,7 +42,7 @@
       "status": "verified",
       "disposition": "executable",
       "ruleIds": ["103.2.a.1", "103.2.a.2", "103.2.a.3", "103.2.b.1", "103.2.b.2", "103.2.c"],
-      "evidenceTests": ["deck validation requires a real Champion card and rejects off-identity runes", "tournament decks require exactly 40 Main Deck cards and at most 8 Sideboard cards", "same-name copies of the chosen champion count as chosen champions"],
+      "evidenceTests": ["deck validation requires a real Champion card and rejects off-identity runes", "tournament decks require exactly 40 Main Deck cards and at most 10 Sideboard cards", "same-name copies of the chosen champion count as chosen champions"],
       "remaining": "None; Core minimum and tournament exact-size formats are distinct, the matching Champion must be in the Main Deck, and same-name Chosen Champions retain their designation."
     },
     {

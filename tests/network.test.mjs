@@ -86,7 +86,8 @@ test("multiplayer API preflight enables cross-origin app clients", async () => {
   assert.equal(await handleMultiplayerRequest({ method: "OPTIONS", url: "/api/rooms" }, response), true);
   assert.equal(status, 204);
   assert.equal(headers["access-control-allow-origin"], "*");
-  assert.equal(headers["access-control-allow-headers"], "content-type");
+  assert.equal(headers["access-control-allow-headers"], "authorization, content-type");
+  assert.match(headers["access-control-allow-methods"], /PUT/u);
   assert.equal(ended, true);
 });
 

@@ -26,12 +26,20 @@ const KEYWORD_TRANSLATIONS = {
   Vision: { ko: "통찰", confirmed: true },
   Hunt: { ko: "추적", confirmed: false },
   Ambush: { ko: "기습", confirmed: false },
+  Backline: { ko: "후방", confirmed: false },
+  Buff: { ko: "버프", confirmed: false },
   Equip: { ko: "장착", confirmed: false },
   Repeat: { ko: "반복", confirmed: false },
+  "Quick-Draw": { ko: "속사", confirmed: false },
   Weaponmaster: { ko: "무기의 달인", confirmed: false },
   Predict: { ko: "예측", confirmed: false },
   Stun: { ko: "기절", confirmed: true },
-  Add: { ko: "추가", confirmed: false },
+  Add: { ko: "추가", confirmed: true },
+  Mighty: { ko: "강력", confirmed: false },
+  Empower: { ko: "강화", confirmed: true },
+  Empowered: { ko: "강화됨", confirmed: true },
+  Flow: { ko: "흐름", confirmed: false },
+  Unique: { ko: "고유", confirmed: false },
   Level: { ko: "레벨", confirmed: false }
 };
 
@@ -325,7 +333,7 @@ const UI_KO = {
   actionPhase: "행동 단계",
   yourAction: "내 행동 차례입니다",
   from: "시작 위치",
-  countered: "무효화됨",
+  countered: "차단됨",
   failed: "처리 실패",
   resolved: "해결 완료",
   effectResolved: "효과 해결 완료",
@@ -710,8 +718,11 @@ export function translateCardName(card, locale = LOCALES.EN) {
 export function translateCardText(cardOrText, locale = LOCALES.EN) {
   const card = typeof cardOrText === "string" ? null : cardOrText;
   const text = typeof cardOrText === "string" ? cardOrText : cardOrText?.translations?.ko?.text || cardOrText?.text || "";
-  if (locale !== LOCALES.KO || !text) return text;
-  const translated = cardKo(card)?.koText || `공식 번역 미확인\n${text}`;
+  if (locale !== LOCALES.KO) return text;
+  const translation = cardKo(card);
+  if (translation?.printedTextEmpty) return "";
+  if (!text) return text;
+  const translated = translation?.koText || `비공식 번역\n${text}`;
   return normalizeKoreanCardTerminology(translated);
 }
 
@@ -727,10 +738,11 @@ export function normalizeKoreanCardTerminology(text = "") {
 }
 
 export function translateCardTags(card, locale = LOCALES.EN) {
-  if (locale !== LOCALES.KO) return [card.type, ...(card.tags || [])].filter(Boolean);
+  const types = Array.isArray(card?.types) && card.types.length ? card.types : [card?.type];
+  if (locale !== LOCALES.KO) return [...types, ...(card.tags || [])].filter(Boolean);
   const translated = cardKo(card)?.koTypeLine;
   if (translated) return translated.split(/\s*,\s*/u).filter(Boolean);
-  return [translateType(card.type, locale), ...(card.tags || []).map((tag) => translateKeyword(tag, locale))].filter(Boolean);
+  return [...types.map((type) => translateType(type, locale)), ...(card.tags || []).map((tag) => translateKeyword(tag, locale))].filter(Boolean);
 }
 
 export function translateCostDomain(domain, locale = LOCALES.EN, card = null) {
@@ -747,6 +759,7 @@ export function cardSearchText(card, locale = LOCALES.EN) {
     translateCardName(card, locale),
     card.type,
     translateType(card.type, locale),
+    ...(card.types || []).flatMap((type) => [type, translateType(type, locale)]),
     card.cardNumber,
     card.collectorNumber,
     card.text,

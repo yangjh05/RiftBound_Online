@@ -87,7 +87,7 @@ try {
   ))
 
   if (-not $SkipSwap) {
-    $swapCommand = @'
+$swapCommand = @'
 if ! swapon --show=NAME --noheadings | grep -qx /swapfile; then
   if [ ! -f /swapfile ]; then sudo fallocate -l 2G /swapfile; fi
   sudo chmod 600 /swapfile
@@ -98,6 +98,7 @@ if ! grep -q '^/swapfile ' /etc/fstab; then
   echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
 fi
 '@
+    $swapCommand = $swapCommand.Replace("`r`n", "`n")
     Invoke-Native -Command 'ssh' -Arguments ($sshArguments + @(
       $HostAlias,
       $swapCommand
@@ -126,6 +127,7 @@ rm -f '$remoteArchive'
 node --input-type=module -e \"import('./scripts/ai-action-audit-runtime-fingerprint.mjs').then(async m => console.log(await m.actionAuditRuntimeFingerprint(process.cwd())))\"
 free -h
 "@
+  $installCommand = $installCommand.Replace("`r`n", "`n")
   Invoke-Native -Command 'ssh' -Arguments ($sshArguments + @(
     $HostAlias,
     $installCommand

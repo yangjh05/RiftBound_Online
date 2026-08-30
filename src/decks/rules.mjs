@@ -1,7 +1,7 @@
 export const DECK_RULES = Object.freeze({
   mainMin: 40,
   tournamentMainExact: 40,
-  sideboardMax: 8,
+  sideboardMax: 10,
   runeExact: 12,
   battlefieldsExact: 3,
   maxCopies: 3,
@@ -14,6 +14,7 @@ export const DECK_FORMATS = Object.freeze({
 });
 
 import { hasUniqueDeckConstraint } from "../rules/keywords.mjs";
+import { championMatchesLegend, isChampionCard } from "../rules/champions.mjs";
 
 const NON_IDENTITY_TAGS = Object.freeze(new Set([
   "Champion", "Signature", "Signature Spell", "Action", "Reaction", "Unit", "Spell", "Gear"
@@ -63,7 +64,12 @@ export function validateDeckRecord(deck, cardByNumber, { format = DECK_FORMATS.T
     }
   }
   for (const [name, count] of copiesByName) {
-    if (count > DECK_RULES.maxCopies) messages.push(`${name} can have at most ${DECK_RULES.maxCopies} registered copies across the Main Deck and Sideboard. It currently has ${count}.`);
+    const sameNameCards = registeredEntries
+      .map(([number]) => cardByNumber(number))
+      .filter((card) => card?.name === name);
+    const unlimited = sameNameCards.some((card) => (card.effects || [])
+      .some((effect) => effect?.timing === "static" && effect.kind === "unlimitedDeckCopies"));
+    if (!unlimited && count > DECK_RULES.maxCopies) messages.push(`${name} can have at most ${DECK_RULES.maxCopies} registered copies across the Main Deck and Sideboard. It currently has ${count}.`);
   }
   for (const [name, count] of copiesByName) {
     if (count <= 1) continue;
@@ -98,12 +104,8 @@ export function validateDeckRecord(deck, cardByNumber, { format = DECK_FORMATS.T
   return { playable: messages.length === 0, messages };
 }
 
-export function isChampionDeckCard(card) { return Boolean(card?.isChampion || card?.tags?.includes("Champion")); }
-export function championMatchesLegend(card, legend) {
-  if (!isChampionDeckCard(card) || !legend) return false;
-  const legendTags = new Set((legend.tags || []).filter((tag) => !NON_IDENTITY_TAGS.has(tag)));
-  return (card.tags || []).some((tag) => legendTags.has(tag));
-}
+export function isChampionDeckCard(card) { return isChampionCard(card); }
+export { championMatchesLegend };
 export function isSignatureCard(card) { return Boolean(card?.tags?.includes("Signature") || card?.tags?.includes("Signature Spell")); }
 export function mainDeckCount(deck) { return deck?.main?.reduce((total, [, count]) => total + count, 0) || 0; }
 export function sideboardCount(deck) { return deck?.sideboard?.reduce((total, [, count]) => total + count, 0) || 0; }

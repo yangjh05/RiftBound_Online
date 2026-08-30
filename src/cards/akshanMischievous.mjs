@@ -24,7 +24,7 @@ export default card({
       "power": [],
       "might": 4,
       "image": "https://exburst.dev/riftbound/cards/sd/SFD-109-221.webp",
-      "text": "[Weaponmaster]\nYou may pay Body PowerBody Power as an additional cost to play me.\nWhen you play me, if you paid the additional cost, move an enemy gear to your base. You control it until I leave the board. If it's an Equipment, attach it to me.",
+      "text": "[Weaponmaster]\nYou may pay Body Power Body Power as an additional cost to play me.\nWhen you play me, if you paid the additional cost, move an enemy gear to your base. You control it until I leave the board. If it's an Equipment, attach it to me.",
       "effects": [
         {
           "timing": "onPlay",

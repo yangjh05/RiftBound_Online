@@ -25,13 +25,13 @@ export default card({
       "energy": 5,
       "power": [
         {
-          "domain": DOMAINS.ANY,
+          "domain": DOMAINS.BODY,
           "amount": 1
         }
       ],
       "might": 6,
       "image": "https://exburst.dev/riftbound/cards/sd/UNL-120-219.webp",
-      "text": "[Ambush] (You may play me as a [Reaction] to a battlefield where you have units.)\nI can be played to a battlefield where there are enemy units (even if you don't have units there).",
+      "text": "[Ambush] (You may play me as a [Reaction] to a battlefield where you have units.)\nI can [Ambush] to a battlefield where there are enemy units, even if you don't have units there.",
       "effects": [
         {
           "timing": "static",

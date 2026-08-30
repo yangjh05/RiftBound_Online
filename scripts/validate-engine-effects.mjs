@@ -15,11 +15,12 @@ const engineSource = fs.readFileSync(path.join(root, "src", "engine.mjs"), "utf8
 const errors = [];
 
 const effectResolverKeys = parseMapKeys("EFFECT_RESOLVERS", "resolveEffect");
-const choiceResolverKeys = parseMapKeys("CHOICE_RESOLVERS", "DEFLECTABLE_CHOICE_EFFECTS");
+const choiceResolverKeys = parseMapKeys("CHOICE_RESOLVERS", "NON_TARGET_UNIT_CHOICE_EFFECTS");
 const triggerResolverKeys = parseMapKeys("TRIGGER_RESOLVERS", "resolveQueuedTrigger");
 const onMoveResolverKeys = parseMapKeys("ON_MOVE_EFFECT_RESOLVERS", "function triggerMoveEffects");
 const targetedEffectKinds = parseSetKeys("TARGETED_EFFECT_KINDS");
 const targetedTriggerKinds = parseSetKeys("TARGETED_TRIGGER_KINDS");
+const nonTargetUnitChoiceEffects = parseSetKeys("NON_TARGET_UNIT_CHOICE_EFFECTS");
 const usedEffectKeys = new Set(Object.values(cards).flatMap((card) => [
   ...(card.effects || []),
   ...keywordBehaviorEffectSpecs(card)
@@ -112,6 +113,40 @@ if (engineSource.includes("choice.effect ===")) {
 
 if (engineSource.includes("function cardHasEffect(") || engineSource.includes("cardHasEffect(")) {
   errors.push("Effect lookup must use timing-aware helpers, not cardHasEffect(kind).");
+}
+
+const unsafeMultiTypeComparisons = [
+  /\.type\s*(?:===|!==)\s*(?:spec|effect|continuation|choice\.data|payment|cost)\.(?:cardType|sourceType|recycleTrashType|discardType|countFromControlledType)/gu,
+  /(?:cardTypes|sourceCardTypes)\??\.includes\([^\n]*\.type\)/gu,
+  /\.type\s*(?:===|!==)\s*(?:cardType|discardType)/gu
+];
+for (const pattern of unsafeMultiTypeComparisons) {
+  const matches = [...engineSource.matchAll(pattern)];
+  if (matches.length) {
+    errors.push(`Card-type conditions must use cardHasType() so multi-type cards work in every zone; found ${matches.length} unsafe comparison(s).`);
+  }
+}
+
+if (!engineSource.includes('NON_TARGET_UNIT_CHOICE_EFFECTS.has(choice.effect)')) {
+  errors.push("Deflect must apply by default to enemy Unit choices, with only reviewed non-target choices excluded.");
+}
+for (const effect of nonTargetUnitChoiceEffects) {
+  if (!choiceResolverKeys.has(effect)) {
+    errors.push(`${effect} is excluded from default Deflect handling but has no registered choice resolver.`);
+  }
+}
+if (!engineSource.includes('const candidates = cardHasType(validationCard, "unit")')) {
+  errors.push("Effect-played Units must expose every legal Base/Battlefield destination through the shared destination choice.");
+}
+if (!engineSource.includes("allowedUncontrolledBattlefieldIds")
+  || !engineSource.includes("effectPlaySpecificallyAllowsBattlefield(options, battlefield)")) {
+  errors.push("Card effects that grant a specific uncontrolled Battlefield must extend the shared Unit destination choice instead of forcing a destination.");
+}
+if (!engineSource.includes('spec.resourceKind === "gold"')) {
+  errors.push("Gold-specific global modifiers must attach to the shared Add Power resolver through declarative resourceKind metadata.");
+}
+if (/cardNumber\s*===?\s*officialTokenDefinition\(["']gold["']\)/u.test(engineSource)) {
+  errors.push("Gold modifiers must not depend on an official token card-number branch in the engine.");
 }
 
 if (!choiceResolverKeys.size) errors.push("CHOICE_RESOLVERS was not found or has no entries.");

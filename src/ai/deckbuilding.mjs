@@ -2,6 +2,7 @@ import { cards } from "../cards.mjs";
 import { profileDeck } from "./belief.mjs";
 import { cardAllowedInPool } from "../card-pools.mjs";
 import { championMatchesLegend } from "../engine/setup.mjs";
+import { DECK_RULES } from "../decks/rules.mjs";
 
 const ALL_MAIN_CARDS = Object.values(cards).filter((card) => ["unit", "spell", "gear"].includes(card.type));
 const ALL_BATTLEFIELDS = Object.values(cards).filter((card) => card.type === "battlefield");
@@ -34,7 +35,7 @@ export function mutateSideboardPackage(deck, model, random = Math.random) {
   if (!candidates.length) return next;
   const added = candidates[Math.floor(random() * Math.min(12, candidates.length))];
   let removed = null;
-  if (next.sideboard.length >= 8) {
+  if (next.sideboard.length >= DECK_RULES.sideboardMax) {
     const removable = [...next.sideboard].sort((left, right) => learnedSideboardScore(model, left) - learnedSideboardScore(model, right));
     removed = removable[Math.floor(random() * Math.min(6, removable.length))];
     const index = next.sideboard.findIndex((card) => card.cardNumber === removed.cardNumber);
@@ -200,13 +201,13 @@ export function recommendDeckChanges(deck, model, limit = 3) {
   return output;
 }
 
-export function recommendDeckForPool(deck, model, poolId = "origins-era", limit = 8) {
+export function recommendDeckForPool(deck, model, poolId = "origins-era", limit = DECK_RULES.sideboardMax) {
   if (!deck?.legend || !cardAllowedInPool(deck.legend, poolId)) {
     return { poolId, compatible: false, reason: "선택한 카드풀에 현재 전설이 포함되지 않습니다.", changes: [], sideboard: [] };
   }
   const scopedModel = { ...model, cardPoolId: poolId };
   const changes = recommendDeckChanges(deck, scopedModel, limit);
-  const sideboard = buildSideboardPlan(deck, scopedModel, Math.min(8, limit));
+  const sideboard = buildSideboardPlan(deck, scopedModel, Math.min(DECK_RULES.sideboardMax, limit));
   const stat = model.deckStats?.[deck.id];
   return {
     poolId,

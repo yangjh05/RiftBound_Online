@@ -5,6 +5,7 @@ import { addAiPerformance, measureAiPerformance } from "./performance.mjs";
 import {
   activateCard,
   beginPlayCard,
+  beginPlayCardFromTrash,
   beginPlayChampion,
   canStandardMoveUnits,
   cancelPayment,
@@ -38,7 +39,7 @@ import {
 
 const STRATEGIC_KINDS = new Set([
   "selectChampion", "selectBattlefield", "toggleMulliganCard", "confirmMulligan", "skipMulligan", "submitMulligan",
-  "beginPlayCard", "beginPlayChampion", "hideCard", "moveUnit", "moveUnits",
+  "beginPlayCard", "beginPlayCardFromTrash", "beginPlayChampion", "hideCard", "moveUnit", "moveUnits",
   "activateCard", "chooseEffectOption", "declineEffectChoice", "passShowdown", "endTurn"
 ]);
 
@@ -84,7 +85,7 @@ export function enumerateLegalActions(game, actorId = activeActorId(game), optio
       }
       const clone = cloneGame(game);
       if (!applyAiAction(clone, action, actorId)?.ok) return false;
-      if (["beginPlayCard", "beginPlayChampion", "hideCard", "activateCard"].includes(action.kind) && clone.pendingPayment
+      if (["beginPlayCard", "beginPlayCardFromTrash", "beginPlayChampion", "hideCard", "activateCard"].includes(action.kind) && clone.pendingPayment
         && !canCompletePayment(clone)) return false;
       return typeof options.acceptPreview !== "function" || options.acceptPreview(action, clone) !== false;
     });
@@ -162,7 +163,7 @@ function hasJustifiedMisalignedUpside(profile) {
 }
 
 function declarationHasSafeTargetContinuation(game, actorId, action, validatedPreview = null) {
-  if (!["beginPlayCard", "beginPlayChampion", "activateCard"].includes(action?.kind)) return true;
+  if (!["beginPlayCard", "beginPlayCardFromTrash", "beginPlayChampion", "activateCard"].includes(action?.kind)) return true;
   const declarationProfile = tacticalActionProfile(game, actorId, action);
   if (!declarationProfile.destructiveTargetEffect) return true;
   const branch = validatedPreview || cloneGame(game);
@@ -640,6 +641,9 @@ function candidateActions(game, actorId, kindFilter = null) {
     ...(wants("beginPlayCard") ? player.hand.flatMap((card) => legalCardPlayDestinations(game, card.instanceId)
       .map((destination) => ({ kind: "beginPlayCard", cardId: card.instanceId, destination }))) : []),
     ...(wants("beginPlayCard") ? hiddenCards.map(({ card, destination }) => ({ kind: "beginPlayCard", cardId: card.instanceId, destination })) : []),
+    ...(wants("beginPlayCardFromTrash") ? player.trash
+      .flatMap((card) => legalCardPlayDestinations(game, card.instanceId)
+        .map((destination) => ({ kind: "beginPlayCardFromTrash", cardId: card.instanceId, destination }))) : []),
     ...(wants("hideCard") ? player.hand.flatMap((card) => game.battlefields.map((field) => ({ kind: "hideCard", cardId: card.instanceId, destination: field.instanceId }))) : []),
     ...(wants("moveUnit") ? movable.flatMap((unit) => destinations.map((destinationId) => ({ kind: "moveUnit", unitId: unit.instanceId, destinationId }))) : []),
     ...(wants("moveUnits") ? batchMoveCandidates(movable, destinations) : []),
@@ -692,7 +696,7 @@ export function applyAiAction(game, action, actorId = activeActorId(game)) {
   if (result?.ok && turnEvent && !engineRecordedResponsePass) {
     recordPublicTurnEvent(game, turnEvent);
   }
-  if (result?.ok && ["beginPlayCard", "beginPlayChampion", "hideCard", "activateCard"].includes(action.kind)
+  if (result?.ok && ["beginPlayCard", "beginPlayCardFromTrash", "beginPlayChampion", "hideCard", "activateCard"].includes(action.kind)
     && (game.pendingPayment || game.pendingChoice)) {
     game.aiDecisionContext = { key: actionKey(action), turnSequence: game.turnSequence };
   }
@@ -718,6 +722,7 @@ export function applyAiAction(game, action, actorId = activeActorId(game)) {
     case "skipMulligan": return skipMulligan(game);
     case "submitMulligan": return applyMulliganPlan();
     case "beginPlayCard": return beginPlayCard(game, action.cardId, action.destination);
+    case "beginPlayCardFromTrash": return beginPlayCardFromTrash(game, action.cardId, action.destination);
     case "beginPlayChampion": return beginPlayChampion(game, action.destination);
     case "hideCard": return hideCard(game, action.cardId, action.destination);
     case "moveUnit": return moveUnit(game, action.unitId, action.destinationId);
@@ -804,6 +809,7 @@ function publicActionTurnEvent(game, actorId, action) {
 const STRATEGIC_TURN_EVENT_ACTION_KINDS = new Set([
   "submitMulligan",
   "beginPlayCard",
+  "beginPlayCardFromTrash",
   "beginPlayChampion",
   "hideCard",
   "moveUnit",

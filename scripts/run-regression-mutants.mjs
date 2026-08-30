@@ -26,8 +26,8 @@ const engineMutants = [
   },
   {
     id: "killed-unit-to-base",
-    search: "owner.trash.push(unit);",
-    replacement: "controller.base.push(unit);",
+    search: "    sendCardToTrash(game, owner, unit, deathSnapshot, { boardStateAlreadyCleared: true });",
+    replacement: "    controller.base.push(unit);",
     testName: "Incinerate sends a unit with lethal damage to its owner's trash"
   },
   {
@@ -114,20 +114,22 @@ const engineMutants = [
   },
   {
     id: "automatic-power-cost-bypasses-shared-recycle",
-    search: "  return recyclePowerRunesInChosenOrder(game, player, chosen.powerRuneIds);",
+    search: "  const paid = recyclePowerRunesInChosenOrder(game, player, chosen.powerRuneIds);",
     replacement: `  for (const id of chosen.powerRuneIds) {
     const index = player.runes.findIndex((rune) => rune.instanceId === id);
     if (index < 0) continue;
     const [rune] = player.runes.splice(index, 1);
     player.runeDeck.push(rune);
   }
-  return true;`,
+  const paid = true;`,
     testName: "automatic Power costs use shared owner and token recycle rules"
   },
   {
     id: "main-deck-recycle-goes-to-actor",
-    search: "    const owner = game.players.find((candidate) => candidate.id === card.ownerId) || player;",
-    replacement: "    const owner = player;",
+    search: `    if (card.isToken) continue;
+    const owner = game.players.find((candidate) => candidate.id === card.ownerId) || player;`,
+    replacement: `    if (card.isToken) continue;
+    const owner = player;`,
     testName: "Main Deck recycling uses each card owner and recycled tokens cease to exist"
   },
   {
@@ -177,10 +179,10 @@ const engineMutants = [
   },
   {
     id: "bonus-damage-revives-invalid-deal",
-    search: `  const amount = validBaseDamage > 0
+    search: `  let amount = validBaseDamage > 0
     ? validBaseDamage + bonusDamageAmount(game, player, source, target, options)
     : 0;`,
-    replacement: "  const amount = validBaseDamage + bonusDamageAmount(game, player, source, target, options);",
+    replacement: "  let amount = validBaseDamage + bonusDamageAmount(game, player, source, target, options);",
     testName: "Bonus Damage is added only after the underlying Deal action remains valid"
   },
   {
@@ -209,17 +211,17 @@ const engineMutants = [
   },
   {
     id: "combat-result-not-recorded",
-    search: "  recordCombatResultEvent(game, battlefield, process, attackersRemain, defendersRemain);",
-    replacement: "  // Mutant: omit the required combat win/loss/no-result determination.",
+    search: "  const combatResult = recordCombatResultEvent(game, battlefield, process, attackersRemain, defendersRemain);",
+    replacement: "  const combatResult = { unitResults: {} }; // Mutant: omit the required combat result event.",
     testName: "combat special cleanup heals an aura survivor before the next normal cleanup"
   },
   {
     id: "revealed-main-deck-card-leaves-zone-before-reveal-ends",
-    search: `function resolveDefendHereRevealTopSpellTrigger(game, trigger, player, source) {
+    search: `function continueDefendHereRevealTopSpell(game, player, source, continuation) {
   const top = player.mainDeck[0];
   if (!top) return;
   recordRevealEvent(game, player, [top], source, "mainDeck");`,
-    replacement: `function resolveDefendHereRevealTopSpellTrigger(game, trigger, player, source) {
+    replacement: `function continueDefendHereRevealTopSpell(game, player, source, continuation) {
   const top = player.mainDeck.shift();
   if (!top) return;
   recordRevealEvent(game, player, [top], source, "mainDeck");`,
@@ -456,8 +458,10 @@ const engineMutants = [
   },
   {
     id: "brush-tag-might-skipped",
-    search: "    if ((effect.tags || []).some((tag) => unit.tags?.includes(tag))) amount += effect.amount || 1;",
-    replacement: "    if (false) amount += effect.amount || 1;",
+    search: `    if ((effect.tags || []).some((tag) => unit.tags?.includes(tag))
+      || (effect.keyword && hasKeyword(unit, effect.keyword, game))) amount += effect.amount || 1;`,
+    replacement: `    if (false
+      || (effect.keyword && hasKeyword(unit, effect.keyword, game))) amount += effect.amount || 1;`,
     testName: "Brush and Baron Pit battlefield tokens share the Replace framework and their printed movement and Might rules"
   },
   {
@@ -474,7 +478,7 @@ const engineMutants = [
   },
   {
     id: "attachment-effect-text-not-appended",
-    search: "      .filter((effect) => effect.textSection === \"effect\")",
+    search: "      .filter((effect) => effect?.textSection === \"effect\")",
     replacement: "      .filter((effect) => false)",
     testName: "attached Rules Text is inactive while Effect Text is appended to the Top-Most card"
   },
@@ -532,9 +536,9 @@ const engineMutants = [
   },
   {
     id: "accelerate-uses-first-domain-on-multi-domain-card",
-    search: "  return { domain: domains.length === 1 ? domains[0] : \"Any\", amount: 1 };",
-    replacement: "  return { domain: domains[0] || \"Any\", amount: 1 };",
-    testName: "Accelerate derives exactly one Power from Domain identity instead of reminder text"
+    search: "  if (domains.length > 1) return { domain: \"Any\", allowedDomains: domains, amount: 1 };",
+    replacement: "  if (domains.length > 1) return { domain: domains[0], amount: 1 };",
+    testName: "Accelerate derives one matching Power from Domain identity instead of reminder text"
   },
   {
     id: "deathknell-goes-to-owner-instead-of-last-controller",
@@ -545,7 +549,7 @@ const engineMutants = [
   },
   {
     id: "tank-priority-disabled",
-    search: "mustAssignFirst: !damagePrevented && hasKeyword(unit, \"Tank\", game),",
+    search: "mustAssignFirst: !ignoresTank && !damagePrevented && hasKeyword(unit, \"Tank\", game),",
     replacement: "mustAssignFirst: false,",
     testName: "manual combat damage must assign lethal damage to Tank units first"
   },
@@ -601,8 +605,8 @@ const engineMutants = [
   },
   {
     id: "optional-trigger-prompts-twice-before-cost",
-    search: "if (spec.optional && !effectDefinition(spec)?.optionalTrigger) {",
-    replacement: "if (spec.optional) {",
+    search: "  return Boolean(effectDefinition(ruleEffect)?.optionalTrigger);",
+    replacement: "  return Boolean(ruleEffect?.optional);",
     testName: "optional triggered ability placement proceeds directly to its cost"
   },
   {
@@ -638,14 +642,8 @@ const engineMutants = [
   },
   {
     id: "activated-keyword-leaks-to-card-timing",
-    search: `  return cardReactionPermissionSources(card, {
-    fromHidden: card.hidden === true,
-    ambushDestinationEligible: ambushGrantsReaction(game, player, card, destination)
-  }).length > 0;`,
-    replacement: `  return cardReactionPermissionSources(card, {
-    fromHidden: card.hidden === true,
-    ambushDestinationEligible: ambushGrantsReaction(game, player, card, destination)
-  }).length > 0 || cardEffects(card, "activated").some((spec) => (spec.abilityKeywords || []).includes("Reaction"));`,
+    search: "  return sources.length > 0;",
+    replacement: "  return sources.length > 0 || cardEffects(card, \"activated\").some((spec) => (spec.abilityKeywords || []).includes(\"Reaction\"));",
     testName: "activated ability timing keywords do not make their source cards Action or Reaction cards"
   },
   {
@@ -827,10 +825,12 @@ const engineMutants = [
   {
     id: "execute-ability-passes-priority",
     search: `    log(game, \`\${player.name} completes \${card.name}'s ability choices, costs, and legality check.\`);
+    prepareAndQueueTriggers(game, activationTriggers, game.actionChain ? "actionChain" : "queue");
     checkState(game);
     if (game.actionChain) maybeAutoPassActionChain(game);
     return { ok: true };`,
     replacement: `    log(game, \`\${player.name} completes \${card.name}'s ability choices, costs, and legality check.\`);
+    prepareAndQueueTriggers(game, activationTriggers, game.actionChain ? "actionChain" : "queue");
     checkState(game);
     if (game.actionChain) {
       giveActionChainPriority(game, otherActionChainPlayerId(game.actionChain, player.id));
@@ -884,7 +884,8 @@ const engineMutants = [
   },
   {
     id: "permanent-waits-for-pass-after-finalize",
-    search: `if (item.itemType === "card") return isTokenCard(item.card) || ["unit", "gear"].includes(item.card?.type);`,
+    search: `if (item.itemType === "card") return isTokenCard(item.card)
+    || cardHasType(item.card, "unit") || cardHasType(item.card, "gear");`,
     replacement: `if (item.itemType === "card") return isTokenCard(item.card);`,
     testName: "Units and Gear resolve immediately on Finalize without a response window",
     testFile: "tests/rules-conformance.test.mjs"
@@ -1099,7 +1100,7 @@ const engineMutants = [
   },
   {
     id: "activated-cost-modifiers-skipped",
-    search: "    const modifiers = collectActivatedAbilityCostModifiers(game, player, card, specs);",
+    search: "    const modifiers = collectActivatedAbilityCostModifiers(game, player, card, specs, { resourceChoice });",
     replacement: "    const modifiers = [];",
     testName: "activated ability costs apply shared increases, component discounts, and discount minima",
     testFile: "tests/rules-conformance.test.mjs"
@@ -1126,17 +1127,9 @@ const engineMutants = [
   },
   {
     id: "mandatory-card-death-replacement-becomes-optional",
-    search: `    if (replacementEffect(sourceCard, "saveFriendlyUnitByKillingThis")) {
-      candidates.push({
-        key: \`card:\${sourceCard.instanceId}\`,
-        type: "card",
-        sourceCard,
+    search: `        replacementKind: savingEffect.kind,
         optional: false,`,
-    replacement: `    if (replacementEffect(sourceCard, "saveFriendlyUnitByKillingThis")) {
-      candidates.push({
-        key: \`card:\${sourceCard.instanceId}\`,
-        type: "card",
-        sourceCard,
+    replacement: `        replacementKind: savingEffect.kind,
         optional: true,`,
     testName: "a mandatory card replacement applies automatically even when the affected unit has a different owner"
   },
@@ -1248,7 +1241,7 @@ const engineMutants = [
   },
   {
     id: "cleanup-unattached-gear-not-recalled",
-    search: "      if (permanent.type !== \"gear\") continue;",
+    search: "      if (!cardHasType(permanent, \"gear\") || cardHasType(permanent, \"unit\")) continue;",
     replacement: "      if (true) continue;",
     testName: "cleanup recalls unattached Gear and board objects from the wrong controller's base"
   },
@@ -1278,8 +1271,8 @@ const engineMutants = [
   },
   {
     id: "ready-step-skips-controlled-battlefields",
-    search: "    ...allControlledCards(game, player.id),\n    ...game.battlefields.filter((field) => field.controlledBy === player.id)",
-    replacement: "    ...allControlledCards(game, player.id),\n    ...[]",
+    search: "  const controlledCardsAtReadyStep = [...new Map([\n    ...allControlledCards(game, player.id),\n    ...game.battlefields.filter((field) => field.controlledBy === player.id)",
+    replacement: "  const controlledCardsAtReadyStep = [...new Map([\n    ...allControlledCards(game, player.id),\n    ...[]",
     testName: "Ready Step readies every controlled non-spell object including a Battlefield"
   },
   {
@@ -1304,14 +1297,14 @@ const deckRuleMutants = [
     id: "tournament-main-deck-allows-over-40",
     search: "if (format === DECK_FORMATS.TOURNAMENT && mainCount !== DECK_RULES.tournamentMainExact) {",
     replacement: "if (format === DECK_FORMATS.TOURNAMENT && mainCount < DECK_RULES.tournamentMainExact) {",
-    testName: "tournament decks require exactly 40 Main Deck cards and at most 8 Sideboard cards",
+    testName: "tournament decks require exactly 40 Main Deck cards and at most 10 Sideboard cards",
     testFile: "tests/match.test.mjs"
   },
   {
     id: "tournament-main-deck-allows-under-40",
     search: "if (format === DECK_FORMATS.TOURNAMENT && mainCount !== DECK_RULES.tournamentMainExact) {",
     replacement: "if (format === DECK_FORMATS.TOURNAMENT && mainCount > DECK_RULES.tournamentMainExact) {",
-    testName: "tournament decks require exactly 40 Main Deck cards and at most 8 Sideboard cards",
+    testName: "tournament decks require exactly 40 Main Deck cards and at most 10 Sideboard cards",
     testFile: "tests/match.test.mjs"
   },
   {
@@ -1323,12 +1316,27 @@ const deckRuleMutants = [
   }
 ];
 
+const engineSource = fs.readFileSync(ENGINE, "utf8");
+const invalidMutationPoints = [];
+for (const mutant of engineMutants) {
+  try {
+    replaceExactlyOnce(engineSource, mutant.search, mutant.replacement, mutant.id);
+  } catch (error) {
+    invalidMutationPoints.push(error.message);
+  }
+}
+if (invalidMutationPoints.length) {
+  console.error(`Mutation preflight failed (${invalidMutationPoints.length} invalid mutation points):`);
+  for (const failure of invalidMutationPoints) console.error(`- ${failure}`);
+  process.exit(1);
+}
+
 const failures = [];
 for (const mutant of engineMutants) {
   const mutantEngine = path.join(ROOT, "src", `.mutant-${mutant.id}.mjs`);
   const mutantTest = path.join(ROOT, "tests", `.mutant-${mutant.id}.test.mjs`);
   try {
-    const source = replaceExactlyOnce(fs.readFileSync(ENGINE, "utf8"), mutant.search, mutant.replacement, mutant.id);
+    const source = replaceExactlyOnce(engineSource, mutant.search, mutant.replacement, mutant.id);
     const sourceTest = mutant.testFile ? path.join(ROOT, mutant.testFile) : ENGINE_TEST;
     const testSource = fs.readFileSync(sourceTest, "utf8")
       .replace('from "../src/engine.mjs";', `from "../src/.mutant-${mutant.id}.mjs";`);
@@ -1466,9 +1474,12 @@ function assess(id, run) {
 }
 
 function replaceExactlyOnce(source, search, replacement, id) {
-  const count = source.split(search).length - 1;
+  const normalizedSource = source.replace(/\r\n/g, "\n");
+  const normalizedSearch = search.replace(/\r\n/g, "\n");
+  const normalizedReplacement = replacement.replace(/\r\n/g, "\n");
+  const count = normalizedSource.split(normalizedSearch).length - 1;
   if (count !== 1) throw new Error(`${id}: expected one mutation point, found ${count}`);
-  return source.replace(search, replacement);
+  return normalizedSource.replace(normalizedSearch, normalizedReplacement);
 }
 
 function tail(value) {

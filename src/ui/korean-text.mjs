@@ -39,7 +39,7 @@ const EXACT_TEXT = new Map([
   ["resolving", "해결 중"],
   ["finalized", "확정됨"],
   ["declined", "거절됨"],
-  ["countered", "무효화됨"],
+  ["countered", "차단됨"],
   ["failed", "처리 실패"],
   ["Common", "일반"],
   ["Uncommon", "고급"],
@@ -51,9 +51,11 @@ const EXACT_TEXT = new Map([
   ["Origins: Proving Grounds", "오리진: 증명의 장"],
   ["Spiritforged", "스피릿포지드"],
   ["Unleashed", "언리시드"],
+  ["Vendetta", "벤데타"],
   ["Origins 출시 환경", "오리진 출시 환경"],
   ["Spiritforged 출시 환경", "스피릿포지드 출시 환경"],
   ["Unleashed 출시 환경", "언리시드 출시 환경"],
+  ["Vendetta 출시 환경", "벤데타 출시 환경"],
   ["Unit", "유닛"],
   ["Card", "카드"],
   ["Keep", "유지"],
@@ -83,10 +85,19 @@ const EXACT_TEXT = new Map([
   ["Assign last", "이 유닛에는 마지막에 피해를 배정해야 합니다."],
   ["Tank first", "방어 유닛에 먼저 피해를 배정해야 합니다."],
   ["Assign lethal first", "먼저 처치 가능한 유닛에 필요한 피해를 배정해야 합니다."],
-  ["Excess damage", "남은 초과 피해를 배정할 수 있습니다."]
+  ["Excess damage", "남은 초과 피해를 배정할 수 있습니다."],
+  ["Choose choices to remake", "다시 정할 선택 지정"],
+  ["Keep its existing choices", "기존 선택 유지"],
+  ["Confirm choices to remake", "다시 정할 선택 확정"],
+  ["A retained choice is no longer legal. Select it too, then confirm.", "유지하려는 선택 중 더 이상 유효하지 않은 것이 있습니다. 해당 선택도 다시 정하도록 지정한 뒤 확정해 주세요."]
 ]);
 
 const TEXT_PATTERNS = [
+  [/^Keep the current choices for (.+), or choose which ones to remake\?$/iu, ([, card]) => `${card}의 기존 선택을 유지하거나 다시 정할 선택을 지정해 주세요.`],
+  [/^Select any choices to remake for (.+), then confirm\. Unselected choices are kept\.$/iu, ([, card]) => `${card}에서 다시 정할 선택을 모두 지정한 뒤 확정해 주세요. 지정하지 않은 선택은 유지됩니다.`],
+  [/^Target: (.+)$/iu, ([, target]) => `대상: ${target}`],
+  [/^Choice: (.+)$/iu, ([, choice]) => `선택: ${localizeFragments(choice)}`],
+  [/^Skipped choice: (.+)$/iu, ([, choice]) => `생략한 선택: ${localizeFragments(choice)}`],
   [/^Exactly (\d+) Battlefields are required\.$/iu, ([, count]) => `전장은 정확히 ${count}장 필요합니다.`],
   [/^A tournament Main Deck must contain exactly (\d+) cards\. It currently contains (\d+)\.$/iu, ([, required, current]) => `토너먼트 주 덱은 정확히 ${required}장이어야 합니다. 현재 ${current}장입니다.`],
   [/^Main Deck must contain at least (\d+) cards\. It currently contains (\d+)\.$/iu, ([, required, current]) => `주 덱은 최소 ${required}장이어야 합니다. 현재 ${current}장입니다.`],
@@ -108,6 +119,26 @@ const TEXT_PATTERNS = [
   [/^(Body|Calm|Chaos|Fury|Mind|Order) is outside (.+)'s Domain Identity\.$/iu, ([, domain, legend]) => `${koreanDomain(domain)} 도메인은 ${legend}의 도메인 정체성에 맞지 않습니다.`],
   [/^(\d+) cards?$/iu, ([, count]) => `${count}장`],
   [/^Pay Energy (\d+)$/iu, ([, count]) => `에너지 ${count} 지불`],
+  [/^Spend (\d+) XP$/iu, ([, count]) => `XP ${count} 사용`],
+  [/^Do not spend XP$/iu, () => "XP 사용하지 않음"],
+  [/^Do not pay (.+)$/iu, ([, cost]) => `${koreanResourceCost(cost)} 지불하지 않음`],
+  [/^Banish and play for (.+)$/iu, ([, cost]) => `${koreanResourceCost(cost)} 지불 · 추방 후 사용`],
+  [/^Banish without playing$/iu, () => "사용하지 않고 추방"],
+  [/^Leave it in the Main Deck$/iu, () => "주 덱에 남김"],
+  [/^Pay (.+) to repeat once$/iu, ([, cost]) => `${koreanResourceCost(cost)} 지불하고 1회 반복`],
+  [/^Repeat (\d+) times?$/iu, ([, count]) => `${count}회 반복`],
+  [/^Do not repeat$/iu, () => "반복하지 않음"],
+  [/^Draw (\d+)$/iu, ([, count]) => `카드 ${count}장 뽑기`],
+  [/^Deal (\d+) to a unit at a battlefield$/iu, ([, count]) => `전장의 유닛 하나에게 피해 ${count}`],
+  [/^Deal (\d+) to a unit at a base$/iu, ([, count]) => `기지의 유닛 하나에게 피해 ${count}`],
+  [/^Give a battlefield unit (-?\d+) Might this turn$/iu, ([, amount]) => `전장의 유닛 하나에게 이번 턴 위력 ${Number(amount) >= 0 ? "+" : ""}${amount}`],
+  [/^No target needed$/iu, () => "대상이 필요하지 않음"],
+  [/^Counter a spell$/iu, () => "주문 1개 차단"],
+  [/^Play four Bird unit tokens$/iu, () => "새 유닛 토큰 4개 사용"],
+  [/^Play an additional copy$/iu, () => "토큰을 하나 더 사용"],
+  [/^Play the original token only$/iu, () => "원래 토큰만 사용"],
+  [/^Play the token$/iu, () => "토큰 사용"],
+  [/^Do not play it$/iu, () => "사용하지 않음"],
   [/^(\d+) damage(?: lethal)?$/iu, (match) => `${match[1]} 피해${/lethal/iu.test(match[0]) ? " · 처치 가능" : ""}`],
   [/^(.+) rolls (\d+) for play order\.$/iu, ([, player, value]) => `${player}님이 선후공 결정 주사위에서 ${value}가 나왔습니다.`],
   [/^(.+) wins the play-order roll and chooses who goes first\.$/iu, ([, player]) => `${player}님이 주사위 굴림에서 이겨 선후공을 선택합니다.`],
@@ -154,7 +185,7 @@ const TEXT_PATTERNS = [
   [/^(.+) readies(?: .+)?\.$/iu, ([, source]) => `${source}이(가) 준비 상태가 되었습니다.`],
   [/^(.+) stuns (.+)\.$/iu, ([, source, target]) => `${source}이(가) ${target}을 기절시켰습니다.`],
   [/^(.+) returns (.+) to hand\.$/iu, ([, source, target]) => `${source}이(가) ${target}을 손으로 되돌렸습니다.`],
-  [/^(.+) channels (\d+|a) runes?(?: exhausted)?\.$/iu, ([, source, amount]) => `${source}이(가) 룬 ${amount === "a" ? "1" : amount}개를 채널했습니다.`],
+  [/^(.+) channels (\d+|a) runes?(?: exhausted)?\.$/iu, ([, source, amount]) => `${source}이(가) 룬 ${amount === "a" ? "1" : amount}장을 전개했습니다.`],
   [/^(.+) recycles (\d+) cards?(?: from trash)?\.$/iu, ([, source, amount]) => `${source}이(가) 카드 ${amount}장을 재활용했습니다.`],
   [/^(.+) has no (?:legal|valid) target(?:s)?(?: and does not trigger)?\.$/iu, ([, source]) => `${source} 효과가 선택할 수 있는 합법적인 대상이 없습니다.`],
   [/^(.+)'s declared target is no longer legal\.$/iu, ([, source]) => `${source}의 선언한 대상이 더 이상 합법적이지 않습니다.`],
@@ -272,4 +303,13 @@ function koreanDomain(domain) {
     Mind: "정신",
     Order: "질서"
   }[domain] || domain;
+}
+
+function koreanResourceCost(value) {
+  return String(value || "")
+    .replace(/(\d+)\s+Energy/giu, "에너지 $1")
+    .replace(/(\d+)\s+Any\s+Power/giu, "힘 $1")
+    .replace(/(\d+)\s+(Body|Calm|Chaos|Fury|Mind|Order)\s+Power/giu,
+      (_, count, domain) => `${koreanDomain(domain)} 힘 ${count}`)
+    .replace(/\s*\+\s*/gu, " + ");
 }

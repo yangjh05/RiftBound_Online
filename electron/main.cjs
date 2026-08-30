@@ -3,6 +3,8 @@ const fs = require("node:fs/promises");
 const http = require("node:http");
 const net = require("node:net");
 const path = require("node:path");
+const { pathToFileURL } = require("node:url");
+const { bundledServerModulePath } = require("./runtime-paths.cjs");
 const { startAutoUpdate } = require("./updater.cjs");
 
 const root = path.resolve(__dirname, "..");
@@ -133,7 +135,18 @@ function isAppUrl(url, appUrl) {
 }
 
 async function startBundledServer() {
-  const { handleMultiplayerRequest } = await import(pathToFileUrl(path.join(root, "server", "http-multiplayer.mjs")));
+  if (!process.env.RIFTBOUND_ACCOUNT_DATA_FILE) {
+    process.env.RIFTBOUND_ACCOUNT_DATA_FILE = path.join(app.getPath("userData"), "accounts.json");
+  }
+  if (!process.env.RIFTBOUND_AI_DATA_DIR) {
+    process.env.RIFTBOUND_AI_DATA_DIR = path.join(app.getPath("userData"), "ai-data");
+  }
+  const modulePath = bundledServerModulePath({
+    appRoot: root,
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath
+  });
+  const { handleMultiplayerRequest } = await import(pathToFileURL(modulePath).href);
   const port = await findAvailablePort(preferredPort);
   const server = http.createServer(async (req, res) => {
     if (await handleMultiplayerRequest(req, res)) return;
@@ -183,10 +196,6 @@ function findAvailablePort(startPort) {
     };
     tryPort(startPort);
   });
-}
-
-function pathToFileUrl(filePath) {
-  return new URL(`file://${filePath.replace(/\\/g, "/")}`).href;
 }
 
 app.whenReady().then(() => {

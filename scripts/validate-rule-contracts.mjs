@@ -8,6 +8,7 @@ import { RULE_ORACLE_CHECKS } from "./rules-oracle.mjs";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const RULES_PATH = path.join(ROOT, "spec", "rules", "core-rules-2026-03-30.json");
 const RULES_CATALOG_PATH = path.join(ROOT, "spec", "rules", "core-rules-catalog-2026-03-30.json");
+const CURRENT_RULES_CATALOG_PATH = path.join(ROOT, "spec", "rules", "core-rules-catalog-2026-07-16.json");
 const RULE_FAMILIES_PATH = path.join(ROOT, "spec", "rules", "core-rules-families-2026-03-30.json");
 const VERIFICATION_LEDGER_PATH = path.join(ROOT, "spec", "rules", "verification-ledger-2026-03-30.json");
 const INTERPRETATION_SETUP_LEDGER_PATH = path.join(ROOT, "spec", "rules", "workstreams", "interpretation-and-deck-setup-2026-03-30.json");
@@ -19,9 +20,13 @@ const COMBAT_SCORING_LEDGER_PATH = path.join(ROOT, "spec", "rules", "workstreams
 const KEYWORD_SEMANTICS_LEDGER_PATH = path.join(ROOT, "spec", "rules", "workstreams", "keyword-semantics-2026-03-30.json");
 const OGS_PATH = path.join(ROOT, "spec", "cards", "ogs-official-2026-07-14.json");
 const OFFICIAL_GALLERY_PATH = path.join(ROOT, "spec", "cards", "official-gallery-2026-07-14.json");
+const SPIRITFORGED_GALLERY_PATH = path.join(ROOT, "spec", "cards", "spiritforged-official-2026-08-29.json");
+const UNLEASHED_GALLERY_PATH = path.join(ROOT, "spec", "cards", "unleashed-official-2026-08-29.json");
+const VENDETTA_GALLERY_PATH = path.join(ROOT, "spec", "cards", "vendetta-official-2026-08-29.json");
 
 export const ruleContracts = readJson(RULES_PATH);
 export const coreRulesCatalog = readJson(RULES_CATALOG_PATH);
+export const currentCoreRulesCatalog = readJson(CURRENT_RULES_CATALOG_PATH);
 export const coreRuleFamilies = readJson(RULE_FAMILIES_PATH);
 export const verificationLedger = readJson(VERIFICATION_LEDGER_PATH);
 export const interpretationSetupVerificationLedger = readJson(INTERPRETATION_SETUP_LEDGER_PATH);
@@ -41,11 +46,35 @@ export const verificationWorkstreamLedgers = Object.freeze([
   keywordSemanticsVerificationLedger
 ]);
 export const officialOgsSnapshot = readJson(OGS_PATH);
-export const officialGallerySnapshot = readJson(OFFICIAL_GALLERY_PATH);
+const baseOfficialGallerySnapshot = readJson(OFFICIAL_GALLERY_PATH);
+const spiritforgedOfficialGallerySnapshot = readJson(SPIRITFORGED_GALLERY_PATH);
+const unleashedOfficialGallerySnapshot = readJson(UNLEASHED_GALLERY_PATH);
+const vendettaOfficialGallerySnapshot = readJson(VENDETTA_GALLERY_PATH);
+const combinedOfficialCards = new Map((baseOfficialGallerySnapshot.cards || [])
+  .map((card) => [card.cardNumber, card]));
+for (const snapshot of [spiritforgedOfficialGallerySnapshot, unleashedOfficialGallerySnapshot, vendettaOfficialGallerySnapshot]) {
+  for (const card of snapshot.cards || []) {
+    combinedOfficialCards.set(card.cardNumber, {
+      ...card,
+      powerAmount: totalPower(card.power || []),
+      rulesText: card.effectiveText || card.printedText || ""
+    });
+  }
+}
+export const officialGallerySnapshot = {
+  ...baseOfficialGallerySnapshot,
+  scope: {
+    ...(baseOfficialGallerySnapshot.scope || {}),
+    requestedRegisteredCardCount: Object.values(cards).length,
+    snapshottedCardCount: combinedOfficialCards.size
+  },
+  cards: [...combinedOfficialCards.values()]
+};
 
 export function validateRuleContracts(contracts = ruleContracts) {
   const errors = [
     ...validateCoreRulesCatalog(coreRulesCatalog),
+    ...validateCurrentRulesAuditCatalog(currentCoreRulesCatalog),
     ...validateRuleFamilies(coreRuleFamilies, coreRulesCatalog),
     ...validateVerificationLedger(verificationLedger, coreRuleFamilies, coreRulesCatalog),
     ...verificationWorkstreamLedgers.flatMap((ledger) =>
@@ -95,6 +124,59 @@ export function validateRuleContracts(contracts = ruleContracts) {
   }
   for (const category of ["lethal-threshold", "cleanup-fixed-point", "lethal-destination", "combat-cleanup-order", "death-replacement"]) {
     if (!(contracts.contracts || []).some((contract) => contract.category === category)) errors.push(`missing required rule category: ${category}`);
+  }
+  return errors;
+}
+
+export function validateCurrentRulesAuditCatalog(catalog = currentCoreRulesCatalog) {
+  const errors = [];
+  const expectedHash = "9C5FB8B8638F2CD19CEDA237929FA2C37AAC23C797CC7410294993470BA5A30B";
+  if (catalog.rulesVersion !== "2026-07-16") errors.push("Current Core Rules audit catalog version is not 2026-07-16");
+  if (catalog.source?.authority !== "Riot Games / Riftbound") errors.push("Current Core Rules audit source is not authoritative");
+  if (catalog.source?.sha256 !== expectedHash) errors.push("Current Core Rules audit PDF hash is unexpected");
+  if (catalog.source?.pageCount !== 120) errors.push(`Current Core Rules audit expected 120 pages, got ${catalog.source?.pageCount ?? "missing"}`);
+  if (catalog.source?.url !== "https://cmsassets.rgpub.io/sanity/files/dsfx7636/news_live/e9ac8e3d33e0f78cef296f5945aba7bc1313b086.pdf") {
+    errors.push("Current Core Rules audit PDF URL is unexpected");
+  }
+
+  const clauses = catalog.clauses || [];
+  const ids = new Set();
+  for (const clause of clauses) {
+    if (!/^\d{3}(?:(?:\.\d+)|(?:\.[a-z]))*$/.test(clause.id || "")) errors.push(`invalid current catalog rule id: ${clause.id || "<missing>"}`);
+    if (ids.has(clause.id)) errors.push(`duplicate current catalog rule id: ${clause.id}`);
+    ids.add(clause.id);
+    if (!clause.text) errors.push(`${clause.id} has no current official rule text`);
+    if (!Number.isInteger(clause.page) || clause.page < 1 || clause.page > 120) errors.push(`${clause.id} has invalid current source page ${clause.page}`);
+    const expectedLeaf = !clauses.some((candidate) => candidate.id?.startsWith(`${clause.id}.`));
+    if (clause.leaf !== expectedLeaf) errors.push(`${clause.id} has stale current leaf classification`);
+  }
+  const leafCount = clauses.filter((clause) => clause.leaf).length;
+  const duelApplicable = clauses.filter((clause) => clause.modeScope !== "other-mode");
+  if (catalog.inventory?.clauseCount !== clauses.length) errors.push("Current Core Rules catalog clause count is stale");
+  if (catalog.inventory?.leafClauseCount !== leafCount) errors.push("Current Core Rules catalog leaf count is stale");
+  if (catalog.inventory?.duelApplicableClauseCount !== duelApplicable.length) errors.push("Current Core Rules catalog duel clause count is stale");
+  if (catalog.inventory?.duelApplicableLeafClauseCount !== duelApplicable.filter((clause) => clause.leaf).length) {
+    errors.push("Current Core Rules catalog duel leaf count is stale");
+  }
+  const normalizedText = clauses.map((clause) => `${clause.id}\t${clause.text}`).join("\n");
+  const normalizedHash = crypto.createHash("sha256").update(normalizedText).digest("hex").toUpperCase();
+  if (catalog.source?.normalizedTextSha256 !== normalizedHash) errors.push("Current Core Rules catalog normalized text hash is stale");
+
+  const testSources = testSourceCorpus();
+  const behaviorClauses = [
+    ["135.2.e.6.c", "multiple Domains", "Accelerate derives one matching Power from Domain identity instead of reminder text"],
+    ["323.11.a", "applies Contested status", "cleanup transfers Contested to the remaining non-controller after its original applier leaves"],
+    ["337.2", "resolves immediately", "a Unit resolves on Finalize before its separate play trigger opens a response window"],
+    ["383.4.a.2", "after the Permanent", "a Unit resolves on Finalize before its separate play trigger opens a response window"],
+    ["359.3.e.16", "duration has ended", "targon's peak does not generate an expired end-turn rune trigger"],
+    ["805.1.a.1", "matches one of the domains", "Accelerate derives one matching Power from Domain identity instead of reminder text"],
+    ["808.1.d.1", "not sent to the Trash", "killed tokens cease to exist instead of entering trash"]
+  ];
+  for (const [ruleId, expectedText, evidenceTest] of behaviorClauses) {
+    const clause = clauses.find((candidate) => candidate.id === ruleId);
+    if (!clause) errors.push(`Current Core Rules audit is missing behavior clause ${ruleId}`);
+    else if (!clause.text.includes(expectedText)) errors.push(`Current Core Rules audit clause ${ruleId} no longer contains its reviewed behavior text`);
+    if (!testSources.includes(`test("${evidenceTest}"`)) errors.push(`Current Core Rules audit clause ${ruleId} references missing test: ${evidenceTest}`);
   }
   return errors;
 }

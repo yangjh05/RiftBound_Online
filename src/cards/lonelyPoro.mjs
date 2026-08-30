@@ -21,7 +21,7 @@ export default card({
       "power": [],
       "might": 2,
       "image": "https://exburst.dev/riftbound/cards/sd/SFD-036-221.webp",
-      "text": "[Deathknell] - If I died alone, draw 1. (When I die, get the effect. I'm alone if there are no other friendly units here.)",
+      "text": "[Deathknell] — If I died alone, draw 1. (When I die, get the effect. I'm alone if there are no other friendly units here.)",
       "effects": [
         {
           "timing": "death",

@@ -19,7 +19,7 @@ export function evaluateLayeredCharacteristics({ printed = {}, effects = [], con
   for (let pass = 0; pass < maxPasses; pass += 1) {
     const state = normalizeState(printed);
     for (const layer of LAYER_ORDER) {
-      const active = orderLayerEffects(effects.filter((effect) => effect.layer === layer), previous, context);
+      const active = orderLayerEffects(effects.filter((effect) => effect?.layer === layer), previous, context);
       if (layer === "arithmetic") {
         const increases = active.filter((effect) => finiteNumber(effect.value) >= 0);
         const decreases = active.filter((effect) => finiteNumber(effect.value) < 0);
