@@ -174,6 +174,199 @@ test("opponent snapshots omit pending hand cards, declarations, and transient lo
   assert.equal(finalizedOpponentView.log[0].includes(secret.name), true);
 });
 
+test("revealed opponent intel never exposes Main Deck or Rune Deck identities", () => {
+  const revealedHand = card("p1", "revealed-hand-id", "Revealed Hand Card");
+  const secretDeck = card("p1", "SECRET-DECK-ID", "SECRET DECK NAME");
+  secretDeck.cardNumber = "SECRET-DECK-NUMBER";
+  secretDeck.image = "secret-deck-image.png";
+  const secretRune = card("p1", "SECRET-RUNE-ID", "SECRET RUNE NAME");
+  secretRune.cardNumber = "SECRET-RUNE-NUMBER";
+  secretRune.image = "secret-rune-image.png";
+  const owner = player("p1", [revealedHand]);
+  owner.mainDeck = [secretDeck];
+  owner.runeDeck = [secretRune];
+  const game = {
+    phase: "action",
+    turnSequence: 4,
+    currentPlayerId: "p1",
+    players: [owner, player("p2")],
+    battlefields: [],
+    actionChain: null,
+    showdown: null,
+    pendingChoice: null,
+    pendingPayment: null,
+    log: [],
+    selectedCardId: null,
+    triggerQueue: [],
+    triggerQueueContinuation: null,
+    stagedEvents: [],
+    revealedIntel: [{ viewerId: "p2", ownerId: "p1", expiresAtTurnSequence: 4 }]
+  };
+
+  const view = snapshotForPlayer(roomFor(game), "p2").game;
+  const opponent = view.players.find((candidate) => candidate.id === "p1");
+  const serialized = JSON.stringify(view);
+
+  assert.equal(opponent.hand[0].instanceId, revealedHand.instanceId,
+    "the authorized hand reveal remains available");
+  assert.equal(opponent.mainDeck[0].redacted, true);
+  assert.equal(opponent.runeDeck[0].redacted, true);
+  for (const secret of [
+    secretDeck.instanceId, secretDeck.name, secretDeck.cardNumber, secretDeck.image,
+    secretRune.instanceId, secretRune.name, secretRune.cardNumber, secretRune.image
+  ]) {
+    assert.equal(serialized.includes(secret), false, `snapshot leaked ${secret}`);
+  }
+});
+
+test("opponent snapshots rotate hidden-zone identities and omit private turn-event payloads", () => {
+  const hiddenHand = card("p1", "stable-known-hand-id", "Known Returning Card");
+  hiddenHand.cardNumber = "PRIVATE-HAND-NUMBER";
+  const hiddenDeck = card("p1", "stable-known-deck-id", "Known Recycled Card");
+  hiddenDeck.cardNumber = "PRIVATE-DECK-NUMBER";
+  const hiddenRune = card("p1", "stable-known-rune-id", "Known Rune Card");
+  hiddenRune.cardNumber = "PRIVATE-RUNE-NUMBER";
+  const owner = player("p1", [hiddenHand]);
+  owner.mainDeck = [hiddenDeck];
+  owner.runeDeck = [hiddenRune];
+  owner.bottomDeckKnowledgeSequence = 7;
+  const publicSource = card("p1", "public-source-id", "Public Source");
+  publicSource.activationProcess = { discardCardIds: [hiddenHand.instanceId] };
+  const publicGear = card("p1", "public-attached-gear-id", "Public Attached Gear");
+  publicGear.type = "gear";
+  publicSource.attachments = [publicGear];
+  owner.base = [publicSource];
+  const game = {
+    phase: "action",
+    turnNumber: 1,
+    turnSequence: 1,
+    currentPlayerId: "p1",
+    players: [owner, player("p2")],
+    battlefields: [],
+    actionChain: {
+      turnPlayerId: "p1",
+      priorityPlayerId: "p1",
+      playerIds: ["p1", "p2"],
+      chain: [{
+        id: "private-recycle-chain-item",
+        itemType: "trigger",
+        status: "finalized",
+        playerId: "p1",
+        card: publicSource,
+        trigger: {
+          id: "private-recycle-chain-trigger",
+          playerId: "p1",
+          kind: "recycle",
+          sourceCardId: publicSource.instanceId,
+          data: { recycledCardIds: [hiddenDeck.instanceId] }
+        }
+      }]
+    },
+    showdown: null,
+    pendingChoice: null,
+    pendingPayment: null,
+    log: [],
+    triggerQueue: [{
+      id: "private-recycle-trigger",
+      playerId: "p1",
+      kind: "recycle",
+      sourceCardId: publicSource.instanceId,
+      data: { recycledCardIds: [hiddenDeck.instanceId] }
+    }],
+    triggerQueueContinuation: { kind: "privateContinuation", observedIds: [hiddenDeck.instanceId] },
+    stagedEvents: [],
+    revealedIntel: [],
+    mulligan: { playerId: "p1", selectedCardIds: [hiddenHand.instanceId] },
+    setupRandomValues: [0.125, 0.875],
+    drawEvents: [{ cardIds: [hiddenDeck.instanceId] }],
+    deferredTriggerContinuations: [{ state: { observedIds: [hiddenDeck.instanceId] } }],
+    revealEvents: [{ cardIds: [hiddenHand.instanceId] }],
+    operations: [{ cardId: hiddenDeck.instanceId }],
+    lifecycleEvents: [{ cardId: hiddenDeck.instanceId }],
+    ruleTaskTrace: [{ cardId: hiddenDeck.instanceId }],
+    cleanupRequestTrace: [{ cardId: hiddenDeck.instanceId }],
+    deterministicRandomState: 1234,
+    deterministicPlayerRandomStates: { p1: 12, p2: 34 },
+    effectFlash: {
+      sourceId: publicGear.instanceId,
+      targetIds: [publicGear.instanceId, hiddenDeck.instanceId],
+      message: `${publicGear.name} sees ${hiddenDeck.name}.`,
+      stamp: 1
+    },
+    publicTurnEvents: [{
+      id: "private-recycle-event",
+      kind: "recycle",
+      actorId: "p1",
+      objectIds: [hiddenDeck.instanceId],
+      cardNumbers: [hiddenDeck.cardNumber],
+      visibility: "owner-private-identities",
+      turnNumber: 1,
+      turnSequence: 1
+    }]
+  };
+
+  const opponentView = snapshotForPlayer(roomFor(game), "p2").game;
+  const hiddenOwner = opponentView.players.find((candidate) => candidate.id === "p1");
+  const serialized = JSON.stringify(opponentView);
+  assert.match(hiddenOwner.hand[0].instanceId, /^redacted-hand-p1-/);
+  assert.match(hiddenOwner.mainDeck[0].instanceId, /^redacted-main-p1-/);
+  assert.match(hiddenOwner.runeDeck[0].instanceId, /^redacted-rune-p1-/);
+  for (const privateValue of [
+    hiddenHand.instanceId, hiddenDeck.instanceId, hiddenRune.instanceId,
+    hiddenHand.cardNumber, hiddenDeck.cardNumber, hiddenRune.cardNumber,
+    hiddenHand.name, hiddenDeck.name, hiddenRune.name
+  ]) assert.equal(serialized.includes(privateValue), false);
+  assert.equal("publicTurnEvents" in opponentView, false);
+  assert.equal("triggerQueueContinuation" in opponentView, false);
+  assert.match(opponentView.triggerQueue[0].data.recycledCardIds[0], /^redacted-main-p1-/);
+  assert.match(opponentView.actionChain.chain[0].trigger.data.recycledCardIds[0], /^redacted-main-p1-/);
+  for (const privateField of [
+    "setupRandomValues", "drawEvents", "deferredTriggerContinuations", "revealEvents",
+    "operations", "lifecycleEvents", "ruleTaskTrace", "cleanupRequestTrace",
+    "deterministicRandomState", "deterministicPlayerRandomStates"
+  ]) assert.equal(privateField in opponentView, false, `${privateField} must stay server-only`);
+  assert.deepEqual(opponentView.mulligan, { playerId: "p1", selectedCount: 1 });
+  assert.equal(opponentView.effectFlash.sourceId, publicGear.instanceId);
+  assert.deepEqual(opponentView.effectFlash.targetIds, [publicGear.instanceId]);
+  assert.equal(opponentView.effectFlash.message, "");
+  assert.equal("bottomDeckKnowledgeSequence" in hiddenOwner, false);
+  assert.equal("activationProcess" in opponentView.players.find((candidate) => candidate.id === "p1").base[0], false);
+});
+
+test("authorized private choices keep real option ids while remaining hidden from the opponent", () => {
+  const hiddenHand = card("p2", "sabotage-hidden-hand-id", "Sabotage Target");
+  const chooser = player("p1");
+  const target = player("p2", [hiddenHand]);
+  const game = {
+    phase: "action",
+    turnSequence: 1,
+    currentPlayerId: "p1",
+    players: [chooser, target],
+    battlefields: [],
+    actionChain: null,
+    showdown: null,
+    pendingChoice: {
+      playerId: "p1",
+      effect: "chooseSabotage",
+      card: card("p1", "sabotage-source", "Sabotage"),
+      prompt: "Choose a card.",
+      options: [{ id: hiddenHand.instanceId, cardId: hiddenHand.instanceId, card: hiddenHand }]
+    },
+    pendingPayment: null,
+    log: [],
+    triggerQueue: [],
+    stagedEvents: [],
+    revealedIntel: []
+  };
+
+  const chooserView = snapshotForPlayer(roomFor(game), "p1").game;
+  const opponentView = snapshotForPlayer(roomFor(game), "p2").game;
+  assert.equal(chooserView.pendingChoice.options[0].id, hiddenHand.instanceId);
+  assert.equal(chooserView.pendingChoice.options[0].cardId, hiddenHand.instanceId);
+  assert.equal(chooserView.pendingChoice.options[0].card.instanceId, hiddenHand.instanceId);
+  assert.equal(opponentView.pendingChoice, null);
+});
+
 test("presentation snapshots hide opponent Pending cards and keep the public hand count", () => {
   const secret = card("p1", "presentation-private-card");
   const item = privatePendingItem(secret);

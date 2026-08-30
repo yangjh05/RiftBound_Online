@@ -10,7 +10,7 @@ import { referenceZone, resolveCleanupReference } from "../scripts/reference-rul
 import { OFFICIAL_TOKEN_DEFINITIONS, officialTokenDefinition, officialTokenKinds } from "../src/rules/tokens.mjs";
 import { applyAiAction, enumerateAiPolicyActions, enumerateLegalActions, planPaymentActions, resolveLegalAction } from "../src/ai/actions.mjs";
 import { choosePaymentPlan, enumeratePaymentPlans, executePaymentPlan, isMechanicalPaymentAction, resolvePlannedPayment } from "../src/ai/payment-planner.mjs";
-import { reactionReserveProfile } from "../src/ai/resource-strategy.mjs";
+import { cardResourceAffordability, reactionReserveProfile } from "../src/ai/resource-strategy.mjs";
 import {
   activateCard,
   applyDamage,
@@ -7636,6 +7636,249 @@ test("generated spell Power expires and does not leak into later turns", () => {
   assert.equal(game.currentPlayerId, opponent.id);
 });
 
+test("generated Gear Power cannot pay non-Gear costs and unknown restrictions fail closed", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  player.runes = [];
+  player.runePool = {
+    energy: [],
+    power: [
+      {
+        id: "gear-only-power",
+        type: "power",
+        domain: DOMAINS.ANY,
+        sourceCardId: "fire-below-the-mountain",
+        sourceName: "Fire Below the Mountain",
+        restriction: "gear"
+      },
+      {
+        id: "unknown-restriction-power",
+        type: "power",
+        domain: DOMAINS.ANY,
+        sourceCardId: "invalid-resource-source",
+        sourceName: "Unknown Restricted Power",
+        restriction: "future-unknown-restriction"
+      }
+    ]
+  };
+
+  const unit = instance({
+    ...cards.lonelyPoro,
+    energy: 0,
+    power: [{ domain: DOMAINS.ANY, amount: 1 }]
+  }, player.id, "gear-power-unit");
+  const gear = instance({
+    ...cards.energyConduit,
+    energy: 0,
+    power: [{ domain: DOMAINS.ANY, amount: 1 }]
+  }, player.id, "gear-power-gear");
+  player.hand = [unit, gear];
+
+  assert.equal(beginPlayCard(game, unit.instanceId, "base").ok, false,
+    "Gear-only Power must not make a Unit playable");
+  assert.equal(game.pendingPayment, null);
+
+  assert.equal(beginPlayCard(game, gear.instanceId, "base").ok, true);
+  assert.equal(togglePaymentPoolPower(game, "unknown-restriction-power").ok, false,
+    "unknown generated-resource restrictions must never become unrestricted");
+  assert.equal(togglePaymentPoolPower(game, "gear-only-power").ok, true);
+  assert.equal(confirmPayment(game).ok, true);
+  assert.equal(player.runePool.power.some((resource) => resource.id === "gear-only-power"), false);
+  assert.equal(player.runePool.power.some((resource) => resource.id === "unknown-restriction-power"), true);
+});
+
+test("public affordability preserves generated-resource restrictions and fails unknown values closed", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  player.legend = null;
+  player.champion = null;
+  player.base = [];
+  player.runes = [];
+  player.runePool = {
+    energy: [{ id: "unit-only-ai-energy", type: "energy", restriction: "unitOrUnitAbility" }],
+    power: [
+      { id: "gear-only-ai-power", type: "power", domain: DOMAINS.ANY, restriction: "gear" },
+      { id: "unknown-ai-power", type: "power", domain: DOMAINS.ANY, restriction: "future-unknown-restriction" }
+    ]
+  };
+
+  const unitPower = instance({
+    ...cards.lonelyPoro,
+    energy: 0,
+    power: [{ domain: DOMAINS.ANY, amount: 2 }]
+  }, player.id, "ai-restricted-unit-power");
+  const gearPower = instance({
+    ...cards.energyConduit,
+    energy: 0,
+    power: [{ domain: DOMAINS.ANY, amount: 1 }]
+  }, player.id, "ai-restricted-gear-power");
+  const spellEnergy = instance({
+    id: "ai-restricted-spell-energy",
+    cardNumber: "TEST-AI-RESTRICTED-SPELL",
+    name: "AI Restricted Spell",
+    type: "spell",
+    energy: 1,
+    power: [],
+    effects: []
+  }, player.id, "ai-restricted-spell-energy");
+  const unitEnergy = instance({ ...cards.lonelyPoro, energy: 1, power: [] }, player.id, "ai-unit-energy");
+
+  assert.equal(cardResourceAffordability(game, player.id, unitPower).payable, false);
+  assert.equal(cardResourceAffordability(game, player.id, gearPower).payable, true);
+  assert.equal(cardResourceAffordability(game, player.id, spellEnergy).payable, false);
+  assert.equal(cardResourceAffordability(game, player.id, unitEnergy).payable, true);
+
+  player.runePool = { energy: 1, power: [] };
+  assert.equal(cardResourceAffordability(game, player.id, spellEnergy).payable, true,
+    "legacy numeric generated Energy remains an unrestricted count");
+});
+
+test("Gear-only Add Power is neither advertised nor activated for a non-Gear payment", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const fireBelow = instance(cards.sfd189fireBelowTheMountain, player.id, "fire-below-payment-source");
+  player.legend = fireBelow;
+  player.runePool = { energy: [], power: [] };
+  player.runes = [];
+
+  const unit = instance({
+    ...cards.lonelyPoro,
+    energy: 0,
+    power: [{ domain: DOMAINS.ANY, amount: 1 }]
+  }, player.id, "fire-below-unit-cost");
+  player.hand = [unit];
+  assert.equal(beginPlayCard(game, unit.instanceId, "base").ok, false,
+    "a Gear-only generator must not advertise an impossible Unit payment route");
+  assert.equal(game.pendingPayment, null);
+  assert.equal(fireBelow.exhausted, false);
+
+  player.runes = [rune(DOMAINS.CALM, player.id, "ordinary-unit-payment-rune")];
+  assert.equal(beginPlayCard(game, unit.instanceId, "base").ok, true,
+    "an ordinary Rune should still open the otherwise legal Unit payment");
+  assert.deepEqual(legalActivatedAbilityOptions(game, fireBelow.instanceId), [],
+    "the Gear-only generator must not be offered inside a Unit payment");
+  assert.equal(activateCard(game, fireBelow.instanceId).ok, false);
+  assert.equal(fireBelow.exhausted, false);
+  assert.equal(cancelPayment(game).ok, true);
+
+  player.runes = [];
+  const gear = instance({
+    ...cards.energyConduit,
+    energy: 0,
+    power: [{ domain: DOMAINS.ANY, amount: 1 }]
+  }, player.id, "fire-below-gear-cost");
+  player.hand = [gear];
+  assert.equal(beginPlayCard(game, gear.instanceId, "base").ok, true,
+    "the same generator must remain a valid Gear payment route");
+  assert.equal(legalActivatedAbilityOptions(game, fireBelow.instanceId).length, 1);
+  assert.equal(activateCard(game, fireBelow.instanceId).ok, true);
+  assert.equal(fireBelow.exhausted, true);
+  assert.equal(player.runePool.power.length, 1);
+  assert.equal(player.runePool.power[0].restriction, "gear");
+  assert.equal(togglePaymentPoolPower(game, player.runePool.power[0].id).ok, true);
+  assert.equal(confirmPayment(game).ok, true);
+});
+
+test("Unit-only Add Energy and unknown Add restrictions fail closed before payment opens", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  player.runePool = { energy: [], power: [] };
+  player.runes = [];
+
+  const source = instance({
+    id: "restricted-add-energy-source",
+    cardNumber: "TEST-RESTRICTED-ENERGY",
+    name: "Restricted Energy Source",
+    type: "unit",
+    energy: 0,
+    power: [],
+    keywords: ["Reaction"],
+    effects: [{
+      timing: "activated",
+      kind: "addEnergy",
+      abilityId: "unit-only-energy",
+      amount: 1,
+      exhaust: true,
+      abilityKeywords: ["Reaction"],
+      restriction: "unitOrUnitAbility"
+    }]
+  }, player.id, "restricted-add-energy-source");
+  player.base = [source];
+
+  const spell = instance({
+    id: "restricted-energy-spell",
+    cardNumber: "TEST-RESTRICTED-SPELL",
+    name: "Restricted Energy Spell",
+    type: "spell",
+    energy: 1,
+    power: [],
+    keywords: ["Action"],
+    effects: []
+  }, player.id, "restricted-energy-spell");
+  player.hand = [spell];
+  assert.equal(beginPlayCard(game, spell.instanceId, "base").ok, false,
+    "Unit-only Energy must not make a Spell payment appear possible");
+  assert.equal(game.pendingPayment, null);
+
+  source.effects[0].restriction = "future-unknown-restriction";
+  const unit = instance({ ...cards.lonelyPoro, energy: 1, power: [] }, player.id, "unknown-energy-unit");
+  player.hand = [unit];
+  assert.equal(beginPlayCard(game, unit.instanceId, "base").ok, false,
+    "an unknown Add restriction must never be treated as unrestricted");
+  assert.equal(game.pendingPayment, null);
+
+  source.effects[0].restriction = "unitOrUnitAbility";
+  assert.equal(beginPlayCard(game, unit.instanceId, "base").ok, true);
+  assert.equal(legalActivatedAbilityOptions(game, source.instanceId).length, 1);
+  assert.equal(activateCard(game, source.instanceId).ok, true);
+  assert.equal(player.runePool.energy.length, 1);
+  assert.equal(player.runePool.energy[0].restriction, "unitOrUnitAbility");
+  assert.equal(togglePaymentPoolEnergy(game, player.runePool.energy[0].id).ok, true);
+  assert.equal(confirmPayment(game).ok, true);
+});
+
+test("Butcher of the Sands exposes its Unit-only Energy only to Unit payments", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const butcher = instance(cards.ven141butcherOfTheSands, player.id, "butcher-payment-source");
+  player.legend = butcher;
+  player.runes = [rune(DOMAINS.CALM, player.id, "butcher-payment-rune")];
+  player.runePool = {
+    energy: [],
+    power: [
+      { id: "butcher-cost-power-1", instanceId: "butcher-cost-power-1", type: "power", domain: DOMAINS.ANY },
+      { id: "butcher-cost-power-2", instanceId: "butcher-cost-power-2", type: "power", domain: DOMAINS.ANY }
+    ]
+  };
+
+  const spell = instance({
+    id: "butcher-restricted-spell",
+    cardNumber: "TEST-BUTCHER-SPELL",
+    name: "Butcher Restricted Spell",
+    type: "spell",
+    energy: 1,
+    power: [],
+    keywords: ["Action"],
+    effects: []
+  }, player.id, "butcher-restricted-spell");
+  player.hand = [spell];
+  assert.equal(beginPlayCard(game, spell.instanceId, "base").ok, true);
+  assert.deepEqual(legalActivatedAbilityOptions(game, butcher.instanceId), [],
+    "the printed Unit-only Energy ability must not appear while paying for a Spell");
+  assert.equal(cancelPayment(game).ok, true);
+
+  const unit = instance({ ...cards.lonelyPoro, energy: 1, power: [] }, player.id, "butcher-unit-payment");
+  player.hand = [unit];
+  assert.equal(beginPlayCard(game, unit.instanceId, "base").ok, true);
+  assert.equal(legalActivatedAbilityOptions(game, butcher.instanceId).length, 1,
+    "the same printed ability must remain available while paying for a Unit");
+});
+
 test("payment only allows compatible generated energy when multiple pool energies exist", () => {
   const game = createGame({ interactive: true });
   finishSetup(game);
@@ -8873,6 +9116,46 @@ test("Promising Future finalizes instructed plays from the next player and lets 
   assert.equal(cancelPayment(game).ok, true);
   assert.equal(player.banished.some((card) => card.instanceId === playerCard.instanceId), true);
   assert.equal(player.runes[0].instanceId, "vendetta-player-power");
+});
+
+test("Promising Future can use Gear-only generated Power for the chosen Gear", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const opponent = game.players.find((candidate) => candidate.id !== player.id);
+  const future = instance(cards.promisingFuture, player.id, "gear-power-promising-future");
+  const playerGear = instance({
+    ...cards.energyConduit,
+    energy: 4,
+    power: [{ domain: DOMAINS.ANY, amount: 1 }]
+  }, player.id, "promising-future-paid-gear");
+  const opponentGear = instance({ ...cards.energyConduit, energy: 4, power: [] }, opponent.id,
+    "promising-future-free-gear");
+  player.mainDeck = [playerGear];
+  opponent.mainDeck = [opponentGear];
+  player.runes = [];
+  opponent.runes = [];
+  player.runePool = {
+    energy: [],
+    power: [{
+      id: "promising-future-gear-power",
+      instanceId: "promising-future-gear-power",
+      type: "power",
+      domain: DOMAINS.ANY,
+      restriction: "gear"
+    }]
+  };
+
+  assert.equal(resolveEffect(game, player, future), true);
+  assert.equal(chooseEffectOption(game, playerGear.instanceId).ok, true);
+  assert.equal(chooseEffectOption(game, opponentGear.instanceId).ok, true);
+
+  assert.equal(game.pendingPayment?.source, "effectPlay");
+  assert.equal(game.pendingPayment?.playerId, player.id);
+  assert.equal(game.pendingPayment?.cardId, playerGear.instanceId);
+  assert.equal(togglePaymentPoolPower(game, "promising-future-gear-power").ok, true);
+  assert.equal(confirmPayment(game).ok, true);
+  assert.equal(player.runePool.power.length, 0);
 });
 
 test("the harrowing plays a trash unit after paying its power cost", () => {

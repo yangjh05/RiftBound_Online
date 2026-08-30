@@ -50,6 +50,8 @@
     "test": "node --test tests",
     "test:non-ai": "node scripts/run-non-ai-tests.mjs",
     "test:e2e": "playwright test",
+    "test:e2e:tabletop": "playwright test e2e/tabletop-ui-regression.spec.mjs e2e/tabletop-motion-regression.spec.mjs",
+    "test:ui:tabletop": "node --test tests/tabletop-view.test.mjs tests/tabletop-motion.test.mjs && npm run test:e2e:tabletop",
     "test:e2e:non-ai": "playwright test --grep-invert \"(^|[^A-Za-z])AI([^A-Za-z]|$)\"",
     "test:e2e:install": "playwright install chromium",
     "fuzz": "node scripts/fuzz-games.mjs",

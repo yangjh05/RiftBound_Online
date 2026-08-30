@@ -25,6 +25,7 @@ import {
   selectChampion,
   skipMulligan,
   startTurn,
+  togglePaymentPoolEnergy,
   togglePaymentRune
 } from "../src/engine.mjs";
 import { translateCardName, translateCardText } from "../src/i18n.mjs";
@@ -375,6 +376,42 @@ test("Wild Claw recycles every looked card when its optional play is declined", 
   assert.equal(chooseEffectOption(game, "decline").ok, true);
   assert.deepEqual(new Set(player.mainDeck.map((card) => card.instanceId)), new Set(looked.map((card) => card.instanceId)));
   assert.equal(player.mainDeck.length, 5);
+});
+
+test("Wild Claw can spend Unit-only generated Energy on its reduced Unit play", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const selected = instance({ ...cards.lonelyPoro, energy: 6, power: [] }, player.id, "ven-wild-unit-energy");
+  player.mainDeck = [
+    selected,
+    instance(cards.stalwartPoro, player.id, "ven-wild-energy-2"),
+    instance(cards.charm, player.id, "ven-wild-energy-3"),
+    instance(cards.gust, player.id, "ven-wild-energy-4"),
+    instance(cards.guardianAngel, player.id, "ven-wild-energy-5")
+  ];
+  player.runes = [];
+  player.runePool = {
+    energy: [{
+      id: "ven-wild-unit-only-energy",
+      type: "energy",
+      domains: ["Any"],
+      restriction: "unitOrUnitAbility"
+    }],
+    power: []
+  };
+  const wildClaw = instance(cards.ven089wildClaw, player.id, "ven-wild-energy-claw");
+
+  assert.equal(resolveEffect(game, player, wildClaw), true);
+  assert.ok(game.pendingChoice.options.some((option) => option.cardId === selected.instanceId));
+  assert.equal(chooseEffectOption(game, selected.instanceId).ok, true);
+  assert.equal(chooseEffectOption(game, "decline").ok, true,
+    "declining Empower should continue to the reduced-cost payment");
+  assert.equal(game.pendingPayment?.source, "effectPlay");
+  assert.equal(game.pendingPayment?.cardId, selected.instanceId);
+  assert.equal(game.pendingPayment?.energyCost, 1);
+  assert.equal(togglePaymentPoolEnergy(game, "ven-wild-unit-only-energy").ok, true);
+  assert.equal(confirmPayment(game).ok, true);
 });
 
 test("Vendetta card-play observers honor first, another, non-token, and outside-hand conditions", () => {

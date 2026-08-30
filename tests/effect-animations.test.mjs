@@ -44,7 +44,8 @@ test("counter animation keeps the countered target from a removed Chain pair", (
 });
 
 test("draw, death, Might, and counter cues are connected to animations lasting at least one second", () => {
-  assert.match(appSource, /data-effect="\$\{drawAnimation \? "draw" : ""\}"/);
+  assert.match(appSource, /tableCardPile\(\{[\s\S]*?effect:\s*drawAnimation \? "draw" : ""/);
+  assert.match(appSource, /data-effect="\$\{effect\}"/);
   assert.match(appSource, /function unitDeathGhosts\(location, playerId\)/);
   assert.match(appSource, /function unitMightCue\(card\)/);
   assert.match(appSource, /function counteredChainZoneItem\(item\)/);

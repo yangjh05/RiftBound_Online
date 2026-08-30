@@ -125,6 +125,19 @@ import { detectEffectAnimations, EFFECT_ANIMATION_DURATION_MS } from "./ui/effec
 import { collectChainTargetIds } from "./ui/chain-targets.mjs";
 import { pendingDecisionVisibleToViewer } from "./ui/game-visibility.mjs";
 import { battlefieldDisplayName } from "./ui/battlefield-labels.mjs";
+import { fanCardStyle, tabletopSeatView, topDiscardCard } from "./ui/tabletop-view.mjs";
+import {
+  buildBurnOutDrawTransfers,
+  buildPrivateDeckTransfers,
+  buildPrivateHandBoardTransfers,
+  buildPrivateHandChainTransfers,
+  buildPrivateHiddenChainTransfers,
+  buildTabletopTransfers,
+  clearTabletopStateMotions,
+  TABLETOP_DRAW_STAGGER_MS,
+  TABLETOP_TRANSFER_DURATION_MS,
+  TABLETOP_TRANSFER_EASING
+} from "./ui/tabletop-motion.mjs";
 import {
   advanceTutorialAfterCommand,
   createTutorialGame,
@@ -173,6 +186,8 @@ online.match = null;
 online.lastRefresh = 0;
 online.refreshTimer = null;
 let onlineSelectedCardId = null;
+let onlineSnapshotRevision = 0;
+let deferredOnlineRenderTimer = null;
 let deckEditor = {
   selectedDeckId: deckStore.activeDeckIds[0] || deckStore.decks[0]?.id,
   pendingDeleteDeckId: null,
@@ -262,6 +277,9 @@ let replayBrowser = {
 };
 const app = document.querySelector("#app");
 let reportingUiException = false;
+const modalFocusOpeners = new Map();
+let tabletopBackSentinelActive = false;
+let suppressTabletopPopstate = false;
 
 function syncVisualViewport() {
   const viewport = window.visualViewport;
@@ -411,12 +429,1391 @@ function localizedCommandFailure(message) {
 }
 
 function render() {
+  const previousGeometry = captureTabletopGeometry();
+  const previousFocus = captureFocusState();
+  const previousModalKey = topUiModalKey();
   try {
     renderApp();
+    syncModalAccessibility();
+    restoreFocusAfterRender(previousFocus, previousModalKey);
+    syncTabletopBackSentinel();
+    runTabletopTransferAnimations(uiMotion.transfers, previousGeometry);
   } catch (error) {
     reportUiException(error, "render");
     showUiExceptionOverlay(error, "render");
   }
+}
+
+const FOCUS_DATA_KEYS = [
+  "action", "card", "cardId", "player", "destination", "choice", "rune", "mode", "ability",
+  "chainItemId", "unit", "battlefield", "target", "effect", "power", "energy", "alphaTarget"
+];
+
+function focusableElements(scope = app) {
+  if (!scope?.querySelectorAll) return [];
+  return [...scope.querySelectorAll("button, input, select, textarea, a[href], [tabindex]")].filter((node) => {
+    if (!(node instanceof HTMLElement) || node.disabled || node.closest("[inert]")) return false;
+    if (node.tabIndex < 0 && !node.matches("[data-ui-modal]")) return false;
+    const style = window.getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+  });
+}
+
+function captureFocusState() {
+  const node = document.activeElement;
+  if (!(node instanceof HTMLElement) || !app?.contains(node)) return null;
+  const data = {};
+  for (const key of FOCUS_DATA_KEYS) {
+    if (node.dataset?.[key] != null) data[key] = String(node.dataset[key]);
+  }
+  const seat = node.closest("[data-player-id]");
+  const zone = node.closest("[data-zone]");
+  return {
+    tag: node.tagName,
+    type: node.getAttribute("type") || "",
+    id: node.id || "",
+    name: node.getAttribute("name") || "",
+    data,
+    seatId: seat?.dataset.playerId || "",
+    zone: zone?.dataset.zone || "",
+    selectionStart: typeof node.selectionStart === "number" ? node.selectionStart : null,
+    selectionEnd: typeof node.selectionEnd === "number" ? node.selectionEnd : null
+  };
+}
+
+function focusStateMatches(node, state) {
+  if (!(node instanceof HTMLElement) || !state || node.tagName !== state.tag) return false;
+  if (state.id && node.id === state.id) return true;
+  if (state.type && node.getAttribute("type") !== state.type) return false;
+  if (state.name && node.getAttribute("name") !== state.name) return false;
+  const entries = Object.entries(state.data || {});
+  if (!entries.length) return false;
+  if (!entries.every(([key, value]) => String(node.dataset?.[key] ?? "") === value)) return false;
+  const seat = node.closest("[data-player-id]")?.dataset.playerId || "";
+  const zone = node.closest("[data-zone]")?.dataset.zone || "";
+  if (state.seatId && state.seatId !== seat) return false;
+  if (state.zone && state.zone !== zone) return false;
+  return true;
+}
+
+function restoreFocusState(state, scope = app) {
+  if (!state) return false;
+  const candidate = focusableElements(scope).find((node) => focusStateMatches(node, state));
+  if (!candidate) return false;
+  candidate.focus({ preventScroll: true });
+  if (state.selectionStart != null && typeof candidate.setSelectionRange === "function") {
+    try {
+      candidate.setSelectionRange(state.selectionStart, state.selectionEnd ?? state.selectionStart);
+    } catch {
+      // Number/range inputs do not expose a text selection range.
+    }
+  }
+  return true;
+}
+
+function topUiModal() {
+  const modals = [...(app?.querySelectorAll?.("[data-ui-modal]") || [])].filter((node) => tabletopRect(node));
+  return modals
+    .map((node, index) => ({
+      node,
+      index,
+      zIndex: Number.parseInt(window.getComputedStyle(node).zIndex, 10) || 0
+    }))
+    .sort((left, right) => left.zIndex - right.zIndex || left.index - right.index)
+    .at(-1)?.node || null;
+}
+
+function topUiModalKey() {
+  const modal = topUiModal();
+  return modal?.dataset.modalKey || modal?.id || "";
+}
+
+function focusModalInitial(modal) {
+  if (!(modal instanceof HTMLElement)) return;
+  const preferred = focusableElements(modal).find((node) => node.hasAttribute("data-primary-focus"))
+    || focusableElements(modal)[0]
+    || modal;
+  preferred.focus({ preventScroll: true });
+}
+
+function restoreFocusAfterRender(previousFocus, previousModalKey) {
+  const modal = topUiModal();
+  const currentModalKey = modal?.dataset.modalKey || modal?.id || "";
+  if (modal && currentModalKey !== previousModalKey && !modalFocusOpeners.has(currentModalKey)) {
+    if (previousFocus) modalFocusOpeners.set(currentModalKey, previousFocus);
+    focusModalInitial(modal);
+    return;
+  }
+  if (previousModalKey && previousModalKey !== currentModalKey && modalFocusOpeners.has(previousModalKey)) {
+    const opener = modalFocusOpeners.get(previousModalKey);
+    modalFocusOpeners.delete(previousModalKey);
+    if (restoreFocusState(opener, modal || app)) return;
+  }
+  if (modal && currentModalKey !== previousModalKey) {
+    focusModalInitial(modal);
+    return;
+  }
+  if (modal) {
+    if (!restoreFocusState(previousFocus, modal)) focusModalInitial(modal);
+    return;
+  }
+  if (previousModalKey && modalFocusOpeners.has(previousModalKey)) {
+    const opener = modalFocusOpeners.get(previousModalKey);
+    modalFocusOpeners.delete(previousModalKey);
+    if (restoreFocusState(opener)) return;
+  }
+  restoreFocusState(previousFocus);
+}
+
+function setUiInert(node, inert) {
+  if (!(node instanceof HTMLElement)) return;
+  if (inert) {
+    node.setAttribute("inert", "");
+    node.setAttribute("aria-hidden", "true");
+    node.dataset.uiInert = "true";
+    return;
+  }
+  if (node.dataset.uiInert !== "true") return;
+  node.removeAttribute("inert");
+  node.removeAttribute("aria-hidden");
+  delete node.dataset.uiInert;
+}
+
+function syncModalAccessibility() {
+  for (const node of app?.querySelectorAll?.("[data-ui-inert]") || []) setUiInert(node, false);
+  const modal = topUiModal();
+  if (!modal) return;
+  const topbar = app.querySelector(".tabletop-topbar");
+  setUiInert(topbar, true);
+  const layout = modal.closest(".tabletop-layout") || app.querySelector(".tabletop-layout");
+  const overlay = layout?.querySelector(":scope > .tabletop-overlay-root");
+  for (const child of layout?.children || []) {
+    if (child === overlay || child === modal || child.contains(modal)) continue;
+    setUiInert(child, true);
+  }
+  for (const child of overlay?.children || []) {
+    if (child === modal || child.contains(modal)) continue;
+    setUiInert(child, true);
+  }
+}
+
+function trapModalTab(event, modal) {
+  const items = focusableElements(modal).filter((node) => node !== modal);
+  if (!items.length) {
+    event.preventDefault();
+    modal.focus({ preventScroll: true });
+    return;
+  }
+  const first = items[0];
+  const last = items.at(-1);
+  if (!modal.contains(document.activeElement)) {
+    event.preventDefault();
+    (event.shiftKey ? last : first).focus({ preventScroll: true });
+    return;
+  }
+  if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus({ preventScroll: true });
+  } else if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus({ preventScroll: true });
+  }
+}
+
+function hasTabletopUiLayer() {
+  if (appView !== "game") return false;
+  if (replayMode) return true;
+  if (app?.querySelector?.(".phase-unavailable")) return false;
+  return Boolean(topUiModal() || fullCardOpen || pendingGameExit || (resultRevealReady && game?.phase === "complete" && !resultDismissed)
+    || graveyardOpenPlayerId || banishedOpenPlayerId || intelOpenPlayerId || logOpen || inspectorOpen
+    || attachmentsOpenCardId || inspectedChainItemId || handOpen || moveSelection.size);
+}
+
+function syncTabletopBackSentinel() {
+  const shouldGuard = hasTabletopUiLayer();
+  if (shouldGuard && !tabletopBackSentinelActive) {
+    try {
+      window.history.pushState({ ...(window.history.state || {}), riftboundUiLayer: true }, "", window.location.href);
+      tabletopBackSentinelActive = true;
+    } catch (error) {
+      reportUiException(error, "UI history guard");
+    }
+    return;
+  }
+  if (!shouldGuard && tabletopBackSentinelActive) {
+    suppressTabletopPopstate = true;
+    tabletopBackSentinelActive = false;
+    try {
+      window.history.back();
+    } catch (error) {
+      suppressTabletopPopstate = false;
+      reportUiException(error, "UI history release");
+    }
+  }
+}
+
+function normalizedDomZone(zone) {
+  return {
+    "main-deck": "mainDeck",
+    "rune-deck": "runeDeck"
+  }[zone] || String(zone || "");
+}
+
+function motionLocationKey(location, { includeLocation = true } = {}) {
+  if (!location) return "";
+  return [
+    String(location.playerId || ""),
+    normalizedDomZone(location.zone),
+    includeLocation ? String(location.locationId || "") : ""
+  ].join("|");
+}
+
+function tabletopRect(node) {
+  if (!(node instanceof Element)) return null;
+  const rect = node.getBoundingClientRect();
+  const style = window.getComputedStyle(node);
+  if (rect.width < 2 || rect.height < 2 || style.display === "none" || style.visibility === "hidden") return null;
+  return {
+    top: rect.top,
+    right: rect.right,
+    bottom: rect.bottom,
+    left: rect.left,
+    width: rect.width,
+    height: rect.height
+  };
+}
+
+function tabletopCardNodePriority(node) {
+  if (node.closest(".tabletop-overlay-root")) return -1;
+  if (node.matches("[data-hand-card]")) return 100;
+  if (node.matches(".unit-token, .base-token, .nonunit-token")) return 95;
+  if (node.matches("[data-rune-card], .rune-card-chip")) return 90;
+  if (node.matches(".identity-button, .physical-identity-card")) return 80;
+  if (node.matches(".chain-zone-item")) return 70;
+  if (node.matches(".image-card")) return 50;
+  return 20;
+}
+
+function captureTabletopGeometry() {
+  const geometry = { cardRects: new Map(), zoneRects: new Map() };
+  const root = app?.querySelector?.(".tabletop-layout");
+  if (!root) return geometry;
+
+  for (const node of root.querySelectorAll("[data-card-id]")) {
+    const id = String(node.dataset.cardId || "");
+    if (!id || node.closest(".tabletop-overlay-root")) continue;
+    const priority = tabletopCardNodePriority(node);
+    const rect = priority >= 0 ? tabletopRect(node) : null;
+    const previous = geometry.cardRects.get(id);
+    if (!rect || (previous && previous.priority >= priority)) continue;
+    geometry.cardRects.set(id, { rect, priority });
+  }
+
+  for (const node of root.querySelectorAll("[data-zone]")) {
+    if (node.closest(".tabletop-overlay-root")) continue;
+    const rect = tabletopRect(node);
+    if (!rect) continue;
+    const seat = node.closest("[data-player-id]");
+    const location = {
+      playerId: node.dataset.playerId || seat?.dataset.playerId || "",
+      zone: normalizedDomZone(node.dataset.zone),
+      locationId: node.dataset.locationId || node.dataset.battlefieldId || ""
+    };
+    geometry.zoneRects.set(motionLocationKey(location, { includeLocation: false }), rect);
+    if (location.locationId) geometry.zoneRects.set(motionLocationKey(location), rect);
+  }
+  return geometry;
+}
+
+function geometryRectForTransfer(geometry, transfer, endpoint) {
+  const location = transfer?.[endpoint];
+  if (!location || !geometry) return null;
+  const preferZone = ["mainDeck", "runeDeck"].includes(location.zone)
+    || (endpoint === "to" && ["trash", "banished", "mainDeck", "runeDeck"].includes(location.zone));
+  const endpointCardId = endpoint === "from" ? transfer.fromCardId || transfer.id : transfer.toCardId || transfer.id;
+  const cardRect = geometry.cardRects?.get(endpointCardId)?.rect || null;
+  const zoneRect = geometry.zoneRects?.get(motionLocationKey(location))
+    || geometry.zoneRects?.get(motionLocationKey(location, { includeLocation: false }))
+    || geometry.zoneRects?.get(motionLocationKey({ ...location, playerId: "" }))
+    || geometry.zoneRects?.get(motionLocationKey({ ...location, playerId: "" }, { includeLocation: false }))
+    || null;
+  return preferZone ? zoneRect || cardRect : cardRect || zoneRect;
+}
+
+function tabletopMotionReduced() {
+  return Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
+}
+
+function presentationMotionDuration(duration) {
+  return tabletopMotionReduced() ? Math.min(40, Math.max(1, Number(duration) || 1)) : duration;
+}
+
+function tabletopTransferArc(kind, distance) {
+  const base = Math.min(120, Math.max(24, distance * 0.2));
+  if (kind === "play") return Math.max(72, base);
+  if (kind === "flow" || kind === "banish") return Math.max(58, base * 0.8);
+  if (kind === "draw") return Math.max(46, base * 0.7);
+  if (kind === "move") return Math.max(36, base * 0.55);
+  if (kind === "burn" || kind === "defeat") return Math.max(24, base * 0.36);
+  return Math.max(28, base * 0.45);
+}
+
+function tabletopTransferRotations(transfer) {
+  const sourceExhausted = Boolean(transfer?.from?.exhausted);
+  const destinationExhausted = Boolean(transfer?.to?.exhausted);
+  if (["burn", "discard", "defeat", "resolve"].includes(transfer.kind)) {
+    return { start: sourceExhausted ? 90 : 0, end: transfer.kind === "burn" ? 16 : 0 };
+  }
+  if (transfer.kind === "flow" || transfer.kind === "banish") return { start: sourceExhausted ? 90 : 0, end: -8 };
+  if (transfer.kind === "draw") return { start: -5, end: 0 };
+  return { start: sourceExhausted ? 90 : 0, end: destinationExhausted ? 90 : 0 };
+}
+
+function createTabletopFlight(transfer, start) {
+  const flight = document.createElement("div");
+  flight.className = `tabletop-card-flight transfer-${transfer.kind} ${transfer.faceVisible ? "face-up" : "face-down"}`;
+  flight.setAttribute("aria-hidden", "true");
+  flight.style.left = `${start.left}px`;
+  flight.style.top = `${start.top}px`;
+  flight.style.width = `${start.width}px`;
+  flight.style.height = `${start.height}px`;
+  if (transfer.faceVisible && transfer.image) {
+    const image = document.createElement("img");
+    image.src = transfer.image;
+    image.alt = "";
+    flight.appendChild(image);
+  } else if (transfer.faceVisible && transfer.name) {
+    const label = document.createElement("span");
+    label.className = "flight-card-name";
+    label.textContent = transfer.name;
+    flight.appendChild(label);
+  } else {
+    const back = document.createElement("span");
+    back.className = "flight-card-back";
+    back.textContent = "R";
+    flight.appendChild(back);
+  }
+  return flight;
+}
+
+function runTabletopTransferAnimations(transfers, previousGeometry) {
+  if (!Array.isArray(transfers) || !transfers.length || !app.querySelector(".tabletop-layout")) return;
+  const currentGeometry = captureTabletopGeometry();
+  const reduced = tabletopMotionReduced();
+  let drawIndex = 0;
+  let layer = null;
+
+  for (const transfer of transfers) {
+    if (["exhaust", "ready"].includes(transfer?.kind)) continue;
+    const start = geometryRectForTransfer(previousGeometry, transfer, "from");
+    const end = geometryRectForTransfer(currentGeometry, transfer, "to");
+    if (!start || !end) continue;
+    const dx = (end.left + end.width / 2) - (start.left + start.width / 2);
+    const dy = (end.top + end.height / 2) - (start.top + start.height / 2);
+    const distance = Math.hypot(dx, dy);
+    if (distance < 3 && Math.abs(end.width - start.width) < 2 && Math.abs(end.height - start.height) < 2) continue;
+    const destinationCardId = transfer.toCardId || transfer.id;
+    const destinationCardNode = [...app.querySelectorAll("[data-card-id]")]
+      .find((node) => node.dataset.cardId === destinationCardId && tabletopCardNodePriority(node) >= 0 && tabletopRect(node));
+    const destinationZoneNode = [...app.querySelectorAll("[data-zone]")].find((node) => {
+      if (node.closest(".tabletop-overlay-root") || normalizedDomZone(node.dataset.zone) !== transfer.to.zone) return false;
+      const seatId = node.dataset.playerId || node.closest("[data-player-id]")?.dataset.playerId || "";
+      return !transfer.to.playerId || !seatId || seatId === transfer.to.playerId;
+    });
+    const destinationNode = destinationCardNode || destinationZoneNode || null;
+    const delay = transfer.kind === "draw" ? drawIndex++ * TABLETOP_DRAW_STAGGER_MS : 0;
+    const revealDestination = () => {
+      destinationCardNode?.classList.remove("tabletop-transfer-pending");
+      if (!destinationNode) return;
+      destinationNode.classList.add("tabletop-transfer-arrival", `arrival-${transfer.kind}`);
+      window.setTimeout(() => destinationNode.classList.remove("tabletop-transfer-arrival", `arrival-${transfer.kind}`), 360);
+    };
+    if (reduced) {
+      revealDestination();
+      continue;
+    }
+    destinationCardNode?.classList.add("tabletop-transfer-pending");
+
+    if (!layer) {
+      layer = document.createElement("div");
+      layer.className = "tabletop-card-flight-layer";
+      document.body.appendChild(layer);
+    }
+    const flight = createTabletopFlight(transfer, start);
+    layer.appendChild(flight);
+    const scaleX = Math.max(0.18, end.width / Math.max(1, start.width));
+    const scaleY = Math.max(0.18, end.height / Math.max(1, start.height));
+    const arc = tabletopTransferArc(transfer.kind, distance);
+    const rotations = tabletopTransferRotations(transfer);
+    const middleScaleX = 1 + (scaleX - 1) * 0.55;
+    const middleScaleY = 1 + (scaleY - 1) * 0.55;
+    const fadeEnd = ["burn", "discard", "defeat", "resolve", "flow", "banish", "recycle"].includes(transfer.kind) ? 0.2 : 0.94;
+    const animation = flight.animate([
+      {
+        transform: `translate3d(0,0,0) scale(1,1) rotate(${rotations.start}deg)`,
+        opacity: 0.96
+      },
+      {
+        offset: 0.58,
+        transform: `translate3d(${dx * 0.58}px,${dy * 0.58 - arc}px,0) scale(${middleScaleX},${middleScaleY}) rotate(${rotations.start + (rotations.end - rotations.start) * 0.58}deg)`,
+        opacity: 1
+      },
+      {
+        transform: `translate3d(${dx}px,${dy}px,0) scale(${scaleX},${scaleY}) rotate(${rotations.end}deg)`,
+        opacity: fadeEnd
+      }
+    ], {
+      duration: TABLETOP_TRANSFER_DURATION_MS,
+      delay,
+      easing: TABLETOP_TRANSFER_EASING,
+      fill: "forwards"
+    });
+    let cleaned = false;
+    const cleanup = (arrive = true) => {
+      if (cleaned) return;
+      cleaned = true;
+      flight.remove();
+      if (arrive) revealDestination();
+      else destinationCardNode?.classList.remove("tabletop-transfer-pending");
+      if (layer && !layer.childElementCount) layer.remove();
+    };
+    animation.addEventListener("finish", () => cleanup(true), { once: true });
+    animation.addEventListener("cancel", () => cleanup(false), { once: true });
+    window.setTimeout(() => cleanup(true), delay + TABLETOP_TRANSFER_DURATION_MS + 180);
+  }
+}
+
+function renderPowerCostIssue(power, label) {
+  if (!Array.isArray(power)) return `${label} is invalid.`;
+  for (const [index, requirement] of power.entries()) {
+    if (!requirement || typeof requirement !== "object" || Array.isArray(requirement)) return `${label}[${index}] is invalid.`;
+    if (typeof requirement.domain !== "string" || !requirement.domain) return `${label}[${index}] domain is invalid.`;
+    if (!Number.isInteger(requirement.amount) || requirement.amount < 0) return `${label}[${index}] amount is invalid.`;
+    if (requirement.allowedDomains != null
+      && (!Array.isArray(requirement.allowedDomains) || requirement.allowedDomains.some((domain) => typeof domain !== "string" || !domain))) {
+      return `${label}[${index}] allowed domains are invalid.`;
+    }
+  }
+  return "";
+}
+
+function renderObjectListIssue(value, label, { allowNull = false } = {}) {
+  if (!Array.isArray(value)) return `${label} is invalid.`;
+  for (const [index, item] of value.entries()) {
+    if (allowNull && item == null) continue;
+    if (!item || typeof item !== "object" || Array.isArray(item)) return `${label}[${index}] is invalid.`;
+  }
+  return "";
+}
+
+function renderStringListIssue(value, label) {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || !item)) return `${label} is invalid.`;
+  return "";
+}
+
+const TARGET_RECORD_KEYS = [
+  "declaredTargets", "declaredPlayTargets", "playResolutionTargets", "declaredTargetIdentities",
+  "declaredChoices", "declaredPlayChoices", "playResolutionChoices", "allocations"
+];
+const TARGET_REFERENCE_KEYS = [
+  "targetId", "cardId", "unitId", "battlefieldId", "destinationId"
+];
+
+function renderTargetCarrierIssue(value, label) {
+  if (value == null) return "";
+  if (typeof value !== "object" || Array.isArray(value)) return `${label} is invalid.`;
+  for (const key of TARGET_REFERENCE_KEYS) {
+    if (value[key] != null && (typeof value[key] !== "string" || !value[key])) return `${label} ${key} is invalid.`;
+  }
+  for (const key of TARGET_RECORD_KEYS) {
+    if (value[key] == null) continue;
+    const issue = renderObjectListIssue(value[key], `${label} ${key}`);
+    if (issue) return issue;
+    for (const [index, record] of value[key].entries()) {
+      for (const referenceKey of TARGET_REFERENCE_KEYS) {
+        if (record[referenceKey] != null && (typeof record[referenceKey] !== "string" || !record[referenceKey])) {
+          return `${label} ${key}[${index}] ${referenceKey} is invalid.`;
+        }
+      }
+    }
+  }
+  if (value.targetIds != null) {
+    const issue = renderStringListIssue(value.targetIds, `${label} targetIds`);
+    if (issue) return issue;
+  }
+  return "";
+}
+
+function renderNestedRepeatableFieldsIssue(value, label, seen = new Set()) {
+  if (!value || typeof value !== "object" || seen.has(value)) return "";
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const [index, item] of value.entries()) {
+      const issue = renderNestedRepeatableFieldsIssue(item, `${label}[${index}]`, seen);
+      if (issue) return issue;
+    }
+    return "";
+  }
+  for (const key of TARGET_REFERENCE_KEYS) {
+    if (value[key] != null && (typeof value[key] !== "string" || !value[key])) return `${label} ${key} is invalid.`;
+  }
+  for (const key of [
+    "abilityKeywords", "allowedDomains", "cardTypes", "keywords", "names",
+    "sourceCardTypes", "targetIds", "targetTags", "tags"
+  ]) {
+    if (value[key] == null) continue;
+    const issue = renderStringListIssue(value[key], `${label} ${key}`);
+    if (issue) return issue;
+  }
+  for (const key of ["costPower", "replacementPower", "additionalPowerCost"]) {
+    if (value[key] == null) continue;
+    const issue = renderPowerCostIssue(value[key], `${label} ${key}`);
+    if (issue) return issue;
+  }
+  if (value.additionalPower != null) {
+    const issue = renderPowerCostIssue(
+      Array.isArray(value.additionalPower) ? value.additionalPower : [value.additionalPower],
+      `${label} additionalPower`
+    );
+    if (issue) return issue;
+  }
+  if (value.costOptions != null) {
+    const optionsIssue = renderObjectListIssue(value.costOptions, `${label} costOptions`);
+    if (optionsIssue) return optionsIssue;
+    for (const [index, option] of value.costOptions.entries()) {
+      if (option.power == null) continue;
+      const powerIssue = renderPowerCostIssue(option.power, `${label} costOptions[${index}] power`);
+      if (powerIssue) return powerIssue;
+    }
+  }
+  if (value.specs != null) {
+    const issue = renderObjectListIssue(value.specs, `${label} specs`);
+    if (issue) return issue;
+  }
+  for (const [key, nested] of Object.entries(value)) {
+    if (!nested || typeof nested !== "object") continue;
+    const issue = renderNestedRepeatableFieldsIssue(nested, `${label} ${key}`, seen);
+    if (issue) return issue;
+  }
+  return "";
+}
+
+function collectAuthoritativeCardIds(card, label, ids) {
+  if (!card) return "";
+  if (ids.has(card.instanceId)) return `${label} duplicates card identifier ${card.instanceId}.`;
+  ids.add(card.instanceId);
+  for (const [index, attachment] of (card.attachments || []).entries()) {
+    const issue = collectAuthoritativeCardIds(attachment, `${label} attachment[${index}]`, ids);
+    if (issue) return issue;
+  }
+  return "";
+}
+
+function renderCardIssue(card, label) {
+  if (!card || typeof card !== "object" || Array.isArray(card)
+    || typeof card.instanceId !== "string" || !card.instanceId
+    || typeof card.name !== "string" || !card.name) return `${label} has an invalid card.`;
+  if (card.text != null && typeof card.text !== "string") return `${label} text is invalid.`;
+  if (card.translations != null) {
+    if (typeof card.translations !== "object" || Array.isArray(card.translations)) return `${label} translations are invalid.`;
+    for (const [language, translation] of Object.entries(card.translations)) {
+      if (!translation || typeof translation !== "object" || Array.isArray(translation)) return `${label} ${language} translation is invalid.`;
+      for (const key of ["name", "text"]) {
+        if (translation[key] != null && typeof translation[key] !== "string") return `${label} ${language} translation ${key} is invalid.`;
+      }
+    }
+  }
+  for (const key of [
+    "attachments", "effects", "appendedEffects", "copiedEffectTextEffects", "keywords", "types", "tags", "domains", "power",
+    "temporaryKeywords", "appendedKeywords", "copiedEffectTextKeywords", "damagePreventions",
+    "declaredPlayTargets", "playResolutionTargets", "declaredTargetIdentities",
+    "declaredPlayChoices", "playResolutionChoices", "paidOptionalPowerEffects"
+  ]) {
+    if (card[key] != null && !Array.isArray(card[key])) return `${label} ${key} is invalid.`;
+  }
+  for (const key of ["keywords", "types", "tags", "domains", "temporaryKeywords", "appendedKeywords", "copiedEffectTextKeywords"]) {
+    if (card[key] == null) continue;
+    const issue = renderStringListIssue(card[key], `${label} ${key}`);
+    if (issue) return issue;
+  }
+  for (const key of ["effects", "appendedEffects", "copiedEffectTextEffects", "damagePreventions", "declaredPlayTargets", "playResolutionTargets", "declaredTargetIdentities", "declaredPlayChoices", "playResolutionChoices", "paidOptionalPowerEffects"]) {
+    if (card[key] == null) continue;
+    const issue = renderObjectListIssue(card[key], `${label} ${key}`, {
+      allowNull: ["effects", "appendedEffects", "copiedEffectTextEffects"].includes(key)
+    });
+    if (issue) return issue;
+  }
+  const carrierIssue = renderTargetCarrierIssue(card, label);
+  if (carrierIssue) return carrierIssue;
+  for (const key of ["effects", "appendedEffects", "copiedEffectTextEffects"]) {
+    for (const [index, effect] of (card[key] || []).entries()) {
+      const issue = renderNestedRepeatableFieldsIssue(effect, `${label} ${key}[${index}]`);
+      if (issue) return issue;
+    }
+  }
+  const powerIssue = renderPowerCostIssue(card.power || [], `${label} power`);
+  if (powerIssue) return powerIssue;
+  if (card.additionalCost != null) {
+    if (typeof card.additionalCost !== "object" || Array.isArray(card.additionalCost)) return `${label} additionalCost is invalid.`;
+    const additionalCostIssue = renderNestedRepeatableFieldsIssue(card.additionalCost, `${label} additionalCost`);
+    if (additionalCostIssue) return additionalCostIssue;
+  }
+  for (const [index, attachment] of (card.attachments || []).entries()) {
+    const issue = renderCardIssue(attachment, `${label} attachment[${index}]`);
+    if (issue) return issue;
+  }
+  return "";
+}
+
+function renderCardListIssue(list, label) {
+  if (!Array.isArray(list)) return `${label} is unavailable.`;
+  for (const [index, card] of list.entries()) {
+    const issue = renderCardIssue(card, `${label}[${index}]`);
+    if (issue) return issue;
+  }
+  return "";
+}
+
+function renderContinuationIssue(continuation, label, depth = 0) {
+  if (continuation == null) return "";
+  if (!continuation || typeof continuation !== "object" || Array.isArray(continuation)
+    || typeof continuation.kind !== "string" || !continuation.kind) return `${label} is invalid.`;
+  if (depth > 8) return `${label} nesting is invalid.`;
+  if (continuation.kind === "triggerContinuationSequence" || continuation.continuations != null) {
+    if (!Array.isArray(continuation.continuations)) return `${label} continuations are invalid.`;
+    for (const [index, nested] of continuation.continuations.entries()) {
+      const issue = renderContinuationIssue(nested, `${label} continuations[${index}]`, depth + 1);
+      if (issue) return issue;
+    }
+  }
+  return "";
+}
+
+function renderTriggerIssue(trigger, label, playerIds) {
+  if (!trigger || typeof trigger !== "object" || Array.isArray(trigger)) return `${label} is invalid.`;
+  if (!playerIds.has(trigger.playerId)) return `${label} player is invalid.`;
+  if (typeof trigger.kind !== "string" || !trigger.kind) return `${label} kind is invalid.`;
+  for (const key of ["id", "sourceCardId"]) {
+    if (trigger[key] != null && (typeof trigger[key] !== "string" || !trigger[key])) return `${label} ${key} is invalid.`;
+  }
+  if (trigger.sourceCardSnapshot != null) {
+    const sourceIssue = renderCardIssue(trigger.sourceCardSnapshot, `${label} sourceCardSnapshot`);
+    if (sourceIssue) return sourceIssue;
+  }
+  const triggerIssue = renderTargetCarrierIssue(trigger, label);
+  if (triggerIssue) return triggerIssue;
+  const dataIssue = renderTargetCarrierIssue(trigger.data, `${label} data`);
+  if (dataIssue) return dataIssue;
+  const nestedIssue = renderNestedRepeatableFieldsIssue(trigger.data, `${label} data`);
+  if (nestedIssue) return nestedIssue;
+  return "";
+}
+
+function renderTriggerBatchIssue(batch, label, playerIds) {
+  if (!batch || typeof batch !== "object" || Array.isArray(batch) || !Array.isArray(batch.triggers)) return `${label} is invalid.`;
+  if (batch.mode != null && !["queue", "showdownChain", "actionChain"].includes(batch.mode)) return `${label} mode is invalid.`;
+  for (const [index, trigger] of batch.triggers.entries()) {
+    const issue = renderTriggerIssue(trigger, `${label} triggers[${index}]`, playerIds);
+    if (issue) return issue;
+  }
+  return renderContinuationIssue(batch.continuation, `${label} continuation`);
+}
+
+function renderPendingAsyncStateIssue(pending, label, playerIds) {
+  if (pending.effectSequenceContinuation != null) {
+    const continuation = pending.effectSequenceContinuation;
+    if (!continuation || typeof continuation !== "object" || Array.isArray(continuation)
+      || !playerIds.has(continuation.playerId)
+      || typeof continuation.finishSpell !== "boolean") return `${label} effectSequenceContinuation is invalid.`;
+    const cardIssue = renderCardIssue(continuation.card, `${label} effectSequenceContinuation card`);
+    if (cardIssue) return cardIssue;
+    const specsIssue = renderObjectListIssue(continuation.specs, `${label} effectSequenceContinuation specs`);
+    if (specsIssue) return specsIssue;
+    for (const [index, spec] of continuation.specs.entries()) {
+      const nestedIssue = renderNestedRepeatableFieldsIssue(spec, `${label} effectSequenceContinuation specs[${index}]`);
+      if (nestedIssue) return nestedIssue;
+    }
+  }
+  if (pending.gameEffectResolution != null) {
+    const resolution = pending.gameEffectResolution;
+    const context = resolution?.context;
+    if (!resolution || typeof resolution !== "object" || Array.isArray(resolution)
+      || !context || typeof context !== "object" || Array.isArray(context)
+      || ![null, "action", "showdown"].includes(context.chainKind)
+      || typeof context.finalized !== "boolean"
+      || !Array.isArray(context.pendingTriggerBatches)) return `${label} gameEffectResolution is invalid.`;
+    for (const [index, batch] of context.pendingTriggerBatches.entries()) {
+      const issue = renderTriggerBatchIssue(batch, `${label} gameEffectResolution pendingTriggerBatches[${index}]`, playerIds);
+      if (issue) return issue;
+    }
+  }
+  return "";
+}
+
+const DIVINE_JUDGMENT_DATA_CATEGORIES = ["units", "gear", "runes", "hand"];
+
+function renderDivineJudgmentDataIssue(choice, label, playerIds) {
+  if (!["divineJudgmentKeep", "divineJudgmentRuneOrder"].includes(choice.effect)) return "";
+  const data = choice.data;
+  if (!data || typeof data !== "object" || Array.isArray(data)) return `${label} Divine Judgment data is invalid.`;
+  const seatIssue = renderStringListIssue(data.playerIds, `${label} Divine Judgment playerIds`);
+  if (seatIssue) return seatIssue;
+  if (data.playerIds.length !== playerIds.size
+    || new Set(data.playerIds).size !== playerIds.size
+    || data.playerIds.some((playerId) => !playerIds.has(playerId))) {
+    return `${label} Divine Judgment playerIds are invalid.`;
+  }
+  if (!Number.isInteger(data.playerIndex) || data.playerIndex < 0 || data.playerIndex > data.playerIds.length) {
+    return `${label} Divine Judgment playerIndex is invalid.`;
+  }
+  if (!Number.isInteger(data.categoryIndex)
+    || data.categoryIndex < 0
+    || data.categoryIndex >= DIVINE_JUDGMENT_DATA_CATEGORIES.length) {
+    return `${label} Divine Judgment categoryIndex is invalid.`;
+  }
+  if (typeof data.finishSpell !== "boolean" || typeof data.fromShowdownChain !== "boolean") {
+    return `${label} Divine Judgment continuation flags are invalid.`;
+  }
+  const selectedIssue = renderStringListIssue(data.selectedIds, `${label} Divine Judgment selectedIds`);
+  if (selectedIssue) return selectedIssue;
+  if (!data.kept || typeof data.kept !== "object" || Array.isArray(data.kept)) {
+    return `${label} Divine Judgment kept state is invalid.`;
+  }
+  for (const [playerId, kept] of Object.entries(data.kept)) {
+    if (!playerIds.has(playerId) || !kept || typeof kept !== "object" || Array.isArray(kept)) {
+      return `${label} Divine Judgment kept state for ${playerId} is invalid.`;
+    }
+    for (const category of DIVINE_JUDGMENT_DATA_CATEGORIES) {
+      if (kept[category] == null) continue;
+      const issue = renderStringListIssue(kept[category], `${label} Divine Judgment kept ${playerId} ${category}`);
+      if (issue) return issue;
+    }
+  }
+  if (choice.effect === "divineJudgmentKeep") {
+    if (data.playerIndex >= data.playerIds.length || data.playerIds[data.playerIndex] !== choice.playerId) {
+      return `${label} Divine Judgment keep player is invalid.`;
+    }
+    return "";
+  }
+  if (!Number.isInteger(data.runeOrderPlayerIndex)
+    || data.runeOrderPlayerIndex < 0
+    || data.runeOrderPlayerIndex >= data.playerIds.length
+    || data.playerIds[data.runeOrderPlayerIndex] !== choice.playerId) {
+    return `${label} Divine Judgment Rune order player is invalid.`;
+  }
+  const orderIssue = renderStringListIssue(data.selectedRuneOrderIds, `${label} Divine Judgment selectedRuneOrderIds`);
+  if (orderIssue) return orderIssue;
+  if (!data.runeRecycleOrder || typeof data.runeRecycleOrder !== "object" || Array.isArray(data.runeRecycleOrder)) {
+    return `${label} Divine Judgment runeRecycleOrder is invalid.`;
+  }
+  for (const [playerId, runeIds] of Object.entries(data.runeRecycleOrder)) {
+    if (!playerIds.has(playerId)) return `${label} Divine Judgment runeRecycleOrder player is invalid.`;
+    const issue = renderStringListIssue(runeIds, `${label} Divine Judgment runeRecycleOrder ${playerId}`);
+    if (issue) return issue;
+  }
+  return "";
+}
+
+function renderChainStateIssue(state, label, playerIds) {
+  if (state == null) return "";
+  if (typeof state !== "object" || Array.isArray(state) || !Array.isArray(state.chain)) return `${label} is invalid.`;
+  for (const key of ["playerId", "priorityPlayerId", "turnPlayerId", "attackerId", "defenderId", "focusPlayerId"]) {
+    if (state[key] != null && !playerIds.has(state[key])) return `${label} ${key} is invalid.`;
+  }
+  const continuationIssue = renderContinuationIssue(state.continuation, `${label} continuation`);
+  if (continuationIssue) return continuationIssue;
+  const itemIds = new Set();
+  for (const [index, item] of state.chain.entries()) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return `${label} item ${index} is invalid.`;
+    if (typeof item.id !== "string" || !item.id) return `${label} item ${index} id is invalid.`;
+    if (itemIds.has(item.id)) return `${label} item ${index} duplicates an item id.`;
+    itemIds.add(item.id);
+    if (!playerIds.has(item.playerId)) return `${label} item ${index} player is invalid.`;
+    if (!['card', 'activated', 'trigger'].includes(item.itemType)) return `${label} item ${index} type is invalid.`;
+    if (!['pending', 'finalized'].includes(item.status)) return `${label} item ${index} status is invalid.`;
+    const cardIssue = renderCardIssue(item.card, `${label} item ${index} card`);
+    if (cardIssue) return cardIssue;
+    const itemIssue = renderTargetCarrierIssue(item, `${label} item ${index}`);
+    if (itemIssue) return itemIssue;
+    const dataIssue = renderTargetCarrierIssue(item.data, `${label} item ${index} data`);
+    if (dataIssue) return dataIssue;
+    const optionsIssue = renderTargetCarrierIssue(item.playOptions, `${label} item ${index} playOptions`);
+    if (optionsIssue) return optionsIssue;
+    // Older saved/replay chain records did not persist the default destination.
+    // It is optional for rendering, but any supplied value still has to be safe.
+    if (item.itemType === "card" && item.destination != null
+      && (typeof item.destination !== "string" || !item.destination)) {
+      return `${label} item ${index} destination is invalid.`;
+    }
+    if (item.itemType === "trigger" && item.trigger == null) return `${label} item ${index} trigger is unavailable.`;
+    if (item.trigger != null) {
+      const triggerIssue = renderTriggerIssue(item.trigger, `${label} item ${index} trigger`, playerIds);
+      if (triggerIssue) return triggerIssue;
+      if (item.itemType === "trigger" && item.trigger.playerId !== item.playerId) return `${label} item ${index} trigger player is inconsistent.`;
+    }
+    if (item.itemType === "activated" && item.specs == null) return `${label} item ${index} specs are unavailable.`;
+    if (item.specs != null) {
+      const specsIssue = renderObjectListIssue(item.specs, `${label} item ${index} specs`);
+      if (specsIssue) return specsIssue;
+      for (const [specIndex, spec] of item.specs.entries()) {
+        const nestedIssue = renderNestedRepeatableFieldsIssue(spec, `${label} item ${index} specs[${specIndex}]`);
+        if (nestedIssue) return nestedIssue;
+      }
+    }
+  }
+  return "";
+}
+
+function renderChoiceOptionIssue(option, label, playerIds) {
+  if (!option || typeof option !== "object" || Array.isArray(option)
+    || typeof option.id !== "string" || !option.id) return `${label} is invalid.`;
+  if (option.label != null && typeof option.label !== "string") return `${label} label is invalid.`;
+  for (const key of ["cardId", "destinationId", "destination"]) {
+    if (option[key] != null && (typeof option[key] !== "string" || !option[key])) return `${label} ${key} is invalid.`;
+  }
+  if (option.cardIds != null) {
+    const idsIssue = renderStringListIssue(option.cardIds, `${label} cardIds`);
+    if (idsIssue) return idsIssue;
+  }
+  if (option.playerId != null && !playerIds.has(option.playerId)) return `${label} player is invalid.`;
+  if (option.disabled != null && typeof option.disabled !== "boolean") return `${label} disabled state is invalid.`;
+  if (option.amount != null && (!Number.isFinite(option.amount) || option.amount < 0)) return `${label} amount is invalid.`;
+  if (option.card != null) {
+    const cardIssue = renderCardIssue(option.card, `${label} card`);
+    if (cardIssue) return cardIssue;
+  }
+  return "";
+}
+
+function renderChoiceStateIssue(choice, label, playerIds, battlefieldIds, depth = 0) {
+  if (!choice || typeof choice !== "object" || Array.isArray(choice)) return `${label} is invalid.`;
+  if (depth > 2) return `${label} nesting is invalid.`;
+  if (!Array.isArray(choice.options)) return `${label} options are unavailable.`;
+  if (!playerIds.has(choice.playerId)) return `${label} player is invalid.`;
+  if (typeof choice.effect !== "string" || !choice.effect) return `${label} effect is invalid.`;
+  if (choice.id != null && (typeof choice.id !== "string" || !choice.id)) return `${label} id is invalid.`;
+  if (choice.optional != null && typeof choice.optional !== "boolean") return `${label} optional state is invalid.`;
+  const optionIds = new Set();
+  for (const [index, option] of choice.options.entries()) {
+    const optionIssue = renderChoiceOptionIssue(option, `${label} option ${index}`, playerIds);
+    if (optionIssue) return optionIssue;
+    if (optionIds.has(option.id)) return `${label} option ${index} duplicates an option id.`;
+    optionIds.add(option.id);
+  }
+  if (choice.optional !== true && !choice.options.some((option) => !option.disabled)) return `${label} has no enabled option.`;
+  const pseudoCardAllowed = ["stagedEvent", "triggerOrder"].includes(choice.effect);
+  if (!choice.card || typeof choice.card !== "object" || Array.isArray(choice.card)
+    || typeof choice.card.name !== "string" || !choice.card.name) return `${label} card is unavailable.`;
+  if (!pseudoCardAllowed || choice.card.instanceId != null) {
+    const cardIssue = renderCardIssue(choice.card, `${label} card`);
+    if (cardIssue) return cardIssue;
+  }
+  const asyncIssue = renderPendingAsyncStateIssue(choice, label, playerIds);
+  if (asyncIssue) return asyncIssue;
+  return renderChoiceDataIssue(choice, label, playerIds, battlefieldIds, depth);
+}
+
+function renderChoiceDataIssue(choice, label, playerIds, battlefieldIds, depth = 0) {
+  const data = choice.data;
+  if (data != null && (typeof data !== "object" || Array.isArray(data))) return `${label} data is invalid.`;
+  if (!data) {
+    if (["triggerOrder", "combatDamage", "acknowledgeReveal", "payDeflect", "divineJudgmentKeep", "divineJudgmentRuneOrder"].includes(choice.effect)) return `${label} data is unavailable.`;
+    return "";
+  }
+  const divineJudgmentIssue = renderDivineJudgmentDataIssue(choice, label, playerIds);
+  if (divineJudgmentIssue) return divineJudgmentIssue;
+  if (choice.effect === "combatDamage" && !Array.isArray(data.targetInfos)) return `${label} targetInfos are unavailable.`;
+  if (choice.effect === "acknowledgeReveal" && !Array.isArray(data.revealedCards)) return `${label} revealedCards are unavailable.`;
+  if (data.revealedCards != null) {
+    const issue = renderCardListIssue(data.revealedCards, `${label} revealedCards`);
+    if (issue) return issue;
+  }
+  for (const key of ["targetInfos", "allocations", "declaredTargets", "declaredChoices"]) {
+    if (data[key] == null) continue;
+    const issue = renderObjectListIssue(data[key], `${label} ${key}`);
+    if (issue) return issue;
+  }
+  for (const key of ["remainingTriggers", "triggers", "selectedCards", "declarationSteps", "copySourceKeywords"]) {
+    if (data[key] == null) continue;
+    const issue = renderObjectListIssue(data[key], `${label} ${key}`);
+    if (issue) return issue;
+    for (const [index, item] of data[key].entries()) {
+      const carrierIssue = renderTargetCarrierIssue(item, `${label} ${key}[${index}]`);
+      if (carrierIssue) return carrierIssue;
+      const nestedIssue = renderNestedRepeatableFieldsIssue(item, `${label} ${key}[${index}]`);
+      if (nestedIssue) return nestedIssue;
+    }
+  }
+  for (const key of ["remainingTriggers", "triggers"]) {
+    for (const [index, trigger] of (data[key] || []).entries()) {
+      const issue = renderTriggerIssue(trigger, `${label} ${key}[${index}]`, playerIds);
+      if (issue) return issue;
+    }
+  }
+  for (const key of [
+    "selectedRuneIds", "targetIds", "chosenIds", "allowedIds", "selectedIds", "keptIds",
+    "remainingPlayerIds", "selectedForCurrentStep", "deflectTargetIds", "movedIds",
+    "selectedRuneOrderIds", "discardedIds", "recycleIds", "revealedIds", "orderedKeepIds",
+    "recycledIds", "playerIds"
+  ]) {
+    if (data[key] == null) continue;
+    const issue = renderStringListIssue(data[key], `${label} ${key}`);
+    if (issue) return issue;
+  }
+  for (const playerId of [...(data.playerIds || []), ...(data.remainingPlayerIds || [])]) {
+    if (!playerIds.has(playerId)) return `${label} player list is invalid.`;
+  }
+  if (data.deflectPowerCost != null) {
+    const issue = renderPowerCostIssue(data.deflectPowerCost, `${label} deflectPowerCost`);
+    if (issue) return issue;
+  }
+  const state = data.triggerOrderState;
+  if (state != null || choice.effect === "triggerOrder") {
+    if (!state || typeof state !== "object" || Array.isArray(state) || !Array.isArray(state.groups)) return `${label} triggerOrderState is invalid.`;
+    const stateContinuationIssue = renderContinuationIssue(state.continuation, `${label} triggerOrderState continuation`);
+    if (stateContinuationIssue) return stateContinuationIssue;
+    if (!Number.isInteger(state.groupIndex) || state.groupIndex < 0 || state.groupIndex >= state.groups.length) return `${label} triggerOrderState groupIndex is invalid.`;
+    for (const [index, group] of state.groups.entries()) {
+      if (!group || typeof group !== "object" || Array.isArray(group)) return `${label} trigger group ${index} is invalid.`;
+      for (const key of ["triggers", "orderedTriggers"]) {
+        const issue = renderObjectListIssue(group[key], `${label} trigger group ${index} ${key}`);
+        if (issue) return issue;
+        for (const [triggerIndex, trigger] of group[key].entries()) {
+          const triggerIssue = renderTriggerIssue(trigger, `${label} trigger group ${index} ${key}[${triggerIndex}]`, playerIds);
+          if (triggerIssue) return triggerIssue;
+        }
+      }
+      if (!playerIds.has(group.playerId)) return `${label} trigger group ${index} player is invalid.`;
+    }
+  }
+  if (choice.effect === "combatDamage") {
+    if (!battlefieldIds.has(data.battlefieldId)) return `${label} battlefield is invalid.`;
+    for (const key of ["attackerId", "defenderId", "assigningPlayerId", "targetPlayerId"]) {
+      if (!playerIds.has(data[key])) return `${label} ${key} is invalid.`;
+    }
+    if (!["attacker", "defender"].includes(data.role)) return `${label} combat role is invalid.`;
+    for (const key of ["attackerTotal", "defenderTotal"]) {
+      if (!Number.isFinite(data[key]) || data[key] < 0) return `${label} ${key} is invalid.`;
+    }
+    if (!Number.isFinite(data.remaining) || data.remaining <= 0) return `${label} remaining damage is invalid.`;
+    const assignmentsIssue = renderObjectListIssue(data.assignments, `${label} assignments`);
+    if (assignmentsIssue) return assignmentsIssue;
+    for (const [index, assignment] of data.assignments.entries()) {
+      if (typeof assignment.targetId !== "string" || !assignment.targetId
+        || !Number.isFinite(assignment.amount) || assignment.amount <= 0
+        || !playerIds.has(assignment.assigningPlayerId)
+        || !["attacker", "defender"].includes(assignment.role)) return `${label} assignments[${index}] is invalid.`;
+    }
+    for (const [index, info] of (data.targetInfos || []).entries()) {
+      if (typeof info.cardId !== "string" || !info.cardId) return `${label} targetInfos[${index}] cardId is invalid.`;
+    }
+  }
+  if (choice.effect === "payDeflect") {
+    if (typeof data.targetId !== "string" || !data.targetId) return `${label} Deflect target is invalid.`;
+    if (!Number.isFinite(data.amount) || data.amount <= 0) return `${label} Deflect amount is invalid.`;
+    const selectedIssue = renderStringListIssue(data.selectedRuneIds, `${label} selectedRuneIds`);
+    if (selectedIssue) return selectedIssue;
+    const originalChoiceIssue = renderChoiceStateIssue(
+      data.originalChoice,
+      `${label} original choice`,
+      playerIds,
+      battlefieldIds,
+      depth + 1
+    );
+    if (originalChoiceIssue) return originalChoiceIssue;
+    const originalOptionIssue = renderChoiceOptionIssue(data.originalOption, `${label} original option`, playerIds);
+    if (originalOptionIssue) return originalOptionIssue;
+  }
+  const continuationIssue = renderContinuationIssue(data.continuation, `${label} continuation`);
+  if (continuationIssue) return continuationIssue;
+  return "";
+}
+
+function renderPaymentIssue(payment, playerIds) {
+  if (!payment || typeof payment !== "object" || Array.isArray(payment)) return "Payment state is invalid.";
+  if (!playerIds.has(payment.playerId)) return "Payment player is invalid.";
+  for (const key of ["cardId", "cardName", "source"]) {
+    if (typeof payment[key] !== "string" || !payment[key]) return `Payment ${key} is invalid.`;
+  }
+  if (payment.destination != null && (typeof payment.destination !== "string" || !payment.destination)) return "Payment destination is invalid.";
+  const asyncIssue = renderPendingAsyncStateIssue(payment, "Payment", playerIds);
+  if (asyncIssue) return asyncIssue;
+  for (const key of ["energyCost", "xpCost", "recycleTrashCost", "discardCost"]) {
+    if (payment[key] != null && (!Number.isFinite(payment[key]) || payment[key] < 0)) return `Payment ${key} is invalid.`;
+  }
+  const requiredLists = [
+    "basePowerCost", "powerCost", "energyRuneIds", "powerRuneIds", "poolEnergyIds", "poolPowerIds",
+    "optionalPowerEffects", "declaredTargets", "declaredChoices", "deflectTargetIds"
+  ];
+  for (const key of requiredLists) {
+    if (!Array.isArray(payment[key])) return `Payment ${key} is unavailable.`;
+  }
+  for (const key of ["declaredTargetIdentities", "recycleTrashCardIds", "discardCardIds"]) {
+    if (payment[key] != null && !Array.isArray(payment[key])) return `Payment ${key} is invalid.`;
+  }
+  for (const key of ["energyRuneIds", "powerRuneIds", "poolEnergyIds", "poolPowerIds", "deflectTargetIds", "recycleTrashCardIds", "discardCardIds"]) {
+    if (payment[key] == null) continue;
+    const issue = renderStringListIssue(payment[key], `Payment ${key}`);
+    if (issue) return issue;
+  }
+  const carrierIssue = renderTargetCarrierIssue(payment, "Payment");
+  if (carrierIssue) return carrierIssue;
+  const basePowerIssue = renderPowerCostIssue(payment.basePowerCost, "Payment basePowerCost");
+  if (basePowerIssue) return basePowerIssue;
+  const powerIssue = renderPowerCostIssue(payment.powerCost, "Payment powerCost");
+  if (powerIssue) return powerIssue;
+  for (const [index, effect] of payment.optionalPowerEffects.entries()) {
+    if (!effect || typeof effect !== "object" || Array.isArray(effect) || typeof effect.id !== "string" || !effect.id) return `Payment optionalPowerEffects[${index}] is invalid.`;
+    const requirementsIssue = renderPowerCostIssue(effect.requirements || [], `Payment optionalPowerEffects[${index}] requirements`);
+    if (requirementsIssue) return requirementsIssue;
+    const nestedIssue = renderNestedRepeatableFieldsIssue(effect, `Payment optionalPowerEffects[${index}]`);
+    if (nestedIssue) return nestedIssue;
+  }
+  if (payment.costContext != null) {
+    const context = payment.costContext;
+    if (typeof context !== "object" || Array.isArray(context)) return "Payment costContext is invalid.";
+    const additionalPowerIssue = renderPowerCostIssue(context.additionalPower || [], "Payment costContext additionalPower");
+    if (additionalPowerIssue) return additionalPowerIssue;
+    if (context.replacementPowerCost != null) {
+      const replacementIssue = renderPowerCostIssue(context.replacementPowerCost, "Payment costContext replacementPowerCost");
+      if (replacementIssue) return replacementIssue;
+    }
+    if (context.replacementEnergyCost != null
+      && (!Number.isFinite(context.replacementEnergyCost) || context.replacementEnergyCost < 0)) return "Payment costContext replacementEnergyCost is invalid.";
+    const contextCarrierIssue = renderTargetCarrierIssue(context, "Payment costContext");
+    if (contextCarrierIssue) return contextCarrierIssue;
+  }
+  if (payment.playProcess != null) {
+    const process = payment.playProcess;
+    if (!process || typeof process !== "object" || Array.isArray(process)
+      || typeof process.chainItemId !== "string" || !process.chainItemId) return "Payment playProcess is invalid.";
+    const cardIssue = renderCardIssue(process.card, "Payment playProcess card");
+    if (cardIssue) return cardIssue;
+  }
+  if (payment.source === "activatedAbility" || payment.activatedAbility != null) {
+    const state = payment.activatedAbility;
+    if (!state || typeof state !== "object" || Array.isArray(state)) return "Payment activatedAbility is invalid.";
+    const sourceIssue = renderCardIssue(state.sourceCard, "Payment activatedAbility sourceCard");
+    if (sourceIssue) return sourceIssue;
+    const specsIssue = renderObjectListIssue(state.specs, "Payment activatedAbility specs");
+    if (specsIssue) return specsIssue;
+    for (const [index, spec] of state.specs.entries()) {
+      const nestedIssue = renderNestedRepeatableFieldsIssue(spec, `Payment activatedAbility specs[${index}]`);
+      if (nestedIssue) return nestedIssue;
+    }
+  }
+  if (payment.source === "triggeredAbility" || payment.triggeredAbility != null) {
+    const state = payment.triggeredAbility;
+    if (!state || typeof state !== "object" || Array.isArray(state)) return "Payment triggeredAbility is invalid.";
+    const sourceIssue = renderCardIssue(state.sourceCard, "Payment triggeredAbility sourceCard");
+    if (sourceIssue) return sourceIssue;
+    const triggerIssue = renderTriggerIssue(state.trigger, "Payment triggeredAbility trigger", playerIds);
+    if (triggerIssue) return triggerIssue;
+    if (!Array.isArray(state.triggers)) return "Payment triggeredAbility triggers are invalid.";
+    for (const [index, trigger] of state.triggers.entries()) {
+      const issue = renderTriggerIssue(trigger, `Payment triggeredAbility triggers[${index}]`, playerIds);
+      if (issue) return issue;
+    }
+    if (!state.descriptor || typeof state.descriptor !== "object" || Array.isArray(state.descriptor)) return "Payment triggeredAbility descriptor is invalid.";
+    const descriptorIssue = renderNestedRepeatableFieldsIssue(state.descriptor, "Payment triggeredAbility descriptor");
+    if (descriptorIssue) return descriptorIssue;
+    if (!["queue", "showdownChain", "actionChain"].includes(state.mode)) return "Payment triggeredAbility mode is invalid.";
+    const continuationIssue = renderContinuationIssue(state.continuation, "Payment triggeredAbility continuation");
+    if (continuationIssue) return continuationIssue;
+  }
+  if (payment.source === "effectEnergy" || payment.effectPayment != null) {
+    const state = payment.effectPayment;
+    if (!state || typeof state !== "object" || Array.isArray(state)
+      || !["playUnitTokenOptionalReady", "repeatSpell", "showdownPredictDrawSpell", "counterUnlessPayDecision"].includes(state.kind)) {
+      return "Payment effectPayment is invalid.";
+    }
+    const sourceIssue = renderCardIssue(state.sourceCard, "Payment effectPayment sourceCard");
+    if (sourceIssue) return sourceIssue;
+    if (state.sourcePlayerId != null && !playerIds.has(state.sourcePlayerId)) return "Payment effectPayment source player is invalid.";
+    if (state.kind === "repeatSpell") {
+      if (!state.repeatSpec || typeof state.repeatSpec !== "object" || Array.isArray(state.repeatSpec)
+        || typeof state.repeatSpec.kind !== "string" || !state.repeatSpec.kind) {
+        return "Payment repeatSpell repeatSpec is invalid.";
+      }
+      const repeatSpecIssue = renderNestedRepeatableFieldsIssue(state.repeatSpec, "Payment repeatSpell repeatSpec");
+      if (repeatSpecIssue) return repeatSpecIssue;
+    }
+  }
+  if (payment.source === "effectPlay" || payment.effectPlay != null) {
+    const state = payment.effectPlay;
+    if (!state || typeof state !== "object" || Array.isArray(state)
+      || typeof state.chainItemId !== "string" || !state.chainItemId) return "Payment effectPlay is invalid.";
+    const cardIssue = renderCardIssue(state.card, "Payment effectPlay card");
+    if (cardIssue) return cardIssue;
+  }
+  if (payment.source === "weaponmaster" || payment.weaponmaster != null) {
+    const state = payment.weaponmaster;
+    if (!state || typeof state !== "object" || Array.isArray(state)
+      || typeof state.gearId !== "string" || !state.gearId) return "Payment weaponmaster is invalid.";
+  }
+  return "";
+}
+
+function gameUiRenderIssue(candidate) {
+  if (!candidate || typeof candidate !== "object") return "Game state is missing.";
+  if (!Array.isArray(candidate.players) || candidate.players.length !== 2) return "Exactly two player seats are required.";
+  if (!Array.isArray(candidate.battlefields)) return "Battlefield state is unavailable.";
+  for (const key of [
+    "operations", "lifecycleEvents", "ruleTaskTrace", "cleanupRequestTrace", "attachmentEvents",
+    "empowerEvents", "damageEvents", "discardEvents", "exhaustEvents", "readyEvents", "banishEvents",
+    "revealEvents", "combatResultEvents", "killEvents", "healEvents", "moveEvents", "channelEvents",
+    "burnEvents", "drawEvents", "delayedAbilities", "damageKillFollowups",
+    "cleanupPendingTriggerBatches", "postCombatDamageTriggerBatches"
+  ]) {
+    if (candidate[key] != null && !Array.isArray(candidate[key])) return `${key} is invalid.`;
+  }
+  if (candidate.log != null && (!Array.isArray(candidate.log) || candidate.log.some((entry) => typeof entry !== "string"))) return "Game history is invalid.";
+  if (candidate.revealedIntel != null && !Array.isArray(candidate.revealedIntel)) return "Revealed intel is invalid.";
+  if (candidate.scoreEvents != null && !Array.isArray(candidate.scoreEvents)) return "Score events are invalid.";
+  if (candidate.effectFlash != null) {
+    if (typeof candidate.effectFlash !== "object" || Array.isArray(candidate.effectFlash)) return "Effect flash is invalid.";
+    if (candidate.effectFlash.sourceId != null
+      && (typeof candidate.effectFlash.sourceId !== "string" || !candidate.effectFlash.sourceId)) return "Effect flash source is invalid.";
+    if (candidate.effectFlash.message != null && typeof candidate.effectFlash.message !== "string") return "Effect flash message is invalid.";
+    if (candidate.effectFlash.stamp != null && !Number.isFinite(candidate.effectFlash.stamp)) return "Effect flash stamp is invalid.";
+    if (candidate.effectFlash.targetIds != null) {
+      const issue = renderStringListIssue(candidate.effectFlash.targetIds, "Effect flash targets");
+      if (issue) return issue;
+    }
+  }
+  const requiredPlayerLists = ["mainDeck", "runeDeck", "hand", "base", "runes", "trash", "availableChampions", "availableBattlefields"];
+  const authoritativeCardIds = new Set();
+  for (const player of candidate.players) {
+    if (!player || typeof player !== "object" || Array.isArray(player) || typeof player.id !== "string" || !player.id) return "A player seat is invalid.";
+    for (const key of requiredPlayerLists) {
+      const issue = renderCardListIssue(player[key], `${player.id} ${key}`);
+      if (issue) return issue;
+      for (const [index, card] of player[key].entries()) {
+        const idIssue = collectAuthoritativeCardIds(card, `${player.id} ${key}[${index}]`, authoritativeCardIds);
+        if (idIssue) return idIssue;
+      }
+    }
+    for (const key of ["banished"]) {
+      if (player[key] == null) continue;
+      const issue = renderCardListIssue(player[key], `${player.id} ${key}`);
+      if (issue) return issue;
+      for (const [index, card] of player[key].entries()) {
+        const idIssue = collectAuthoritativeCardIds(card, `${player.id} ${key}[${index}]`, authoritativeCardIds);
+        if (idIssue) return idIssue;
+      }
+    }
+    if (player.runePool != null) {
+      if (typeof player.runePool !== "object" || Array.isArray(player.runePool)) return `${player.id} Rune pool is invalid.`;
+      const energy = player.runePool.energy;
+      if (energy != null && !Array.isArray(energy)
+        && !(Number.isInteger(energy) && energy >= 0 && energy <= 1000)) return `${player.id} Rune pool energy is invalid.`;
+      if (Array.isArray(energy)) {
+        const energyIds = new Set();
+        for (const [index, resource] of energy.entries()) {
+          if (!resource || typeof resource !== "object" || Array.isArray(resource) || typeof resource.id !== "string" || !resource.id) return `${player.id} Rune pool energy[${index}] is invalid.`;
+          if (energyIds.has(resource.id)) return `${player.id} Rune pool energy[${index}] duplicates a resource id.`;
+          energyIds.add(resource.id);
+          if (resource.domains != null) {
+            const issue = renderStringListIssue(resource.domains, `${player.id} Rune pool energy[${index}] domains`);
+            if (issue) return issue;
+          }
+        }
+      }
+      if (player.runePool.power != null && !Array.isArray(player.runePool.power)) return `${player.id} Rune pool power is invalid.`;
+      if (Array.isArray(player.runePool.power)) {
+        const powerIds = new Set();
+        for (const [index, resource] of player.runePool.power.entries()) {
+          if (typeof resource === "string" && resource) continue;
+          if (!resource || typeof resource !== "object" || Array.isArray(resource)
+            || typeof resource.id !== "string" || !resource.id
+            || typeof resource.domain !== "string" || !resource.domain) return `${player.id} Rune pool power[${index}] is invalid.`;
+          if (resource.instanceId != null && (typeof resource.instanceId !== "string" || !resource.instanceId)) return `${player.id} Rune pool power[${index}] instanceId is invalid.`;
+          if (powerIds.has(resource.id)) return `${player.id} Rune pool power[${index}] duplicates a resource id.`;
+          powerIds.add(resource.id);
+        }
+      }
+    }
+    for (const [key, card] of [["legend", player.legend], ["champion", player.champion]]) {
+      if (!card) continue;
+      const issue = renderCardIssue(card, `${player.id} ${key}`);
+      if (issue) return issue;
+      if (key === "legend" || card.zone === "champion") {
+        const idIssue = collectAuthoritativeCardIds(card, `${player.id} ${key}`, authoritativeCardIds);
+        if (idIssue) return idIssue;
+      }
+    }
+  }
+  const playerIds = new Set(candidate.players.map((player) => player.id));
+  if (playerIds.size !== candidate.players.length) return "Player seat identifiers must be unique.";
+  if (!playerIds.has("p1") || !playerIds.has("p2")) return "Player seats must be p1 and p2.";
+  for (const [index, intel] of (candidate.revealedIntel || []).entries()) {
+    if (!intel || typeof intel !== "object" || Array.isArray(intel)
+      || !playerIds.has(intel.viewerId) || !playerIds.has(intel.ownerId)
+      || !Number.isInteger(intel.expiresAtTurnSequence) || intel.expiresAtTurnSequence < 0
+      || (intel.sourceCardId != null && (typeof intel.sourceCardId !== "string" || !intel.sourceCardId))
+      || (intel.sourceName != null && typeof intel.sourceName !== "string")) return `Revealed intel ${index} is invalid.`;
+  }
+  if (!Array.isArray(candidate.turnOrder)
+    || candidate.turnOrder.length !== candidate.players.length
+    || new Set(candidate.turnOrder).size !== candidate.players.length
+    || candidate.turnOrder.some((playerId) => !playerIds.has(playerId))) {
+    return "Turn order is invalid.";
+  }
+  if (!playerIds.has(candidate.currentPlayerId)) return "Current player is invalid.";
+  for (const key of ["firstPlayerId", "turnPlayerId", "surrenderedPlayerId", "authoritativeActorId"]) {
+    if (candidate[key] != null && !playerIds.has(candidate[key])) return `${key} is invalid.`;
+  }
+  if (candidate.phase === "complete" && !playerIds.has(candidate.winnerId)) return "Winner is invalid.";
+  if (candidate.aiDeclinedIntents != null) {
+    const declined = candidate.aiDeclinedIntents;
+    if (!declined || typeof declined !== "object" || Array.isArray(declined)
+      || !Number.isInteger(declined.turnSequence)
+      || !Array.isArray(declined.keys)
+      || declined.keys.some((key) => typeof key !== "string" || !key)) {
+      return "AI declined intents are invalid.";
+    }
+  }
+  if (["mulligan", "action", "showdown"].includes(candidate.phase)
+    && !candidate.tutorial
+    && candidate.battlefields.length < 2) {
+    return "At least two active battlefields are required.";
+  }
+  const battlefieldIds = new Set();
+  for (const field of candidate.battlefields) {
+    const fieldIssue = renderCardIssue(field, "Battlefield");
+    if (fieldIssue) return fieldIssue;
+    const fieldIdIssue = collectAuthoritativeCardIds(field, `Battlefield ${field.instanceId}`, authoritativeCardIds);
+    if (fieldIdIssue) return fieldIdIssue;
+    if (battlefieldIds.has(field.instanceId)) return "Battlefield identifiers must be unique.";
+    battlefieldIds.add(field.instanceId);
+    if (field.controlledBy != null && !playerIds.has(field.controlledBy)) return `${field.instanceId} controller is invalid.`;
+    const unitIssue = renderCardListIssue(field.units, `${field.instanceId} units`);
+    if (unitIssue) return unitIssue;
+    for (const [index, unit] of field.units.entries()) {
+      const idIssue = collectAuthoritativeCardIds(unit, `${field.instanceId} units[${index}]`, authoritativeCardIds);
+      if (idIssue) return idIssue;
+    }
+    if (field.units.some((unit) => !playerIds.has(unit.controllerId))) return `${field.instanceId} has a unit with an invalid controller.`;
+    if (!Array.isArray(field.hidden)) return `${field.instanceId} hidden zone is invalid.`;
+    for (const [index, item] of (field.hidden || []).entries()) {
+      if (!item || typeof item !== "object") return `${field.instanceId} hidden[${index}] is invalid.`;
+      const issue = renderCardIssue(item.card, `${field.instanceId} hidden[${index}]`);
+      if (issue) return issue;
+      const idIssue = collectAuthoritativeCardIds(item.card, `${field.instanceId} hidden[${index}]`, authoritativeCardIds);
+      if (idIssue) return idIssue;
+      if (!playerIds.has(hiddenCardControllerId(item))) return `${field.instanceId} hidden[${index}] has an invalid controller.`;
+    }
+  }
+  if (candidate.stagedEvents != null && !Array.isArray(candidate.stagedEvents)) return "Staged events are invalid.";
+  for (const [index, event] of (candidate.stagedEvents || []).entries()) {
+    if (!event || typeof event !== "object" || Array.isArray(event)
+      || typeof event.id !== "string" || !event.id
+      || typeof event.type !== "string" || !event.type
+      || !battlefieldIds.has(event.battlefieldId)
+      || !playerIds.has(event.attackerId)
+      || (event.defenderId != null && !playerIds.has(event.defenderId))) {
+      return `Staged event ${index} is invalid.`;
+    }
+  }
+  if (candidate.actionChain && candidate.showdown) return "Action and showdown chains cannot coexist.";
+  if (candidate.actionChain && !["action", "complete"].includes(candidate.phase)) return "Action chain phase is invalid.";
+  if (candidate.showdown && !["showdown", "complete"].includes(candidate.phase)) return "Showdown phase is invalid.";
+  if (candidate.phase === "showdown" && !candidate.showdown) return "Showdown state is unavailable.";
+  const actionChainIssue = renderChainStateIssue(candidate.actionChain, "Action chain", playerIds);
+  if (actionChainIssue) return actionChainIssue;
+  if (candidate.actionChain) {
+    if (!playerIds.has(candidate.actionChain.priorityPlayerId) || !playerIds.has(candidate.actionChain.turnPlayerId)) return "Action chain players are invalid.";
+    if (!Array.isArray(candidate.actionChain.playerIds)
+      || candidate.actionChain.playerIds.length !== candidate.players.length
+      || new Set(candidate.actionChain.playerIds).size !== candidate.players.length
+      || candidate.actionChain.playerIds.some((playerId) => !playerIds.has(playerId))) {
+      return "Action chain seats are invalid.";
+    }
+  }
+  const showdownIssue = renderChainStateIssue(candidate.showdown, "Showdown chain", playerIds);
+  if (showdownIssue) return showdownIssue;
+  if (candidate.showdown) {
+    if (!battlefieldIds.has(candidate.showdown.battlefieldId)) return "Showdown battlefield is invalid.";
+    for (const key of ["attackerId", "defenderId", "priorityPlayerId", "focusPlayerId", "turnPlayerId"]) {
+      if (!playerIds.has(candidate.showdown[key])) return `Showdown ${key} is invalid.`;
+    }
+  }
+  if (candidate.triggerQueue != null) {
+    if (!Array.isArray(candidate.triggerQueue)) return "Trigger queue is invalid.";
+    for (const [index, trigger] of candidate.triggerQueue.entries()) {
+      const issue = renderTriggerIssue(trigger, `Trigger queue[${index}]`, playerIds);
+      if (issue) return issue;
+    }
+  }
+  const queueContinuationIssue = renderContinuationIssue(candidate.triggerQueueContinuation, "Trigger queue continuation");
+  if (queueContinuationIssue) return queueContinuationIssue;
+  if (candidate.deferredTriggerContinuations != null) {
+    if (!Array.isArray(candidate.deferredTriggerContinuations)) return "Deferred trigger continuations are invalid.";
+    for (const [index, continuation] of candidate.deferredTriggerContinuations.entries()) {
+      const issue = renderContinuationIssue(continuation, `Deferred trigger continuations[${index}]`);
+      if (issue) return issue;
+    }
+  }
+  if (candidate.phase === "first-player") {
+    const decision = candidate.firstPlayerDecision;
+    if (!decision || typeof decision !== "object" || Array.isArray(decision)) return "Play-order decision is invalid.";
+    if (decision.method === "roll") {
+      if (!decision.rolls || typeof decision.rolls !== "object" || Array.isArray(decision.rolls)
+        || [...playerIds].some((playerId) => !Object.prototype.hasOwnProperty.call(decision.rolls, playerId))) {
+        return "Play-order rolls are invalid.";
+      }
+      for (const playerId of playerIds) {
+        const roll = decision.rolls[playerId];
+        if (roll != null && (!Number.isInteger(roll) || roll < 1 || roll > 6)) return "A play-order roll is invalid.";
+      }
+      if (decision.status === "rolling" && !playerIds.has(decision.rollerId)) return "Play-order roller is invalid.";
+      if (decision.status === "choosing" && (!playerIds.has(decision.chooserId) || !playerIds.has(decision.winnerId))) return "Play-order chooser is invalid.";
+      if (!["rolling", "choosing"].includes(decision.status)) return "Play-order status is invalid.";
+    } else if (!playerIds.has(candidate.firstPlayerId)) return "First player is invalid.";
+    if (candidate.players.some((player) => !player.legend)) return "First-player legends are unavailable.";
+  }
+  if (candidate.phase === "champion-select") {
+    if (!playerIds.has(candidate.championSelectPlayerId)) return "Champion selector is invalid.";
+    if (candidate.players.some((player) => !player.legend)) return "Champion-select legends are unavailable.";
+    if (candidate.players.some((player) => !Array.isArray(player.availableChampions))) return "Champion choices are unavailable.";
+  }
+  if (candidate.phase === "battlefield-select") {
+    if (!playerIds.has(candidate.setupPlayerId)) return "Battlefield selector is invalid.";
+    if (candidate.players.some((player) => !player.legend || !player.champion)) return "Battlefield-select identities are unavailable.";
+    if (candidate.players.some((player) => !Array.isArray(player.availableBattlefields))) return "Battlefield choices are unavailable.";
+  }
+  if (candidate.phase === "mulligan") {
+    if (!candidate.mulligan || !playerIds.has(candidate.mulligan.playerId)) return "Mulligan player is invalid.";
+    if (candidate.mulligan.selectedCardIds != null && !Array.isArray(candidate.mulligan.selectedCardIds)) return "Mulligan selection is invalid.";
+  }
+  if (candidate.pendingPayment != null && candidate.pendingChoice != null) return "Choice and payment states cannot coexist.";
+  if (candidate.pendingPayment != null) {
+    const paymentIssue = renderPaymentIssue(candidate.pendingPayment, playerIds);
+    if (paymentIssue) return paymentIssue;
+  }
+  if (candidate.pendingChoice != null) {
+    const choiceIssue = renderChoiceStateIssue(candidate.pendingChoice, "Choice", playerIds, battlefieldIds);
+    if (choiceIssue) return choiceIssue;
+  }
+  return "";
+}
+
+function unavailableGameView(issue) {
+  const korean = locale() === LOCALES.KO;
+  return `
+    <main class="layout tabletop-layout phase-unavailable">
+      <section class="tabletop-state-unavailable" role="status" aria-live="polite">
+        <span>${korean ? "게임 상태 동기화" : "Game state sync"}</span>
+        <h1>${korean ? "화면에 필요한 상태를 기다리고 있습니다" : "Waiting for a complete game state"}</h1>
+        <p>${escapeHtml(issue)}</p>
+        <div class="actions inline">
+          ${replayMode ? `<button data-action="replay-exit">${korean ? "리플레이 목록" : "Replay list"}</button>` : ""}
+          <button data-action="return-menu">${korean ? "메인 메뉴" : "Main menu"}</button>
+        </div>
+      </section>
+    </main>
+  `;
 }
 
 function renderApp() {
@@ -458,6 +1855,12 @@ function renderApp() {
     restoreScrollState(scrollState);
     return;
   }
+  const renderIssue = gameUiRenderIssue(game);
+  if (renderIssue) {
+    app.innerHTML = unavailableGameView(renderIssue);
+    restoreScrollState(scrollState);
+    return;
+  }
   if (lastInteractionPhase && lastInteractionPhase !== game.phase) {
     game.selectedCardId = null;
     onlineSelectedCardId = null;
@@ -469,13 +1872,22 @@ function renderApp() {
   lastInteractionPhase = game.phase;
   const nextViewerPlayerId = viewerPlayerId();
   if (lastViewerPlayerId && lastViewerPlayerId !== nextViewerPlayerId) {
+    clearViewerTransientPresentation();
     game.selectedCardId = null;
     onlineSelectedCardId = null;
     handOpen = false;
     attachmentsOpenCardId = null;
+    inspectedChainItemId = null;
+    inspectedChainTargetIds.clear();
     moveSelection.clear();
   }
   lastViewerPlayerId = nextViewerPlayerId;
+  sanitizeViewerUiState();
+  const blockingDecisionVisible = !replayMode && (
+    decisionVisibleToViewer(game.pendingPayment, nextViewerPlayerId)
+    || decisionVisibleToViewer(game.pendingChoice, nextViewerPlayerId)
+  );
+  if (blockingDecisionVisible) closeTabletopSheets();
   const player = viewerPlayer();
   if (viewerCanAct()) uiLegalActions = enumerateLegalActions(game, nextViewerPlayerId);
   pruneMoveSelection();
@@ -486,7 +1898,7 @@ function renderApp() {
   window.__riftboundGame = game;
   window.__riftboundRender = render;
   app.innerHTML = `
-    <header class="topbar">
+    <header class="topbar tabletop-topbar">
       <div class="titlebox status-${interaction.tone}" aria-live="polite">
         <p class="status-kicker">${interaction.label}</p>
         <h1>${interaction.title}</h1>
@@ -504,16 +1916,19 @@ function renderApp() {
              <button class="secondary" data-action="new-game" title="${t("newGame", locale())}">${t("newGame", locale())}</button>`}
       </div>
     </header>
-    <main class="layout phase-${game.phase} ${isTutorialGame() ? "tutorial-active" : ""} ${inspectorOpen ? "inspector-open" : ""} ${activeImpact ? `impact-active impact-${activeImpact.kind}` : ""} ${staticImpactPreview ? "preview-impact" : ""}">
+    <main class="layout tabletop-layout phase-${game.phase} ${isTutorialGame() ? "tutorial-active" : ""} ${inspectorOpen ? "inspector-open" : ""} ${activeImpact ? `impact-active impact-${activeImpact.kind}` : ""} ${staticImpactPreview ? "preview-impact" : ""}">
       ${game.phase === "first-player" ? firstPlayerPanel() : game.phase === "champion-select" ? championSelectPanel() : game.phase === "battlefield-select" ? setupPanel() : game.phase === "mulligan" ? mulliganPanel() : gamePanel(player)}
-      ${tutorialPanel()}
-      ${cinematicImpactOverlay()}
-      ${["first-player", "champion-select", "mulligan"].includes(game.phase) ? "" : inspector(uiSelectedCard())}
-      ${pendingGameExit ? gameExitConfirmModal() : ""}
-      ${isTutorialGame() ? "" : gameResultModal()}
-      ${fullCardOpen ? fullCardModal(fullCardPreviewCard || uiSelectedCard()) : ""}
-      ${logOpen ? logDrawer() : ""}
-      ${replayMode ? replayPlaybackControls() : ""}
+      <div class="tabletop-overlay-root">
+        ${["first-player", "champion-select", "battlefield-select", "mulligan"].includes(game.phase) ? "" : gameFloatingPanels()}
+        ${tutorialPanel()}
+        ${cinematicImpactOverlay()}
+        ${blockingDecisionVisible || ["first-player", "champion-select", "mulligan"].includes(game.phase) ? "" : inspector(uiSelectedCard())}
+        ${pendingGameExit ? gameExitConfirmModal() : ""}
+        ${isTutorialGame() ? "" : gameResultModal()}
+        ${fullCardOpen ? fullCardModal(fullCardPreviewCard || uiSelectedCard()) : ""}
+        ${!blockingDecisionVisible && logOpen ? logDrawer() : ""}
+        ${replayMode ? replayPlaybackControls() : ""}
+      </div>
     </main>
   `;
   applyTutorialTargets();
@@ -1008,6 +2423,8 @@ async function openAiSpectatorReplay(id) {
   try {
     const result = await fetchAiSpectatorReplay(id);
     if (!Array.isArray(result.replay?.frames) || !result.replay.frames.length) throw new Error("Replay has no frames.");
+    const invalidFrameIndex = result.replay.frames.findIndex((frame) => replayFrameRenderIssue(frame));
+    if (invalidFrameIndex >= 0) throw new Error(`Replay frame ${invalidFrameIndex} is invalid: ${replayFrameRenderIssue(result.replay.frames[invalidFrameIndex])}`);
     clearOnlineSeat();
     aiMode = false;
     aiReplay = null;
@@ -1032,8 +2449,15 @@ async function openAiSpectatorReplay(id) {
   }
 }
 
+function replayFrameRenderIssue(frame) {
+  if (!frame || typeof frame !== "object" || Array.isArray(frame)) return "Frame is missing.";
+  if (!frame.game || typeof frame.game !== "object" || Array.isArray(frame.game)) return "Game state is missing.";
+  return gameUiRenderIssue(frame.game);
+}
+
 function leaveReplayBrowser() {
   pauseReplayPlayback();
+  clearViewerTransientPresentation();
   replayMode = false;
   replayBrowser.current = null;
   appView = "menu";
@@ -1041,6 +2465,7 @@ function leaveReplayBrowser() {
 
 function exitReplayToList() {
   pauseReplayPlayback();
+  clearViewerTransientPresentation();
   replayMode = false;
   replayBrowser.current = null;
   appView = "replays";
@@ -1083,7 +2508,7 @@ function replayActionDescription(frame) {
   const actorName = actor ? playerName(actor) : (frame.actorId || "AI");
   const action = frame.action;
   const cardId = action.cardId || action.unitId || action.sourceCardId;
-  const card = findVisibleCard(cardId);
+  const card = cardVisibleToCurrentViewer(cardId) ? findVisibleCard(cardId) : null;
   const target = card ? cardName(card) : "";
   const koreanLabels = {
     confirmFirstPlayer: "선공 확정", rollFirstPlayer: "선공 주사위", chooseFirstPlayer: "선공 선택",
@@ -1110,6 +2535,7 @@ function replayActionDescription(frame) {
 function handleReplayGameClick(event) {
   const button = event.target.closest("button");
   const action = button?.dataset.action;
+  if (action === "return-menu") return leaveReplayBrowser();
   if (action === "replay-exit") return exitReplayToList();
   if (action === "replay-first") { pauseReplayPlayback(); return applyReplayFrame(0); }
   if (action === "replay-prev") { pauseReplayPlayback(); return applyReplayFrame(replayBrowser.frameIndex - 1); }
@@ -1127,14 +2553,26 @@ function handleReplayGameClick(event) {
     game.selectedCardId = null;
     return;
   }
-  if (action === "toggle-log") { logOpen = !logOpen; return; }
+  if (action === "toggle-log") { toggleTabletopSheet("log"); return; }
   if (action === "toggle-hand") { handOpen = !handOpen; return; }
-  if (action === "toggle-graveyard") { graveyardOpenPlayerId = graveyardOpenPlayerId === button.dataset.player ? null : button.dataset.player; return; }
-  if (action === "toggle-banished") { banishedOpenPlayerId = banishedOpenPlayerId === button.dataset.player ? null : button.dataset.player; return; }
+  if (action === "toggle-inspector") { toggleTabletopSheet("inspector"); return; }
+  if (action === "toggle-graveyard") { toggleTabletopSheet("graveyard", button.dataset.player); return; }
+  if (action === "toggle-banished") { toggleTabletopSheet("banished", button.dataset.player); return; }
+  if (action === "toggle-intel") { toggleTabletopSheet("intel", button.dataset.player); return; }
   if (action === "close-graveyard") { graveyardOpenPlayerId = null; return; }
   if (action === "close-banished") { banishedOpenPlayerId = null; return; }
+  if (action === "close-intel") { intelOpenPlayerId = null; return; }
   if (action === "close-full-card") { fullCardOpen = false; fullCardPreviewCard = null; return; }
   if (action === "view-full-card") { fullCardPreviewCard = uiSelectedCard(); fullCardOpen = Boolean(fullCardPreviewCard); return; }
+  if (action === "view-chain-card") { fullCardPreviewCard = findVisibleCard(button.dataset.cardId); fullCardOpen = Boolean(fullCardPreviewCard); return; }
+  if (action === "toggle-attachments") { attachmentsOpenCardId = attachmentsOpenCardId === button.dataset.card ? null : button.dataset.card; return; }
+  if (action === "toggle-chain-zone") { chainZoneCollapsed = !chainZoneCollapsed; return; }
+  if (action === "inspect-chain-effect") {
+    inspectedChainItemId = inspectedChainItemId === button.dataset.chainItemId ? null : button.dataset.chainItemId;
+    syncInspectedChainTargets();
+    return;
+  }
+  if (action === "focus-chain-target") { setUiSelectedCard(button.dataset.cardId); return; }
   const cardNode = event.target.closest("[data-card-id]");
   if (cardNode) setUiSelectedCard(cardNode.dataset.cardId);
 }
@@ -1143,7 +2581,20 @@ function applyReplayFrame(requestedIndex) {
   const frames = replayBrowser.current?.frames || [];
   if (!frames.length) return;
   const previousIndex = replayBrowser.frameIndex;
-  const index = Math.max(0, Math.min(frames.length - 1, Math.trunc(requestedIndex)));
+  const numericIndex = Number(requestedIndex);
+  const index = Math.max(0, Math.min(frames.length - 1, Number.isFinite(numericIndex) ? Math.trunc(numericIndex) : 0));
+  const frameIssue = replayFrameRenderIssue(frames[index]);
+  if (frameIssue) {
+    pauseReplayPlayback();
+    replayBrowser.error = locale() === LOCALES.KO
+      ? `리플레이 프레임을 표시할 수 없습니다: ${frameIssue}`
+      : `Could not display replay frame: ${frameIssue}`;
+    replayMode = false;
+    appView = "replays";
+    return;
+  }
+  const continuousForwardStep = index === previousIndex + 1;
+  if (!continuousForwardStep) clearViewerTransientPresentation();
   replayBrowser.frameIndex = index;
   game = structuredClone(frames[index].game);
   game.selectedCardId = null;
@@ -1152,11 +2603,6 @@ function applyReplayFrame(requestedIndex) {
   attachmentsOpenCardId = null;
   graveyardOpenPlayerId = null;
   banishedOpenPlayerId = null;
-  if (index <= previousIndex) {
-    previousUiSnapshot = null;
-    clearEffectAnimations();
-    resetPresentationState(presentationState);
-  }
 }
 
 function scheduleReplayPlayback() {
@@ -1166,11 +2612,15 @@ function scheduleReplayPlayback() {
     replayBrowser.playing = false;
     return;
   }
+  const drawCount = uiMotion.transfers.filter((transfer) => transfer?.kind === "draw").length;
+  const motionFloor = uiMotion.transfers.length
+    ? TABLETOP_TRANSFER_DURATION_MS + Math.max(0, drawCount - 1) * TABLETOP_DRAW_STAGGER_MS + 180
+    : 0;
   replayBrowser.timer = window.setTimeout(() => {
     replayBrowser.timer = null;
     applyReplayFrame(replayBrowser.frameIndex + 1);
     render();
-  }, Math.max(180, 1200 / replayBrowser.speed));
+  }, Math.max(180, 1200 / replayBrowser.speed, motionFloor));
 }
 
 function pauseReplayPlayback() {
@@ -2171,6 +3621,8 @@ function saveOnlineSeat() {
 
 function clearOnlineSeat() {
   closeOnlineEvents();
+  if (deferredOnlineRenderTimer) clearTimeout(deferredOnlineRenderTimer);
+  deferredOnlineRenderTimer = null;
   onlineSelectedCardId = null;
   online.mode = "offline";
   online.roomId = "";
@@ -2289,7 +3741,8 @@ function connectOnlineEvents() {
       saveOnlineSeat();
       if (snapshot.game) {
         game = snapshot.game;
-        restoreOnlineSelection(selectedBeforeSnapshot);
+        onlineSnapshotRevision += 1;
+        if (!gameUiRenderIssue(game)) restoreOnlineSelection(selectedBeforeSnapshot);
         appView = "game";
       }
       online.error = "";
@@ -2329,6 +3782,7 @@ function setUiSelectedCard(cardId) {
   selectCard(game, cardId);
   if (game.selectedCardId !== before || game.selectedCardId === cardId) {
     if (isOnlineGame()) onlineSelectedCardId = game.selectedCardId;
+    closeTabletopSheets("inspector");
     inspectorOpen = true;
   }
 }
@@ -2684,16 +4138,9 @@ function resetGameUiState() {
   lastInteractionPhase = null;
   paymentRunesScrollLeft = 0;
   handScrollLeft = 0;
-  previousUiSnapshot = null;
-  clearEffectAnimations();
-  resetPresentationState(presentationState);
-  activeImpact = null;
+  clearViewerTransientPresentation();
   resultRevealReady = true;
   resultDismissed = false;
-  if (impactDismissTimer) clearTimeout(impactDismissTimer);
-  impactDismissTimer = null;
-  clearRealtimeFeedback();
-  actionRejection = null;
   moveSelection.clear();
 }
 
@@ -3024,6 +4471,7 @@ function dispatchGameCommand(command, applyLocal) {
   // on serialized data. Send the explicit UI command and let the server's
   // shared legal-action gate validate and canonicalize it.
   const resolvedCommand = command;
+  const snapshotRevisionAtDispatch = onlineSnapshotRevision;
   online.commandPending = { kind: command.kind, startedAt: Date.now() };
   render();
   sendOnlineCommand(online.roomId, online.playerToken, resolvedCommand)
@@ -3037,8 +4485,24 @@ function dispatchGameCommand(command, applyLocal) {
     })
     .finally(() => {
       online.commandPending = null;
-      render();
+      if (onlineSnapshotRevision === snapshotRevisionAtDispatch) render();
+      else renderAfterTabletopFlights();
     });
+}
+
+function renderAfterTabletopFlights() {
+  if (deferredOnlineRenderTimer) clearTimeout(deferredOnlineRenderTimer);
+  const deadline = Date.now() + 1800;
+  const finish = () => {
+    deferredOnlineRenderTimer = null;
+    const activeTabletopMotion = document.querySelector(".tabletop-card-flight-layer, .tabletop-state-motion");
+    if (!activeTabletopMotion || Date.now() >= deadline || appView !== "game") {
+      render();
+      return;
+    }
+    deferredOnlineRenderTimer = setTimeout(finish, 32);
+  };
+  finish();
 }
 
 function resolveCurrentGameCommand(command) {
@@ -3121,6 +4585,7 @@ function emptyMotion() {
     entered: new Set(),
     chained: new Set(),
     trashed: new Set(),
+    transfers: [],
     sourceIds: new Set(),
     targetIds: new Set(),
     sourceZones: new Set(),
@@ -3149,6 +4614,43 @@ function prepareUiMotion() {
   motion.entered = diffSet(current.board, previous.board);
   motion.chained = diffSet(current.chain, previous.chain);
   motion.trashed = diffSet(current.trash, previous.trash);
+  motion.transfers = buildTabletopTransfers(previous.cardZones, current.cardZones);
+  motion.transfers.push(...buildPrivateHandChainTransfers(
+    previous.cardZones,
+    current.cardZones,
+    previous.chainItems,
+    current.chainItems,
+    viewerPlayerId(),
+    motion.transfers
+  ));
+  motion.transfers.push(...buildPrivateHiddenChainTransfers(
+    previous.cardZones,
+    current.cardZones,
+    previous.chainItems,
+    current.chainItems,
+    viewerPlayerId(),
+    motion.transfers
+  ));
+  motion.transfers.push(...buildPrivateHandBoardTransfers(
+    previous.cardZones,
+    current.cardZones,
+    viewerPlayerId(),
+    motion.transfers
+  ));
+  motion.transfers.push(...buildPrivateDeckTransfers(
+    previous.cardZones,
+    current.cardZones,
+    viewerPlayerId(),
+    motion.transfers
+  ));
+  motion.transfers = buildBurnOutDrawTransfers(
+    motion.transfers,
+    previous.players,
+    current.players,
+    previous.cardZones,
+    current.cardZones
+  );
+  motion.transfers.sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
   motion.feedback = buildRealtimeFeedback(current, previous, motion);
   rememberEffectAnimations(detectEffectAnimations(previous, current));
 
@@ -3156,7 +4658,7 @@ function prepareUiMotion() {
 }
 
 function rememberEffectAnimations(events) {
-  const expiresAt = Date.now() + EFFECT_ANIMATION_DURATION_MS;
+  const expiresAt = Date.now() + presentationMotionDuration(EFFECT_ANIMATION_DURATION_MS);
   for (const event of events.draws) effectAnimations.draws.set(event.playerId, { ...event, expiresAt });
   for (const event of events.deaths) effectAnimations.deaths.set(event.id, { ...event, expiresAt });
   for (const event of events.mightChanges) effectAnimations.mightChanges.set(event.unitId, { ...event, expiresAt });
@@ -3208,7 +4710,8 @@ function uiSnapshot() {
     effectMessage: game.effectFlash?.message || "",
     players: new Map(game.players.map((player) => [player.id, {
       deckCount: player.mainDeck.length,
-      handIds: new Set(player.hand.map((card) => card.instanceId))
+      handIds: new Set(player.hand.map((card) => card.instanceId)),
+      burnOuts: Math.max(0, Number(player.burnOuts) || 0)
     }])),
     hand: new Set(game.players.flatMap((player) => player.hand.map((card) => card.instanceId))),
     board: new Set(boardUnits.keys()),
@@ -3255,6 +4758,7 @@ function visibleChainItems() {
 function chainItemSnapshot(item, index) {
   const card = item?.card || {};
   const targets = chainItemTargetIds(item);
+  const effectPlayOrigin = item.playOptions?.effectPlayOrigin;
   return {
     id: item.id || `${card.instanceId || "chain"}-${index}`,
     cardId: card.instanceId,
@@ -3263,28 +4767,87 @@ function chainItemSnapshot(item, index) {
     rawName: card.name || item.trigger?.label || "",
     sourceName: chainItemSourceTitle(item),
     type: item.itemType || "card",
+    sourceZone: item.playOptions?.playProcess?.source || effectPlayOrigin?.zone || "",
+    sourcePlayerId: effectPlayOrigin?.playerId || item.playerId || "",
+    order: index,
     status: item.status || "pending",
     targetIds: targets
   };
 }
 
+function motionCardZone(card, { playerId = "", zone = "", locationId = "", index = 0, faceVisible = true } = {}) {
+  if (!card?.instanceId) return null;
+  const visible = Boolean(faceVisible && !card.redacted);
+  return {
+    playerId: String(playerId || card.controllerId || card.ownerId || ""),
+    cardType: String(card.type || ""),
+    zone,
+    locationId: String(locationId || ""),
+    index: Number.isFinite(Number(index)) ? Number(index) : 0,
+    faceVisible: visible,
+    image: visible ? String(card.image || "") : "",
+    name: visible ? String(cardName(card) || "") : "",
+    exhausted: Boolean(card.exhausted)
+  };
+}
+
+function setMotionCardZone(zones, card, options) {
+  const location = motionCardZone(card, options);
+  if (location) zones.set(card.instanceId, location);
+}
+
+function setMotionAttachmentZones(zones, parent, playerId) {
+  for (const [index, attachment] of (parent?.attachments || []).entries()) {
+    setMotionCardZone(zones, attachment, {
+      playerId: attachment.controllerId || attachment.ownerId || playerId,
+      zone: "attachment",
+      locationId: parent.instanceId,
+      index
+    });
+    setMotionAttachmentZones(zones, attachment, attachment.controllerId || attachment.ownerId || playerId);
+  }
+}
+
 function cardZoneSnapshot() {
   const zones = new Map();
+  const viewerId = viewerPlayerId();
   for (const player of game.players) {
-    for (const card of player.hand) zones.set(card.instanceId, { playerId: player.id, zone: "hand" });
-    for (const card of player.base) zones.set(card.instanceId, { playerId: player.id, zone: "base" });
-    for (const card of player.trash) zones.set(card.instanceId, { playerId: player.id, zone: "trash" });
-    for (const card of player.banished || []) zones.set(card.instanceId, { playerId: player.id, zone: "banished" });
-    if (player.legend) zones.set(player.legend.instanceId, { playerId: player.id, zone: "legend" });
-    if (player.champion) zones.set(player.champion.instanceId, { playerId: player.id, zone: "champion" });
-    for (const card of player.mainDeck) zones.set(card.instanceId, { playerId: player.id, zone: "mainDeck" });
-    for (const card of player.runeDeck) zones.set(card.instanceId, { playerId: player.id, zone: "runeDeck" });
+    const handVisible = player.id === viewerId || canViewPrivateInfo(viewerId, player.id);
+    player.hand.forEach((card, index) => setMotionCardZone(zones, card, { playerId: player.id, zone: "hand", index, faceVisible: handVisible }));
+    player.base.forEach((card, index) => {
+      setMotionCardZone(zones, card, { playerId: player.id, zone: "base", locationId: "base", index });
+      setMotionAttachmentZones(zones, card, player.id);
+    });
+    player.runes.forEach((card, index) => setMotionCardZone(zones, card, { playerId: player.id, zone: "runes", index }));
+    player.trash.forEach((card, index) => setMotionCardZone(zones, card, { playerId: player.id, zone: "trash", index }));
+    (player.banished || []).forEach((card, index) => setMotionCardZone(zones, card, { playerId: player.id, zone: "banished", index }));
+    setMotionCardZone(zones, player.legend, { playerId: player.id, zone: "legend" });
+    if (player.champion?.zone === "champion") {
+      setMotionCardZone(zones, player.champion, { playerId: player.id, zone: "champion" });
+    }
+    player.mainDeck.forEach((card, index) => setMotionCardZone(zones, card, { playerId: player.id, zone: "mainDeck", index, faceVisible: false }));
+    player.runeDeck.forEach((card, index) => setMotionCardZone(zones, card, { playerId: player.id, zone: "runeDeck", index, faceVisible: false }));
   }
   for (const field of game.battlefields) {
-    zones.set(field.instanceId, { playerId: field.controlledBy, zone: "battlefield" });
-    for (const card of field.units) zones.set(card.instanceId, { playerId: card.controllerId, zone: "battlefield" });
-    for (const item of field.hidden || []) zones.set(item.card.instanceId, { playerId: hiddenCardControllerId(item), zone: "hidden", battlefieldId: field.instanceId });
+    setMotionCardZone(zones, field, { playerId: field.controlledBy, zone: "battlefield", locationId: field.instanceId });
+    field.units.forEach((card, index) => {
+      setMotionCardZone(zones, card, { playerId: card.controllerId, zone: "battlefield", locationId: field.instanceId, index });
+      setMotionAttachmentZones(zones, card, card.controllerId);
+    });
+    (field.hidden || []).forEach((item, index) => {
+      const controllerId = hiddenCardControllerId(item);
+      const visible = controllerId === viewerId || canViewPrivateInfo(viewerId, controllerId);
+      setMotionCardZone(zones, item?.card, { playerId: controllerId, zone: "hidden", locationId: field.instanceId, index, faceVisible: visible });
+    });
   }
+  const motionChain = game.actionChain?.chain || game.showdown?.chain || [];
+  motionChain.filter(Boolean).forEach((item, index) => setMotionCardZone(zones, item?.card, {
+    playerId: item?.playerId,
+    zone: "chain",
+    locationId: item?.id || `chain-${index}`,
+    index,
+    faceVisible: cardVisibleToCurrentViewer(item?.card)
+  }));
   return zones;
 }
 
@@ -3345,13 +4908,28 @@ function rememberRealtimeFeedback(feedback) {
     feedbackDismissTimer = null;
     recentFeedback = null;
     if (appView === "game") render();
-  }, 1800);
+  }, presentationMotionDuration(1800));
 }
 
 function clearRealtimeFeedback() {
   recentFeedback = null;
   if (feedbackDismissTimer) clearTimeout(feedbackDismissTimer);
   feedbackDismissTimer = null;
+}
+
+function clearViewerTransientPresentation() {
+  clearRealtimeFeedback();
+  clearEffectAnimations();
+  resetPresentationState(presentationState);
+  previousUiSnapshot = null;
+  uiMotion = emptyMotion();
+  activeImpact = null;
+  staticImpactPreview = false;
+  actionRejection = null;
+  if (impactDismissTimer) clearTimeout(impactDismissTimer);
+  impactDismissTimer = null;
+  for (const layer of document.querySelectorAll(".tabletop-card-flight-layer")) layer.remove();
+  clearTabletopStateMotions(document);
 }
 
 function chainFeedbackTitle(item, previousZone) {
@@ -3389,7 +4967,7 @@ function interactionStatus() {
   const actorId = activePlayerId();
   const actor = game.players.find((player) => player.id === actorId) || currentPlayer(game);
   const actorName = actor ? playerName(actor) : t("nobody", locale());
-  const mine = !isOnlineGame() || actorId === viewerPlayerId();
+  const mine = (!isOnlineGame() && !aiMode && !replayMode) || actorId === viewerPlayerId();
 
   if (game.phase === "complete") {
     return { tone: "complete", label: t("gameEnded", locale()), title: headline(), detail: t("reviewFinalState", locale()) };
@@ -3404,7 +4982,7 @@ function interactionStatus() {
   }
   if (game.pendingPayment) {
     const payment = game.pendingPayment;
-    const decisionVisible = pendingDecisionVisibleToViewer({ aiMode, viewerPlayerId: viewerPlayerId(), decision: payment });
+    const decisionVisible = decisionVisibleToViewer(payment);
     const player = game.players.find((candidate) => candidate.id === payment.playerId);
     const card = paymentDisplayCard(player, payment) || payment.effectPayment?.sourceCard;
     const needed = payment.energyCost ?? card?.energy ?? 0;
@@ -3422,7 +5000,7 @@ function interactionStatus() {
   }
   if (game.pendingChoice) {
     const choice = game.pendingChoice;
-    const decisionVisible = pendingDecisionVisibleToViewer({ aiMode, viewerPlayerId: viewerPlayerId(), decision: choice });
+    const decisionVisible = decisionVisibleToViewer(choice);
     const source = choice.card ? cardName(choice.card) : t("effect", locale());
     return {
       tone: mine ? "attention" : "waiting",
@@ -3605,7 +5183,7 @@ function rememberCinematicImpact(impact) {
     activeImpact = null;
     if (finalImpact) resultRevealReady = true;
     if (appView === "game") render();
-  }, finalImpact ? 2200 : 1150);
+  }, presentationMotionDuration(finalImpact ? 2200 : 1150));
 }
 
 function cinematicImpactOverlay() {
@@ -3632,7 +5210,7 @@ function gameResultModal() {
   const highlights = rankPresentationHighlights(presentationState.highlights);
   const korean = locale() === LOCALES.KO;
   return `
-    <section class="result-modal match-result-modal modal-panel ${won ? "result-victory" : "result-defeat"}" role="dialog" aria-modal="true" aria-labelledby="match-result-title">
+    <section class="result-modal match-result-modal modal-panel ${won ? "result-victory" : "result-defeat"}" role="dialog" aria-modal="true" aria-labelledby="match-result-title" data-ui-modal data-modal-key="match-result" tabindex="-1">
       <div class="result-crown" aria-hidden="true"><span></span></div>
       <div class="result-modal-copy">
         <span>${game.surrenderedPlayerId ? (korean ? "항복으로 종료" : "Ended by surrender") : t("gameEnded", locale())}</span>
@@ -3657,7 +5235,7 @@ function gameResultModal() {
         `}
       </section>
       <div class="result-actions">
-        <button type="button" class="secondary" data-action="review-result">${korean ? "전장 돌아보기" : "Review battlefield"}</button>
+        <button type="button" class="secondary" data-action="review-result" data-primary-focus>${korean ? "전장 돌아보기" : "Review battlefield"}</button>
         ${isOnlineGame()
           ? `<button type="button" class="primary" data-action="confirm-online-result">${korean ? "로비로 돌아가기" : "Return to lobby"}</button>`
           : `<button type="button" class="primary" data-action="new-game">${t("newGame", locale())}</button>`}
@@ -3684,14 +5262,14 @@ function resultHighlightCard(highlight, index) {
 function gameExitConfirmModal() {
   const restarting = pendingGameExit === "new-game";
   return `
-    <section class="result-modal game-exit-modal modal-panel" role="dialog" aria-modal="true" aria-labelledby="game-exit-title">
+    <section class="result-modal game-exit-modal modal-panel" role="dialog" aria-modal="true" aria-labelledby="game-exit-title" data-ui-modal data-modal-key="game-exit" tabindex="-1">
       <div class="result-modal-copy">
         <span>${restarting ? t("newGame", locale()) : t("surrender", locale())}</span>
         <h2 id="game-exit-title">${t(restarting ? "restartConfirmTitle" : "surrenderConfirmTitle", locale())}</h2>
         <p>${t(restarting ? "restartConfirmDetail" : "surrenderConfirmDetail", locale())}</p>
       </div>
       <div class="actions game-exit-actions">
-        <button type="button" data-action="cancel-game-exit">${t("continueGame", locale())}</button>
+        <button type="button" data-action="cancel-game-exit" data-primary-focus>${t("continueGame", locale())}</button>
         <button type="button" class="danger" data-action="confirm-game-exit">${restarting ? t("newGame", locale()) : t("surrender", locale())}</button>
       </div>
     </section>
@@ -3699,8 +5277,8 @@ function gameExitConfirmModal() {
 }
 
 function scoreTrack() {
-  const left = isOnlineGame() ? viewerPlayer() : game.players[0];
-  const right = isOnlineGame() ? opponentPlayer() : game.players[1];
+  const left = viewerPlayer();
+  const right = opponentPlayer();
   const labels = [1, 2, 3, 4, 5, 6, 7, 8, 7, 6, 5, 4, 3, 2, 1];
   return `
     <section class="score-track" aria-label="${locale() === LOCALES.KO ? "점수" : "Score"}">
@@ -3724,52 +5302,86 @@ function scoreTrack() {
 
 function gamePanel(player) {
   syncInspectedChainTargets();
+  const battlefieldCount = Array.isArray(game?.battlefields) ? game.battlefields.length : 0;
   const selected = uiSelectedCard();
   const bottomPlayer = viewerPlayer();
   const topPlayer = opponentPlayer();
-  const showPendingPayment = pendingDecisionVisibleToViewer({
-    aiMode,
-    viewerPlayerId: viewerPlayerId(),
-    decision: game.pendingPayment
-  });
-  const showPendingChoice = pendingDecisionVisibleToViewer({
-    aiMode,
-    viewerPlayerId: viewerPlayerId(),
-    decision: game.pendingChoice
-  });
   return `
-    <div class="play-area ${actingPlayerClass()} ${isOnlineGame() && !viewerCanAct() ? "waiting-for-opponent" : ""} ${online.commandPending ? "command-pending" : ""}" aria-busy="${online.commandPending ? "true" : "false"}">
+    <div class="play-area tabletop-board ${actingPlayerClass()} ${isOnlineGame() && !viewerCanAct() ? "waiting-for-opponent" : ""} ${online.commandPending ? "command-pending" : ""}" data-phase="${escapeHtml(game.phase || "unknown")}" aria-busy="${online.commandPending ? "true" : "false"}">
       <section class="board-panel" aria-label="${t("gameBoard", locale())}">
         <div class="board-band opponent-band">
-          <span>${t("opponentSide", locale())}</span>
+          <span class="side-label">${t("opponentSide", locale())}</span>
           ${playerSide(topPlayer, "top")}
+          ${opponentHandFan(topPlayer)}
         </div>
         ${chainZonePanel()}
         ${realtimeFeedbackOverlay()}
-        <div class="location-band" data-scroll-key="battlefield-scroll">
-          <span>${t("battlefield", locale())}</span>
-          <section class="battlefield-mat ${game.battlefields.length > 2 ? "has-extra-battlefields" : ""}" aria-label="${t("battlefields", locale())}">
+        <div class="location-band" data-zone="battlefields" data-count="${battlefieldCount}">
+          <span class="zone-caption battlefield-caption">${t("battlefield", locale())}</span>
+          <section class="battlefield-mat ${battlefieldCount > 2 ? "has-extra-battlefields" : ""}" aria-label="${t("battlefields", locale())}" data-scroll-key="battlefield-scroll">
             ${battlefieldColumns()}
           </section>
         </div>
         <div class="board-band player-band">
-          <span>${t("playerSide", locale())}</span>
+          <span class="side-label">${t("playerSide", locale())}</span>
           ${playerSide(bottomPlayer, "bottom")}
         </div>
       </section>
-      ${moveBatchBar(player)}
-      ${actionBar(player, selected)}
-      ${handDrawer(player)}
-      <div class="floating-panels ${game.phase === "showdown" ? "showdown-dock" : ""} ${showPendingPayment || showPendingChoice || graveyardOpenPlayerId || banishedOpenPlayerId ? "has-modal" : ""}">
-        ${game.phase === "showdown" ? "" : ""}
-        ${showPendingPayment ? paymentPanel() : ""}
-        ${showPendingChoice ? choicePanel() : ""}
-        ${graveyardOpenPlayerId ? graveyardPanel(graveyardOpenPlayerId) : ""}
-        ${banishedOpenPlayerId ? banishedPanel(banishedOpenPlayerId) : ""}
-        ${intelOpenPlayerId ? intelPanel(intelOpenPlayerId) : ""}
+      <div class="table-command-layer">
+        ${moveBatchBar(player)}
+        ${actionBar(player, selected)}
+        ${handDrawer(player)}
       </div>
     </div>
   `;
+}
+
+function gameFloatingPanels() {
+  const showPendingPayment = decisionVisibleToViewer(game.pendingPayment);
+  const showPendingChoice = decisionVisibleToViewer(game.pendingChoice);
+  const blocking = showPendingPayment || showPendingChoice;
+  const liveBlocking = blocking && !replayMode;
+  return `
+    <div class="floating-panels ${game.phase === "showdown" ? "showdown-dock" : ""} ${liveBlocking ? "has-modal has-blocking-decision" : ""} ${blocking && replayMode ? "replay-readonly-decision" : ""}">
+      ${showPendingPayment ? paymentPanel() : ""}
+      ${showPendingChoice ? choicePanel() : ""}
+      ${blocking ? "" : graveyardOpenPlayerId ? graveyardPanel(graveyardOpenPlayerId) : ""}
+      ${blocking ? "" : banishedOpenPlayerId ? banishedPanel(banishedOpenPlayerId) : ""}
+      ${blocking ? "" : intelOpenPlayerId ? intelPanel(intelOpenPlayerId) : ""}
+    </div>
+  `;
+}
+
+function closeTabletopSheets(keep = "") {
+  if (keep !== "inspector") {
+    inspectorOpen = false;
+    attachmentsOpenCardId = null;
+  }
+  if (keep !== "graveyard") graveyardOpenPlayerId = null;
+  if (keep !== "banished") banishedOpenPlayerId = null;
+  if (keep !== "intel") intelOpenPlayerId = null;
+  if (keep !== "log") logOpen = false;
+}
+
+function toggleTabletopSheet(kind, value = true) {
+  const open = kind === "inspector"
+    ? inspectorOpen
+    : kind === "graveyard"
+      ? graveyardOpenPlayerId === value
+      : kind === "banished"
+        ? banishedOpenPlayerId === value
+        : kind === "intel"
+          ? intelOpenPlayerId === value
+          : kind === "log"
+            ? logOpen
+            : false;
+  closeTabletopSheets(open ? "" : kind);
+  if (open) return;
+  if (kind === "inspector") inspectorOpen = true;
+  if (kind === "graveyard") graveyardOpenPlayerId = value;
+  if (kind === "banished") banishedOpenPlayerId = value;
+  if (kind === "intel") intelOpenPlayerId = value;
+  if (kind === "log") logOpen = true;
 }
 
 function uiSelectedCard() {
@@ -3777,15 +5389,40 @@ function uiSelectedCard() {
 }
 
 function handDrawer(player) {
-  const cardCount = player.hand.length;
+  const seat = tabletopSeatView(player, {
+    side: "bottom",
+    visibleHandCount: handCountVisibleToViewer(game, player, viewerPlayerId()),
+    revealHand: true
+  });
+  const cardCount = seat.counts.hand;
   return `
-    <section class="hand-drawer ${handOpen ? "open" : "closed"}">
-      <div class="hand-panel" aria-hidden="${handOpen ? "false" : "true"}">
+    <section class="hand-drawer persistent-hand ${handOpen ? "open focused" : "closed"}" data-zone="hand" data-count="${cardCount}" data-player-id="${escapeHtml(seat.id)}">
+      <div class="hand-panel" aria-label="${escapeHtml(`${playerName(player)} ${t("hand", locale())} ${cardCount}`)}">
         <div class="section-head">
           <h2>${playerName(player)} ${t("hand", locale())}</h2>
           <span>${t("cardCount", locale(), { n: cardCount })}</span>
+          <button type="button" class="hand-focus-toggle" data-action="toggle-hand" aria-expanded="${handOpen}">${handOpen ? t("hideHand", locale()) : t("hand", locale())}</button>
         </div>
-        <div class="cards">${championCard(player)}${player.hand.map(handCard).join("") || `<p class="empty">${t("noCardsInHand", locale())}</p>`}</div>
+        <div class="cards hand-fan" data-scroll-key="hand-scroll">${seat.hand.map((card, index) => handCard(card, index, seat.hand.length)).join("") || `<p class="empty">${t("noCardsInHand", locale())}</p>`}</div>
+      </div>
+    </section>
+  `;
+}
+
+function opponentHandFan(player) {
+  const revealHand = canViewPrivateInfo(viewerPlayerId(), player?.id);
+  const visibleCount = handCountVisibleToViewer(game, player, viewerPlayerId());
+  const seat = tabletopSeatView(player, { side: "top", visibleHandCount: visibleCount, revealHand });
+  const count = seat.counts.hand;
+  const cards = Array.from({ length: count }, (_, index) => seat.visibleHandCards[index] || null);
+  return `
+    <section class="opponent-hand persistent-hand" data-zone="hand" data-count="${count}" data-player-id="${escapeHtml(seat.id)}" aria-label="${escapeHtml(`${playerName(player)} ${t("hand", locale())} ${count}`)}">
+      <span class="zone-caption">${t("hand", locale())} <b>${count}</b></span>
+      <div class="opponent-hand-fan">
+        ${cards.map((card, index) => card
+          ? `<article class="opponent-hand-card revealed-card" data-hand-card style="${fanCardStyle(index, count, { maxAngle: 18, maxRise: 12, reverse: true })}" data-card-id="${escapeHtml(card.instanceId || "")}" role="button" tabindex="0" aria-label="${escapeHtml(cardName(card))}">${cardImage(card)}</article>`
+          : `<span class="opponent-hand-card card-back" data-hand-card style="${fanCardStyle(index, count, { maxAngle: 18, maxRise: 12, reverse: true })}" aria-label="${escapeHtml(`${t("opponentSide", locale())} ${t("hand", locale())} ${index + 1}`)}"><i aria-hidden="true">R</i></span>`
+        ).join("") || `<span class="empty-hand-count">0</span>`}
       </div>
     </section>
   `;
@@ -3829,7 +5466,7 @@ function logDrawer() {
   const interaction = interactionStatus();
   const visibleLog = gameLogVisibleToViewer(game, viewerPlayerId());
   return `
-    <aside class="log-drawer" aria-label="${t("eventTimeline", locale())}">
+    <aside class="log-drawer" role="dialog" aria-modal="false" aria-label="${t("eventTimeline", locale())}" data-ui-sheet="log">
       <div class="section-head">
         <div>
           <h2>${t("eventTimeline", locale())}</h2>
@@ -3848,7 +5485,7 @@ function logDrawer() {
   `;
 }
 
-function logEntryView(entry, index, total = game.log.length) {
+function logEntryView(entry, index, total = (game.log || []).length) {
   const value = String(entry || "");
   const category = /pay|cost/i.test(value)
     ? "payment"
@@ -3936,15 +5573,18 @@ function paymentPanel() {
   const poolEnergySelected = payment.poolEnergyIds?.length || 0;
   const runeEnergyNeeded = Math.max(0, energyNeeded - poolEnergySelected);
   const paymentReady = paymentConfirmationLegality(game).ok;
+  const modalAttributes = replayMode
+    ? `role="region" aria-labelledby="payment-dialog-title" aria-readonly="true" data-replay-readonly-decision inert`
+    : `role="dialog" aria-modal="true" aria-labelledby="payment-dialog-title" data-ui-modal data-modal-key="payment-${escapeHtml(payment.id || payment.cardId || payment.source || "pending")}" tabindex="-1"`;
   return `
-    <section class="payment-panel modal-panel">
+    <section class="payment-panel modal-panel" ${modalAttributes}>
       <div class="section-head">
         <div>
-          <h2>${t("paymentRequired", locale())}</h2>
+          <h2 id="payment-dialog-title">${t("paymentRequired", locale())}</h2>
           <span>${paymentCostSummary(player, displayCard, payment, energyNeeded, poolEnergySelected, powerCost)}</span>
         </div>
         <div class="actions inline">
-          <button data-action="cancel-payment">${t("cancel", locale())}</button>
+          <button data-action="cancel-payment" data-primary-focus>${t("cancel", locale())}</button>
           <button class="primary" data-action="confirm-payment" ${paymentReady ? "" : "disabled"}>${paymentReady ? t("confirm", locale()) : t("selectCost", locale())}</button>
         </div>
       </div>
@@ -4055,6 +5695,7 @@ function poolPowerControls(player, payment, powerCost) {
 }
 
 function poolEnergyCanPay(resource, card = null) {
+  if (!resource?.restriction) return true;
   if (resource.restriction === "showdown") return game.phase === "showdown";
   if (resource.restriction === "spell") {
     const pendingCard = game.pendingPayment
@@ -4063,13 +5704,33 @@ function poolEnergyCanPay(resource, card = null) {
       : card;
     return pendingCard?.type === "spell";
   }
-  return true;
+  if (resource.restriction === "unitOrUnitAbility") {
+    const pendingCard = card || (game.pendingPayment
+      ? paymentDisplayCard(
+        game.players.find((player) => player.id === game.pendingPayment.playerId),
+        game.pendingPayment
+      )
+      : null);
+    return Boolean(pendingCard && cardHasType(pendingCard, "unit"));
+  }
+  if (resource.restriction === "gear") {
+    const pendingCard = card || (game.pendingPayment
+      ? paymentDisplayCard(
+        game.players.find((player) => player.id === game.pendingPayment.playerId),
+        game.pendingPayment
+      )
+      : null);
+    return Boolean(pendingCard && cardHasType(pendingCard, "gear"));
+  }
+  return false;
 }
 
 function poolPowerCanPay(resource, card = null) {
+  if (!resource?.restriction) return true;
   if (resource.restriction === "showdown") return game.phase === "showdown";
   if (resource.restriction === "spell") return card?.type === "spell";
-  return true;
+  if (resource.restriction === "gear") return Boolean(card && cardHasType(card, "gear"));
+  return false;
 }
 
 function paymentAddControls(player) {
@@ -4146,7 +5807,8 @@ function runePoolEnergy(player) {
 }
 
 function runePoolPower(player) {
-  return (player.runePool?.power || []).map((resource, index) => {
+  const power = Array.isArray(player?.runePool?.power) ? player.runePool.power : [];
+  return power.map((resource, index) => {
     if (resource && typeof resource === "object") return resource;
     return { id: `legacy-power-${player.id}-${index}`, instanceId: `legacy-power-${player.id}-${index}`, domain: resource || "Any" };
   });
@@ -4200,7 +5862,7 @@ function paymentRuneSection(player, payment, card, powerCost) {
           ? "에너지는 룬을 탈진시키고, 힘은 룬을 재활용합니다"
           : "Energy exhausts a Rune; Power recycles it"}</span>
       </div>
-      <div class="pay-runes">${runes.join("")}</div>
+      <div class="pay-runes" data-scroll-key="payment-${escapeHtml(payment.id || payment.cardId || payment.source || "pending")}-runes">${runes.join("")}</div>
     </section>
   `;
 }
@@ -4240,10 +5902,10 @@ function graveyardPanel(playerId) {
   const player = game.players.find((candidate) => candidate.id === playerId);
   if (!player) return "";
   return `
-    <section class="graveyard-panel modal-panel">
+    <section class="graveyard-panel modal-panel" role="dialog" aria-modal="false" aria-labelledby="graveyard-panel-title" data-ui-sheet="graveyard">
       <div class="section-head">
         <div>
-          <h2>${playerName(player)} ${t("trash", locale())}</h2>
+          <h2 id="graveyard-panel-title">${playerName(player)} ${t("trash", locale())}</h2>
           <span>${t("cardCount", locale(), { n: player.trash.length })}</span>
         </div>
         <button data-action="close-graveyard">${t("close", locale())}</button>
@@ -4267,9 +5929,9 @@ function banishedPanel(playerId) {
   if (!player) return "";
   const cards = player.banished || [];
   return `
-    <section class="graveyard-panel modal-panel banished-panel">
+    <section class="graveyard-panel modal-panel banished-panel" role="dialog" aria-modal="false" aria-labelledby="banished-panel-title" data-ui-sheet="banished">
       <div class="section-head">
-        <div><h2>${playerName(player)} ${t("banished", locale())}</h2><span>${t("cardCount", locale(), { n: cards.length })}</span></div>
+        <div><h2 id="banished-panel-title">${playerName(player)} ${t("banished", locale())}</h2><span>${t("cardCount", locale(), { n: cards.length })}</span></div>
         <button data-action="close-banished">${t("close", locale())}</button>
       </div>
       <div class="cards graveyard-cards" data-scroll-key="banished-${player.id}">
@@ -4288,10 +5950,10 @@ function intelPanel(playerId) {
       .map((item) => ({ ...item, fieldName: battlefieldName(field) }))
   );
   return `
-    <section class="intel-panel modal-panel reveal-panel">
+    <section class="intel-panel modal-panel reveal-panel" role="dialog" aria-modal="false" aria-labelledby="intel-panel-title" data-ui-sheet="intel" data-scroll-key="intel-${escapeHtml(player.id)}">
       <div class="section-head">
         <div>
-          <h2>${playerName(player)}: ${t("revealedIntel", locale())}</h2>
+          <h2 id="intel-panel-title">${playerName(player)}: ${t("revealedIntel", locale())}</h2>
           <span>${t("availableUntilTurnEnds", locale())}</span>
         </div>
         <button data-action="close-intel">${t("close", locale())}</button>
@@ -4321,8 +5983,16 @@ function intelPanel(playerId) {
   `;
 }
 
+function choiceModalAttributes(choice) {
+  const key = `choice-${choice?.id || choice?.effect || "pending"}`;
+  const label = localizedChoicePrompt(choice) || (locale() === LOCALES.KO ? "효과 선택" : "Effect choice");
+  if (replayMode) return `role="region" aria-label="${escapeHtml(label)}" aria-readonly="true" data-replay-readonly-decision inert`;
+  return `role="dialog" aria-modal="true" aria-label="${escapeHtml(label)}" data-ui-modal data-modal-key="${escapeHtml(key)}" tabindex="-1"`;
+}
+
 function choicePanel() {
   const choice = game.pendingChoice;
+  if (!choice || !Array.isArray(choice.options)) return "";
   if (choice.effect === "triggerOrder") return triggerOrderPanel(choice);
   if (choice.effect === "combatDamage") return combatDamagePanel(choice);
   if (choice.effect === "alphaStrikeDamage") return alphaStrikeDamagePanel(choice);
@@ -4334,7 +6004,7 @@ function choicePanel() {
   const repeatProgress = repeatedDamageProgress(choice);
   const searchable = choice.options.length > 12;
   return `
-    <section class="choice-panel modal-panel ${choice.effect === "sabotage" ? "reveal-panel" : ""}">
+    <section class="choice-panel modal-panel ${choice.effect === "sabotage" ? "reveal-panel" : ""}" ${choiceModalAttributes(choice)}>
       <div class="section-head">
         <div>
           <h2>${choice.effect === "sabotage" ? `${cardName(choice.card)}: ${t("revealedHand", locale())}` : `${choice.data?.declareTrigger ? t("declaring", locale()) : t("resolving", locale())} ${cardName(choice.card)}`}</h2>
@@ -4354,7 +6024,7 @@ function choicePanel() {
           <small data-choice-search-count>${locale() === LOCALES.KO ? `전체 ${choice.options.length}개` : `${choice.options.length} total`}</small>
         </label>
       ` : ""}
-      <div class="choice-grid" id="pending-choice-grid">
+      <div class="choice-grid" id="pending-choice-grid" data-scroll-key="choice-${escapeHtml(choice.id || choice.effect || "pending")}-options">
         ${choice.options.map(choiceOptionButton).join("")}
       </div>
       ${searchable ? `<p class="choice-search-empty" data-choice-search-empty hidden>${locale() === LOCALES.KO ? "일치하는 선택지가 없습니다." : "No matching choices."}</p>` : ""}
@@ -4371,7 +6041,7 @@ function triggerOrderPanel(choice) {
   const total = triggerOptions.length;
   const mandatoryRemaining = triggerOptions.filter((option) => !option.optionalTrigger && !option.selected).length;
   return `
-    <section class="choice-panel modal-panel trigger-order-panel">
+    <section class="choice-panel modal-panel trigger-order-panel" ${choiceModalAttributes(choice)}>
       <div class="section-head trigger-order-head">
         <div>
           <h2>${t("triggerOrderTitle", locale())}</h2>
@@ -4404,7 +6074,7 @@ function triggerOrderPanel(choice) {
           </ol>
         </div>
       ` : ""}
-      <div class="choice-grid trigger-order-grid">
+      <div class="choice-grid trigger-order-grid" data-scroll-key="choice-${escapeHtml(choice.id || choice.effect || "trigger-order")}-options">
         ${triggerOptions.map((option) => triggerOrderOptionButton(choice, option)).join("")}
       </div>
     </section>
@@ -4449,14 +6119,14 @@ function predictChoicePanel(choice) {
   const keep = choice.options.find((option) => option.id === "keep");
   const recycle = choice.options.find((option) => option.id === "recycle");
   return `
-    <section class="choice-panel modal-panel predict-choice-panel">
+    <section class="choice-panel modal-panel predict-choice-panel" ${choiceModalAttributes(choice)}>
       <div class="section-head">
         <div>
           <h2>${t("predictedCard", locale())}</h2>
           <span>${preview && !preview.redacted ? cardName(preview) : localizedChoicePrompt(choice)}</span>
         </div>
       </div>
-      <div class="predict-choice-content">
+      <div class="predict-choice-content" data-scroll-key="choice-${escapeHtml(choice.id || choice.effect || "predict")}-content">
         <div class="predict-card-preview">
           ${cardOption ? choiceOptionImage(cardOption) : ""}
           ${preview && !preview.redacted ? `<strong>${cardName(preview)}</strong><button type="button" class="choice-card-view" data-action="view-choice-card" data-card-id="${preview.instanceId}">${t("viewFullCard", locale())}</button>` : ""}
@@ -4494,7 +6164,7 @@ function observedTopDeckSelfAbilityPanel(choice) {
         leave: "Leave this card in the Main Deck and continue the original effect."
       };
   return `
-    <section class="choice-panel modal-panel predict-choice-panel observed-top-deck-choice-panel">
+    <section class="choice-panel modal-panel predict-choice-panel observed-top-deck-choice-panel" ${choiceModalAttributes(choice)}>
       <div class="section-head">
         <div>
           <h2>${cardName(preview)}</h2>
@@ -4503,7 +6173,7 @@ function observedTopDeckSelfAbilityPanel(choice) {
             : choice.prompt}</span>
         </div>
       </div>
-      <div class="predict-choice-content">
+      <div class="predict-choice-content" data-scroll-key="choice-${escapeHtml(choice.id || choice.effect || "observed")}-content">
         <div class="predict-card-preview">
           ${choiceOptionImage({ cardId: preview.instanceId, card: preview, revealed: true, label: cardName(preview) })}
           <strong>${cardName(preview)}</strong>
@@ -4547,14 +6217,14 @@ function choiceRevealedCards(choice) {
 function revealConfirmationPanel(choice) {
   const revealedCards = choice.data?.revealedCards || [];
   return `
-    <section class="choice-panel modal-panel reveal-confirmation-panel">
+    <section class="choice-panel modal-panel reveal-confirmation-panel" ${choiceModalAttributes(choice)}>
       <div class="section-head">
         <div>
           <h2>${cardName(choice.card)}: ${t("revealed", locale())}</h2>
           <span>${locale() === "en" ? choice.prompt : t("confirmRevealPrompt", locale())}</span>
         </div>
       </div>
-      <div class="revealed-card-grid">
+      <div class="revealed-card-grid" data-scroll-key="choice-${escapeHtml(choice.id || choice.effect || "reveal")}-cards">
         ${revealedCards.map((card) => `
           <article class="revealed-card-item">
             ${choiceOptionImage({ cardId: card.instanceId, card, revealed: true, label: cardName(card) })}
@@ -4782,7 +6452,7 @@ function combatDamagePanel(choice) {
   const legal = new Set(choice.options.map((option) => option.cardId));
   const infos = choice.data?.targetInfos || [];
   return `
-    <section class="choice-panel modal-panel combat-damage-panel">
+    <section class="choice-panel modal-panel combat-damage-panel" ${choiceModalAttributes(choice)}>
       <div class="section-head">
         <div>
           <h2>${t("damageAssign", locale())}</h2>
@@ -4794,7 +6464,7 @@ function combatDamagePanel(choice) {
         <span>${locale() === LOCALES.KO ? "배정 가능한 피해" : "available damage"}</span>
         <small>${t("autoLethalHint", locale())}</small>
       </div>
-      <div class="choice-grid combat-choice-grid">
+      <div class="choice-grid combat-choice-grid" data-scroll-key="choice-${escapeHtml(choice.id || choice.effect || "combat")}-options">
         ${infos.map((info) => combatDamageOption(info, legal.has(info.cardId))).join("")}
       </div>
     </section>
@@ -4806,7 +6476,7 @@ function deflectPaymentPanel(choice) {
   const amount = choice.data?.amount || 1;
   const selected = choice.data?.selectedRuneIds?.length || 0;
   return `
-    <section class="choice-panel modal-panel deflect-panel">
+    <section class="choice-panel modal-panel deflect-panel" ${choiceModalAttributes(choice)}>
       <div class="section-head">
         <div>
           <h2>${keywordText(["Deflect"])} ${amount}</h2>
@@ -4817,7 +6487,7 @@ function deflectPaymentPanel(choice) {
       <p class="choice-instruction">${locale() === LOCALES.KO
         ? `이 대상을 선택하려면 힘으로 사용할 룬 ${amount}개를 선택해야 합니다. 선택한 룬은 룬 덱으로 재활용됩니다.`
         : `Choose ${amount} rune${amount === 1 ? "" : "s"} to pay as Power. Chosen runes are recycled to the Rune Deck.`}</p>
-      <div class="deflect-rune-grid">
+      <div class="deflect-rune-grid" data-scroll-key="choice-${escapeHtml(choice.id || choice.effect || "deflect")}-runes">
         ${choice.options.map((option) => {
           const rune = findVisibleCard(option.cardId);
           return `
@@ -4839,7 +6509,7 @@ function alphaStrikeDamagePanel(choice) {
     .map((option) => [option.cardId, option])).values()];
   const remaining = choice.data?.remainingDamage || 0;
   return `
-    <section class="choice-panel modal-panel alpha-strike-panel">
+    <section class="choice-panel modal-panel alpha-strike-panel" ${choiceModalAttributes(choice)}>
       <div class="section-head">
         <div>
           <h2>${cardName(choice.card)}</h2>
@@ -4851,7 +6521,7 @@ function alphaStrikeDamagePanel(choice) {
         <span>${locale() === LOCALES.KO ? "배정 가능한 피해" : "available damage"}</span>
         <small>${choiceEffectInstruction(choice)}</small>
       </div>
-      <div class="alpha-strike-targets">
+      <div class="alpha-strike-targets" data-scroll-key="choice-${escapeHtml(choice.id || choice.effect || "alpha")}-targets">
         ${targets.map((option) => {
           const target = findVisibleCard(option.cardId);
           return `
@@ -4912,8 +6582,8 @@ function findVisibleCard(cardId) {
     ...game.players.flatMap((player) => [
       player.legend,
       player.champion,
-      ...player.availableChampions,
-      ...player.availableBattlefields,
+      ...(player.availableChampions || []),
+      ...(player.availableBattlefields || []),
       ...player.mainDeck,
       ...player.runeDeck,
       ...player.hand,
@@ -4942,7 +6612,7 @@ function findChoicePreviewCard(cardId) {
 
 function isVisibleSelectableCard(cardId) {
   const card = findVisibleCard(cardId);
-  return Boolean(card && !card.redacted);
+  return Boolean(card && !card.redacted && cardVisibleToCurrentViewer(cardId));
 }
 
 function showdownPanel() {
@@ -4992,7 +6662,7 @@ function chainZonePanel() {
   }
   if (counteredItems.length) chainZoneCollapsed = false;
   return `
-    <section class="chain-zone ${chainZoneCollapsed ? "is-collapsed" : ""} ${counteredItems.length ? "has-counter-animation" : ""}" aria-label="${t("processingQueue", locale())}" aria-live="polite">
+    <section class="chain-zone chain-pod ${chainZoneCollapsed ? "is-collapsed" : ""} ${counteredItems.length ? "has-counter-animation" : ""}" data-zone="chain" aria-label="${t("processingQueue", locale())}" aria-live="polite">
       <div class="chain-zone-head">
         <div>
           <strong>${t("processingQueue", locale())}</strong>
@@ -5004,7 +6674,7 @@ function chainZonePanel() {
           ${t(chainZoneCollapsed ? "showChain" : "hideChain", locale())}
         </button>
       </div>
-      <div id="chain-zone-content" class="chain-zone-content" ${chainZoneCollapsed ? "hidden" : ""}>
+      <div id="chain-zone-content" class="chain-zone-content" data-scroll-key="chain-zone-content" ${chainZoneCollapsed ? "hidden" : ""}>
         <div class="chain-stack" data-scroll-key="chain-stack">
           ${counteredItems.map(counteredChainZoneItem).join("")}${items.map((item, index) => chainZoneItem(item, items.length - index)).join("") || `<p class="empty">${t("noChainItem", locale())}</p>`}
         </div>
@@ -5016,8 +6686,10 @@ function chainZonePanel() {
 
 function currentChainTreeItems() {
   const chain = game.actionChain || game.showdown;
-  const chainItems = chain ? [...normalizeUiChain(chain.chain)].reverse() : [];
-  const activeTriggerChoice = game.pendingChoice?.data?.triggerId ? game.pendingChoice : null;
+  const chainItems = chain ? [...normalizeUiChain(Array.isArray(chain.chain) ? chain.chain : [])].reverse() : [];
+  const activeTriggerChoice = game.pendingChoice?.data?.triggerId && decisionVisibleToViewer(game.pendingChoice)
+    ? game.pendingChoice
+    : null;
   const triggerItems = [
     ...(activeTriggerChoice ? [{
       id: activeTriggerChoice.data.triggerId,
@@ -5031,7 +6703,7 @@ function currentChainTreeItems() {
       },
       status: "resolving"
     }] : []),
-    ...(game.triggerQueue || []).map((trigger, index) => ({
+    ...(Array.isArray(game.triggerQueue) ? game.triggerQueue : []).filter(Boolean).map((trigger, index) => ({
       id: trigger.id || `queued-trigger-${index}`,
       itemType: "trigger",
       playerId: trigger.playerId,
@@ -5227,11 +6899,7 @@ function chainItemTargetIds(item) {
 
 function visibleChainTargetCard(cardId) {
   const card = findVisibleCard(cardId);
-  if (!card || card.redacted) return null;
-  const context = selectedContext(cardId);
-  const privateZones = new Set(["hand", "main-deck", "rune-deck", "hidden", "champion-choice"]);
-  if (context?.playerId && context.playerId !== viewerPlayerId() && privateZones.has(context.zone)
-    && !canViewPrivateInfo(viewerPlayerId(), context.playerId)) return null;
+  if (!card || card.redacted || !cardVisibleToCurrentViewer(cardId)) return null;
   return card;
 }
 
@@ -5261,7 +6929,11 @@ function sourceZoneLabel(zone) {
     battlefield: t("battlefield", locale()),
     mainDeck: t("mainDeck", locale()),
     runeDeck: t("runeDeck", locale()),
-    chain: t("chain", locale())
+    chain: t("chain", locale()),
+    trash: t("trash", locale()),
+    banished: t("banished", locale()),
+    played: locale() === LOCALES.KO ? "플레이 중" : "In play",
+    attachment: locale() === LOCALES.KO ? "부착됨" : "Attached"
   };
   return labels[zone] || localizedDynamicText(zone);
 }
@@ -5328,9 +7000,7 @@ function setupPanel() {
   if (!setupSelectionVisibleToViewer(selectingPlayer?.id)) {
     return privateSetupWaitingPanel(selectingPlayer);
   }
-  const visiblePlayers = aiMode
-    ? game.players.filter((player) => player.id === viewerPlayerId())
-    : game.players;
+  const visiblePlayers = game.players.filter((player) => player.id === viewerPlayerId());
   return `
     <section class="setup">
       ${visiblePlayers.map((player) => `
@@ -5366,9 +7036,7 @@ function championSelectPanel() {
   if (!setupSelectionVisibleToViewer(selectingPlayer?.id)) {
     return privateSetupWaitingPanel(selectingPlayer, "champion-setup");
   }
-  const visiblePlayers = aiMode
-    ? game.players.filter((player) => player.id === viewerPlayerId())
-    : game.players;
+  const visiblePlayers = game.players.filter((player) => player.id === viewerPlayerId());
   return `
     <section class="setup champion-setup">
       ${visiblePlayers.map((player) => `
@@ -5467,11 +7135,7 @@ function mulliganPanel() {
 
 function setupSelectionVisibleToViewer(playerId) {
   if (!playerId) return true;
-  return pendingDecisionVisibleToViewer({
-    aiMode,
-    viewerPlayerId: viewerPlayerId(),
-    decision: { playerId }
-  });
+  return decisionVisibleToViewer({ playerId });
 }
 
 function privateSetupWaitingPanel(player, panelClass = "") {
@@ -5501,51 +7165,88 @@ function mulliganCard(card, selected) {
 }
 
 function playerSide(player, side) {
+  const seat = tabletopSeatView(player, {
+    side,
+    visibleHandCount: handCountVisibleToViewer(game, player, viewerPlayerId()),
+    revealHand: side === "bottom" || canViewPrivateInfo(viewerPlayerId(), player?.id)
+  });
   const baseTarget = targetAttributes("base", player.id);
   const acting = activePlayerId() === player.id;
   const intel = canViewPrivateInfo(viewerPlayerId(), player.id);
   const handGlow = uiMotion.sourceZones.has(`${player.id}:hand`) ? "source-hand-glow" : "";
   const drawAnimation = effectAnimations.draws.get(player.id);
   const baseDeaths = unitDeathGhosts("base", player.id);
+  const championReference = championIdentityReference(player, seat.champion);
   return `
-    <section class="player-side ${side} owner-${player.id} ${acting ? "acting-player" : ""} ${handGlow}">
-      <div class="player-identity">
-        <div class="identity-mini">
-          ${miniIdentity(player.legend)}
-          ${miniIdentity(player.champion, player)}
+    <section class="player-side table-seat ${side} owner-${seat.id} ${acting ? "acting-player" : ""} ${handGlow}" data-player-id="${escapeHtml(seat.id)}" data-side="${seat.side}">
+      <div class="player-identity tabletop-identity-dock">
+        <div class="identity-mini physical-identity-cards">
+          <div class="identity-zone legend-zone" data-zone="legend" data-count="${seat.legend ? 1 : 0}">
+            <span class="zone-caption">${t("legend", locale())}</span>
+            ${seat.legend ? miniIdentity(seat.legend) : `<span class="empty-card-slot" aria-label="${t("legend", locale())}"></span>`}
+          </div>
+          <div class="identity-zone champion-zone-slot" data-zone="champion" data-count="${championReference.physical ? 1 : 0}" ${championReference.physical ? "" : `data-reference-zone="${escapeHtml(championReference.zone)}"`}>
+            <span class="zone-caption">${t("championZone", locale())}</span>
+            ${championReference.markup}
+          </div>
         </div>
         <div class="player-summary">
           <h2>${playerName(player)}</h2>
           <div class="player-stats" data-scroll-key="player-stats-${player.id}">
-            <span class="xp-stat">${t("level", locale())} ${player.xp || 0}</span>
-            <span class="deck-stat" data-effect="${drawAnimation ? "draw" : ""}" aria-label="${t("deck", locale())} ${player.mainDeck.length}">${t("deck", locale())} <b>${player.mainDeck.length}</b></span>
-            ${(player.burnOuts || 0) > 0 ? `<span class="burnout-stat" title="${locale() === LOCALES.KO ? "소진될 때마다 상대가 1점을 획득합니다." : "Each Burn Out gives an opponent 1 point."}">${locale() === LOCALES.KO ? "소진" : "Burn Out"} <b>${player.burnOuts}</b></span>` : ""}
-            <span class="hand-stat">${t("hand", locale())} ${handCountVisibleToViewer(game, player, viewerPlayerId())}</span>
-            <button class="trash-button" data-action="toggle-graveyard" data-player="${player.id}" title="${t("viewTrashTitle", locale(), { name: playerName(player) })}">
-              ${t("trash", locale())} ${player.trash.length}
-            </button>
-            <button class="trash-button banished-button" data-action="toggle-banished" data-player="${player.id}" title="${t("viewBanishedTitle", locale(), { name: playerName(player) })}">
-              ${t("banished", locale())} ${(player.banished || []).length}
-            </button>
+            <span class="xp-stat">${t("level", locale())} <b>${seat.xp}</b></span>
+            <span class="hand-stat">${t("hand", locale())} <b>${seat.counts.hand}</b></span>
             ${intel ? `<button class="intel-button" data-action="toggle-intel" data-player="${player.id}">${t("intel", locale())}</button>` : ""}
           </div>
           ${championPanelStatus(player)}
         </div>
       </div>
-      <div class="resource-zone">
+      <div class="table-pile-dock">
+        ${tableCardPile({ zone: "main-deck", player, cards: seat.mainDeck, label: t("mainDeck", locale()), cardBack: true, effect: drawAnimation ? "draw" : "", burnOuts: seat.burnOuts })}
+        ${tableCardPile({ zone: "trash", player, cards: seat.trash, label: t("trash", locale()), action: "toggle-graveyard", title: t("viewTrashTitle", locale(), { name: playerName(player) }) })}
+        ${tableCardPile({ zone: "banished", player, cards: seat.banished, label: t("banished", locale()), action: "toggle-banished", title: t("viewBanishedTitle", locale(), { name: playerName(player) }) })}
+      </div>
+      <div class="resource-zone" data-zone="runes" data-count="${seat.counts.runes}">
         <span class="zone-caption">${t("runes", locale())}</span>
-        ${runeSummary(player)}
-        <div class="resource-row">
-          ${player.runes.map(runeChip).join("")}
+        <div class="rune-tabletop">
+          ${tableCardPile({ zone: "rune-deck", player, cards: seat.runeDeck, label: t("runeDeck", locale()), cardBack: true, compact: true })}
+          <div class="rune-play-area">
+            ${runeSummary(player)}
+            <div class="resource-row rune-card-stack">
+              ${seat.runes.map((rune, index) => runeChip(rune, index, seat.runes.length)).join("")}
+            </div>
+          </div>
         </div>
       </div>
-      <div class="base-zone">
+      <div class="base-zone" data-zone="base" data-count="${seat.counts.base}">
         <span class="zone-caption">${t("base", locale())}</span>
         <div class="base-row ${baseTarget.className}" data-scroll-key="base-${player.id}" ${baseTarget.attrs}>
-          ${player.base.map((card) => boardCard(card, "base")).join("")}${baseDeaths || (!player.base.length ? `<p class="empty">${t("baseEmpty", locale())}</p>` : "")}
+          ${seat.base.map((card) => boardCard(card, "base")).join("")}${baseDeaths || (!seat.base.length ? `<p class="empty">${t("baseEmpty", locale())}</p>` : "")}
         </div>
       </div>
     </section>
+  `;
+}
+
+function tableCardPile({ zone, player, cards, label, action = "", title = "", cardBack = false, effect = "", burnOuts = 0, compact = false }) {
+  const list = Array.isArray(cards) ? cards.filter(Boolean) : [];
+  const top = cardBack ? null : topDiscardCard(list);
+  const playerId = String(player?.id ?? "");
+  const tag = action ? "button" : "div";
+  const actionAttributes = action ? `type="button" data-action="${action}" data-player="${escapeHtml(playerId)}"` : `role="group"`;
+  const titleAttribute = title ? `title="${escapeHtml(title)}"` : "";
+  const compactLabel = locale() === LOCALES.KO
+    ? ({ "main-deck": "덱", "rune-deck": "룬", trash: "폐기", banished: "제외" }[zone] || label)
+    : ({ "main-deck": "Deck", "rune-deck": "Rune", trash: "Trash", banished: "Banish" }[zone] || label);
+  return `
+    <${tag} class="table-card-pile pile-${zone} ${cardBack ? "face-down" : "face-up"} ${compact ? "compact" : ""}" data-zone="${zone}" data-count="${list.length}" data-effect="${effect}" ${actionAttributes} ${titleAttribute} aria-label="${escapeHtml(`${label} ${list.length}`)}">
+      <span class="pile-cards" aria-hidden="true">
+        <i></i><i></i>
+        ${top?.image ? `<img src="${escapeHtml(top.image)}" alt="" loading="lazy" />` : `<b>${cardBack ? "R" : zone === "banished" ? "◇" : "—"}</b>`}
+      </span>
+      <span class="pile-label"><span class="pile-label-full">${label}</span><span class="pile-label-short">${compactLabel}</span></span>
+      <strong class="pile-count">${list.length}</strong>
+      ${burnOuts > 0 ? `<em class="burnout-stat" title="${locale() === LOCALES.KO ? "소진될 때마다 상대가 1점을 획득합니다." : "Each Burn Out gives an opponent 1 point."}">${locale() === LOCALES.KO ? "소진" : "Burn Out"} ${burnOuts}</em>` : ""}
+    </${tag}>
   `;
 }
 
@@ -5559,9 +7260,11 @@ function miniIdentity(card, player = null) {
   const sourceGlow = uiMotion.sourceIds.has(card?.instanceId) ? " source-card-glow" : "";
   const chainTarget = chainTargetClass(card?.instanceId) ? " chain-effect-target" : "";
   return `
-    <button class="identity-button${championState}${exhausted}${sourceGlow}${chainTarget}" data-action="select-card" data-card="${card.instanceId}" title="${cardName(card)}">
-      <img src="${card.image}" alt="${cardName(card)}" loading="lazy" />
-      ${championState || exhausted ? `<span>${card.exhausted ? t("spent", locale()) : championState.trim() === "deployed" ? t("used", locale()) : t("zone", locale())}</span>` : ""}
+    <button class="identity-button${championState}${exhausted}${sourceGlow}${chainTarget}" data-action="select-card" data-card="${escapeHtml(card.instanceId || "")}" data-card-id="${escapeHtml(card.instanceId || "")}" data-exhausted="${Boolean(card.exhausted)}" title="${escapeHtml(cardName(card))}">
+      <span class="identity-orientation-layer card-exhaust-layer">
+        ${card.image ? `<img src="${escapeHtml(card.image)}" alt="${escapeHtml(cardName(card))}" loading="lazy" />` : `<span class="identity-card-fallback">${escapeHtml(cardName(card))}</span>`}
+      </span>
+      ${championState || exhausted ? `<span class="identity-state-label">${card.exhausted ? t("spent", locale()) : championState.trim() === "deployed" ? t("used", locale()) : t("zone", locale())}</span>` : ""}
     </button>
   `;
 }
@@ -5607,9 +7310,9 @@ function battlefieldCard(field) {
   const showdownActive = game.phase === "showdown" && game.showdown?.battlefieldId === field.instanceId;
   return `
     <article class="battlefield location-column ${showdownActive ? "showdown-location" : ""} ${chainTargetClass(field.instanceId)}" data-card-id="${field.instanceId}">
-      <div class="field-lane top-lane ${topTarget.className}" data-scroll-key="field-${field.instanceId}-${topPlayer.id}" ${topTarget.attrs}>
+      <div class="field-lane top-lane ${topTarget.className}" ${topTarget.attrs}>
         <span class="lane-label">${t("opponentUnits", locale())}</span>
-        <div class="field-lane-track">
+        <div class="field-lane-track" data-scroll-key="field-${field.instanceId}-${topPlayer.id}">
           ${battlefieldLaneContents(topPlayer, field, topUnits, topHidden, "top")}
         </div>
       </div>
@@ -5620,9 +7323,9 @@ function battlefieldCard(field) {
           <span>${controller}</span>
         </div>
       </div>
-      <div class="field-lane bottom-lane ${bottomTarget.className}" data-scroll-key="field-${field.instanceId}-${bottomPlayer.id}" ${bottomTarget.attrs}>
+      <div class="field-lane bottom-lane ${bottomTarget.className}" ${bottomTarget.attrs}>
         <span class="lane-label">${t("yourUnits", locale())}</span>
-        <div class="field-lane-track">
+        <div class="field-lane-track" data-scroll-key="field-${field.instanceId}-${bottomPlayer.id}">
           ${battlefieldLaneContents(bottomPlayer, field, bottomUnits, bottomHidden, "bottom")}
         </div>
       </div>
@@ -5720,11 +7423,125 @@ function canViewPrivateInfo(viewerId, ownerId) {
   ));
 }
 
+function championIdentityReference(player, champion) {
+  if (!champion) {
+    return {
+      physical: false,
+      zone: "",
+      markup: `<span class="empty-card-slot" aria-label="${t("championZone", locale())}"></span>`
+    };
+  }
+  const chainItems = [...(game.actionChain?.chain || []), ...(game.showdown?.chain || [])];
+  const inChain = chainItems.some((item) => item?.card?.instanceId === champion.instanceId);
+  const inTrash = player.trash.some((card) => card.instanceId === champion.instanceId);
+  const inBanished = (player.banished || []).some((card) => card.instanceId === champion.instanceId);
+  const inHidden = game.battlefields.some((field) => field.hidden.some((item) => item.card.instanceId === champion.instanceId));
+  const inBattlefield = game.battlefields.some((field) => field.units.some((card) => card.instanceId === champion.instanceId));
+  const inBase = player.base.some((card) => card.instanceId === champion.instanceId);
+  const physical = champion.zone === "champion" && !inChain && !inTrash && !inBanished && !inHidden && !inBattlefield && !inBase;
+  if (physical) return { physical: true, zone: "champion", markup: miniIdentity(champion, player) };
+
+  let zone = inChain ? "chain" : String(champion.zone || "played");
+  if (!inChain && inTrash) zone = "trash";
+  else if (!inChain && inBanished) zone = "banished";
+  else if (!inChain && inHidden) zone = "hidden";
+  else if (!inChain && inBattlefield) zone = "battlefield";
+  else if (!inChain && inBase) zone = "base";
+  const location = sourceZoneLabel(zone);
+  const title = `${cardName(champion)} · ${location}`;
+  return {
+    physical: false,
+    zone,
+    markup: `
+      <button class="identity-button champion-away-reference zone-${escapeHtml(zone)}" data-action="select-card" data-card="${escapeHtml(champion.instanceId || "")}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">
+        ${champion.image ? `<img src="${escapeHtml(champion.image)}" alt="" loading="lazy" />` : `<span class="identity-card-fallback">${escapeHtml(cardName(champion))}</span>`}
+        <span>${location}</span>
+      </button>
+    `
+  };
+}
+
+function decisionVisibleToViewer(decision, viewerId = viewerPlayerId()) {
+  return pendingDecisionVisibleToViewer({
+    aiMode: aiMode || replayMode || isOnlineGame(),
+    viewerPlayerId: viewerId,
+    decision
+  });
+}
+
+function pendingChoiceCardVisibleToViewer(cardId) {
+  const choice = game.pendingChoice;
+  if (!choice || !cardId || !decisionVisibleToViewer(choice)) return false;
+  const revealed = Array.isArray(choice.data?.revealedCards) ? choice.data.revealedCards : [];
+  const options = Array.isArray(choice.options) ? choice.options : [];
+  return revealed.some((card) => card?.instanceId === cardId && !card.redacted)
+    || options.some((option) => option?.card?.instanceId === cardId && !option.card.redacted);
+}
+
+function cardVisibleToCurrentViewer(cardOrId) {
+  const cardId = typeof cardOrId === "string" ? cardOrId : cardOrId?.instanceId;
+  if (!cardId) return false;
+  if (pendingChoiceCardVisibleToViewer(cardId)) return true;
+  const viewerId = viewerPlayerId();
+  for (const player of game.players) {
+    const owns = player.id === viewerId;
+    if (player.legend?.instanceId === cardId || player.champion?.instanceId === cardId) return true;
+    if (player.base.some((card) => card?.instanceId === cardId)) return true;
+    if (player.runes.some((card) => card?.instanceId === cardId)) return true;
+    if (player.trash.some((card) => card?.instanceId === cardId)) return true;
+    if ((player.banished || []).some((card) => card?.instanceId === cardId)) return true;
+    if (player.hand.some((card) => card?.instanceId === cardId)) return owns || canViewPrivateInfo(viewerId, player.id);
+    if (player.mainDeck.some((card) => card?.instanceId === cardId)) return false;
+    if (player.runeDeck.some((card) => card?.instanceId === cardId)) return false;
+    if ((player.availableChampions || []).some((card) => card?.instanceId === cardId)) return setupSelectionVisibleToViewer(player.id);
+    if ((player.availableBattlefields || []).some((card) => card?.instanceId === cardId)) return setupSelectionVisibleToViewer(player.id);
+    for (const permanent of player.base) {
+      if ((permanent.attachments || []).some((card) => card?.instanceId === cardId)) return true;
+    }
+  }
+  for (const field of game.battlefields) {
+    if (field.instanceId === cardId) return true;
+    if (field.units.some((card) => card?.instanceId === cardId)) return true;
+    for (const unit of field.units) {
+      if ((unit.attachments || []).some((card) => card?.instanceId === cardId)) return true;
+    }
+    const hidden = (field.hidden || []).find((item) => item?.card?.instanceId === cardId);
+    if (hidden) {
+      const controllerId = hiddenCardControllerId(hidden);
+      return controllerId === viewerId || canViewPrivateInfo(viewerId, controllerId);
+    }
+  }
+  return currentChainTreeItems().some((item) =>
+    (item.card?.instanceId || item.trigger?.sourceCardId) === cardId
+  );
+}
+
+function sanitizeViewerUiState() {
+  if (intelOpenPlayerId && !canViewPrivateInfo(viewerPlayerId(), intelOpenPlayerId)) intelOpenPlayerId = null;
+  if (game.selectedCardId && !cardVisibleToCurrentViewer(game.selectedCardId)) {
+    game.selectedCardId = null;
+    onlineSelectedCardId = null;
+    inspectorOpen = false;
+    attachmentsOpenCardId = null;
+  }
+  if (attachmentsOpenCardId && !cardVisibleToCurrentViewer(attachmentsOpenCardId)) attachmentsOpenCardId = null;
+  if (fullCardOpen) {
+    const preview = fullCardPreviewCard || uiSelectedCard();
+    if (!preview || !cardVisibleToCurrentViewer(preview)) {
+      fullCardOpen = false;
+      fullCardPreviewCard = null;
+    } else {
+      fullCardPreviewCard = findVisibleCard(preview.instanceId || preview.id) || preview;
+    }
+  }
+  syncInspectedChainTargets();
+}
+
 function viewerPlayerId() {
   if (replayMode) return replayBrowser.viewerPlayerId || "p1";
   if (isOnlineGame() && online.playerId) return online.playerId;
   if (aiMode && aiHumanPlayerId) return aiHumanPlayerId;
-  return currentPlayer(game)?.id || game.players[0]?.id;
+  return activePlayerId() || currentPlayer(game)?.id || game.players[0]?.id;
 }
 
 function viewerPlayer() {
@@ -5765,8 +7582,8 @@ function activePlayerId() {
 function actingPlayerClass() {
   const id = activePlayerId();
   if (!id) return "";
-  const index = game.players.findIndex((player) => player.id === id);
-  return index === 0 ? "acting-bottom" : index === 1 ? "acting-top" : "";
+  if (id === viewerPlayerId()) return "acting-bottom";
+  return game.players.some((player) => player.id === id) ? "acting-top" : "";
 }
 
 function championCard(player) {
@@ -5789,10 +7606,13 @@ function championCard(player) {
   `;
 }
 
-function handCard(card) {
+function handCard(card, index = 0, total = 1) {
+  if (!card || typeof card !== "object") return "";
   return `
-    <article class="${imageCardClass(card, `${card.type} ${motionCardClass(card, "hand")}`)}" data-card-id="${card.instanceId}" role="button" tabindex="0" aria-label="${escapeHtml(cardName(card))}">
-      ${cardImage(card)}
+    <article class="hand-fan-card ${imageCardClass(card, `${card.type || "card"} ${motionCardClass(card, "hand")}`)}" data-card-id="${escapeHtml(card.instanceId || "")}" data-hand-card style="${fanCardStyle(index, total)}" role="button" tabindex="0" aria-label="${escapeHtml(cardName(card))}">
+      <div class="card-orientation-layer">
+        <div class="card-face-layer">${cardImage(card)}</div>
+      </div>
     </article>
   `;
 }
@@ -5913,6 +7733,21 @@ function unitMightCue(card) {
   return `<span class="unit-might-cue" aria-label="${escapeHtml(`${label} ${sign}${animation.delta}`)}"><b>${sign}${animation.delta}</b><small>${label}</small></span>`;
 }
 
+function primaryCardStateBadges(card) {
+  const states = [];
+  if (card?.exhausted) states.push(t("exhausted", locale()));
+  if (card?.stunned) states.push(t("stunned", locale()));
+  if (!states.length) states.push(t("readyState", locale()));
+  return states.map((state) => `<em class="primary-card-state">${escapeHtml(state)}</em>`).join("");
+}
+
+function ownerChip(owner, fallbackId = "") {
+  const fullName = owner ? playerName(owner) : String(fallbackId || "");
+  const playerIndex = owner ? game.players.findIndex((player) => player.id === owner.id) : -1;
+  const shortName = playerIndex >= 0 ? `P${playerIndex + 1}` : fullName;
+  return `<span class="owner-chip" title="${escapeHtml(fullName)}"><span class="owner-chip-full">${escapeHtml(fullName)}</span><span class="owner-chip-short">${escapeHtml(shortName)}</span></span>`;
+}
+
 function boardCard(card, location) {
   const flashed = isFlashed(card.instanceId);
   const owner = game.players.find((player) => player.id === card.ownerId);
@@ -5921,10 +7756,10 @@ function boardCard(card, location) {
   if (location === "base") return baseToken(card, location, owner, motion, attachments, flashed);
   if (card.type === "unit") return unitToken(card, location, owner, motion, attachments, flashed);
   return `
-    <article class="${imageCardClass(card, `${card.type} owner-${card.ownerId} controller-${card.controllerId} ${attachments.length ? "has-attachments" : ""} ${card.exhausted ? "exhausted" : ""} ${flashed ? "effect-flash" : ""} ${motion}`)}" data-card-id="${card.instanceId}" data-location="${location}">
-      <span class="owner-chip">${owner ? playerName(owner) : card.ownerId}</span>
+    <article class="${imageCardClass(card, `${card.type} owner-${card.ownerId} controller-${card.controllerId} ${attachments.length ? "has-attachments" : ""} ${card.exhausted ? "exhausted" : ""} ${flashed ? "effect-flash" : ""} ${motion}`)}" data-card-id="${card.instanceId}" data-location="${location}" data-exhausted="${Boolean(card.exhausted)}">
+      ${ownerChip(owner, card.ownerId)}
       ${moveSelectButton(card)}
-      ${cardImage(card)}
+      <div class="card-exhaust-layer"><div class="card-face-layer">${cardImage(card)}</div></div>
       ${attachmentStrip(attachments)}
       ${statusLine(card)}
     </article>
@@ -5933,25 +7768,28 @@ function boardCard(card, location) {
 
 function baseToken(card, location, owner, motion, attachments, flashed) {
   const domain = domainText(card.domains?.[0]) || (card.tags?.[0] ? keywordText([card.tags[0]]) : cardType(card));
-  const state = card.stunned ? t("stunned", locale()) : card.exhausted ? t("exhausted", locale()) : t("readyState", locale());
   const mainBadge = card.type === "unit" ? `${t("might", locale())} ${currentMight(game, card)}` : cardType(card);
   return `
-    <article class="unit-token base-token ${card.type}-token owner-${card.ownerId} controller-${card.controllerId} ${attachments.length ? "has-attachments" : ""} ${card.exhausted ? "exhausted" : "ready"} ${cardStatusClassNames(card)} ${unitMightAnimationClass(card)} ${chainTargetClass(card.instanceId)} ${flashed ? "effect-flash" : ""} ${motion}" data-card-id="${card.instanceId}" data-location="${location}">
-      <div class="unit-token-art">
-        ${card.image ? `<img src="${card.image}" alt="${cardName(card)}" loading="lazy" />` : `<span>${cardName(card)}</span>`}
-      </div>
-      <div class="unit-token-body">
-        <strong>${cardName(card)}</strong>
-        <span>${domain}</span>
-        <div class="unit-token-badges">
-          <b>${mainBadge}</b>
-          <em>${state}</em>
-          ${card.damage ? `<em>${card.damage} ${t("damageShort", locale())}</em>` : ""}
-          ${attachments.length ? `<em>${attachments.length} ${t("attachedGear", locale())}</em>` : ""}
-          ${cardStatusBadges(card)}
+    <article class="unit-token base-token ${card.type}-token owner-${card.ownerId} controller-${card.controllerId} ${attachments.length ? "has-attachments" : ""} ${card.exhausted ? "exhausted" : "ready"} ${cardStatusClassNames(card)} ${unitMightAnimationClass(card)} ${chainTargetClass(card.instanceId)} ${flashed ? "effect-flash" : ""} ${motion}" data-card-id="${card.instanceId}" data-location="${location}" data-current-might="${card.type === "unit" ? currentMight(game, card) : ""}" data-damage="${Number(card.damage) || 0}" data-exhausted="${Boolean(card.exhausted)}" data-stunned="${Boolean(card.stunned)}">
+      <div class="card-exhaust-layer">
+        <div class="card-face-layer">
+          <div class="unit-token-art">
+            ${card.image ? `<img src="${card.image}" alt="${cardName(card)}" loading="lazy" />` : `<span>${cardName(card)}</span>`}
+          </div>
+          <div class="unit-token-body">
+            <strong>${cardName(card)}</strong>
+            <span>${domain}</span>
+          </div>
         </div>
       </div>
-      <span class="owner-chip">${owner ? playerName(owner) : card.ownerId}</span>
+      <div class="unit-token-badges card-state-hud unit-stats">
+        <b>${mainBadge}</b>
+        ${primaryCardStateBadges(card)}
+        ${card.damage ? `<em>${card.damage} ${t("damageShort", locale())}</em>` : ""}
+        ${attachments.length ? `<em>${attachments.length} ${t("attachedGear", locale())}</em>` : ""}
+        ${cardStatusBadges(card)}
+      </div>
+      ${ownerChip(owner, card.ownerId)}
       ${card.type === "unit" ? unitMightCue(card) : ""}
       ${card.type === "unit" ? moveSelectButton(card) : ""}
       ${attachmentStrip(attachments)}
@@ -5961,27 +7799,30 @@ function baseToken(card, location, owner, motion, attachments, flashed) {
 
 function unitToken(card, location, owner, motion, attachments, flashed) {
   const domain = domainText(card.domains?.[0]) || (card.tags?.[0] ? keywordText([card.tags[0]]) : "");
-  const state = card.exhausted ? t("exhausted", locale()) : card.stunned ? t("stunned", locale()) : t("readyState", locale());
   const zoneClass = location === "base" ? "base-token" : "field-token";
   const combatStats = showdownUnitStats(card, location);
   const displayMight = combatStats?.might ?? currentMight(game, card);
   return `
-    <article class="unit-token ${zoneClass} owner-${card.ownerId} controller-${card.controllerId} ${attachments.length ? "has-attachments" : ""} ${card.exhausted ? "exhausted" : ""} ${cardStatusClassNames(card)} ${unitMightAnimationClass(card)} ${chainTargetClass(card.instanceId)} ${flashed ? "effect-flash" : ""} ${motion}" data-card-id="${card.instanceId}" data-location="${location}">
-      <div class="unit-token-art">
-        ${card.image ? `<img src="${card.image}" alt="${cardName(card)}" loading="lazy" />` : `<span>${cardName(card)}</span>`}
-      </div>
-      <div class="unit-token-body">
-        <strong>${cardName(card)}</strong>
-        <span>${domain}</span>
-        <div class="unit-token-badges">
-          <b>${t("might", locale())} ${displayMight}</b>
-          <em>${state}</em>
-          ${card.damage ? `<em>${card.damage} ${t("damageShort", locale())}</em>` : ""}
-          ${combatStats ? `<b class="combat-stat">${t("currentMight", locale())} ${combatStats.might}</b><em class="${combatStats.remaining <= 0 ? "lethal-stat" : "health-stat"}">${t("remainingHealth", locale())} ${combatStats.remaining}</em>` : ""}
-          ${cardStatusBadges(card)}
+    <article class="unit-token ${zoneClass} owner-${card.ownerId} controller-${card.controllerId} ${attachments.length ? "has-attachments" : ""} ${card.exhausted ? "exhausted" : ""} ${cardStatusClassNames(card)} ${unitMightAnimationClass(card)} ${chainTargetClass(card.instanceId)} ${flashed ? "effect-flash" : ""} ${motion}" data-card-id="${card.instanceId}" data-location="${location}" data-current-might="${displayMight}" data-damage="${Number(card.damage) || 0}" data-exhausted="${Boolean(card.exhausted)}" data-stunned="${Boolean(card.stunned)}">
+      <div class="card-exhaust-layer">
+        <div class="card-face-layer">
+          <div class="unit-token-art">
+            ${card.image ? `<img src="${card.image}" alt="${cardName(card)}" loading="lazy" />` : `<span>${cardName(card)}</span>`}
+          </div>
+          <div class="unit-token-body">
+            <strong>${cardName(card)}</strong>
+            <span>${domain}</span>
+          </div>
         </div>
       </div>
-      <span class="owner-chip">${owner ? playerName(owner) : card.ownerId}</span>
+      <div class="unit-token-badges card-state-hud unit-stats">
+        <b>${t("might", locale())} ${displayMight}</b>
+        ${primaryCardStateBadges(card)}
+        ${card.damage ? `<em>${card.damage} ${t("damageShort", locale())}</em>` : ""}
+        ${combatStats ? `<b class="combat-stat">${t("currentMight", locale())} ${combatStats.might}</b><em class="${combatStats.remaining <= 0 ? "lethal-stat" : "health-stat"}">${t("remainingHealth", locale())} ${combatStats.remaining}</em>` : ""}
+        ${cardStatusBadges(card)}
+      </div>
+      ${ownerChip(owner, card.ownerId)}
       ${unitMightCue(card)}
       ${moveSelectButton(card)}
       ${attachmentStrip(attachments)}
@@ -6011,12 +7852,43 @@ function attachmentStrip(attachments) {
   if (!attachments.length) return "";
   return `
     <div class="attachment-strip" aria-label="${locale() === LOCALES.KO ? "부착된 도구" : "Attached gear"}">
-      ${attachments.map((gear) => `
-        <button class="attached-gear ${game.selectedCardId === gear.instanceId ? "selected-attachment" : ""} ${chainTargetClass(gear.instanceId)}" data-card-id="${gear.instanceId}" title="${cardName(gear)}">
-          ${gear.image ? `<img src="${gear.image}" alt="${cardName(gear)}" loading="lazy" />` : `<span>${cardName(gear)}</span>`}
+      ${attachments.map((gear) => {
+        const state = attachedGearCompactState(gear);
+        return `
+        <button class="attached-gear ${gear.exhausted ? "exhausted" : "ready"} ${cardStatusClassNames(gear)} ${game.selectedCardId === gear.instanceId ? "selected-attachment" : ""} ${chainTargetClass(gear.instanceId)}" data-action="select-card" data-card="${escapeHtml(gear.instanceId || "")}" data-card-id="${escapeHtml(gear.instanceId || "")}" data-current-might="${state.might}" data-exhausted="${Boolean(gear.exhausted)}" title="${escapeHtml(`${cardName(gear)} · ${state.summary}`)}">
+          <span class="attachment-orientation-layer">
+            ${gear.image ? `<img src="${escapeHtml(gear.image)}" alt="${escapeHtml(cardName(gear))}" loading="lazy" />` : `<span>${escapeHtml(cardName(gear))}</span>`}
+          </span>
+          ${attachedGearStateMarkup(state, { compact: true })}
         </button>
-      `).join("")}
+      `; }).join("")}
     </div>
+  `;
+}
+
+function attachedGearCompactState(gear) {
+  const mightValue = Number(effectiveMight(gear));
+  const might = Number.isFinite(mightValue) ? mightValue : 0;
+  const readiness = gear?.exhausted ? t("exhausted", locale()) : t("readyState", locale());
+  const statuses = visibleCardStatuses(gear)
+    .filter((status) => !["exhausted", "attachments"].includes(status.kind))
+    .map((status) => status.badge)
+    .filter(Boolean);
+  const summary = [readiness, ...statuses].join(" · ");
+  const compactReadiness = locale() === LOCALES.KO
+    ? readiness
+    : gear?.exhausted ? "EXH" : "RDY";
+  const compactSummary = `${compactReadiness}${statuses.length ? ` +${statuses.length}` : ""}`;
+  return { might, readiness, statuses, summary, compactSummary };
+}
+
+function attachedGearStateMarkup(state, { compact = false } = {}) {
+  const visibleSummary = compact ? state.compactSummary : state.summary;
+  return `
+    <span class="attached-gear-state" aria-label="${escapeHtml(state.summary)}">
+      <span class="attached-gear-might" title="${escapeHtml(t("might", locale()))}">${state.might}</span>
+      <span class="attached-gear-readiness" title="${escapeHtml(state.summary)}">${escapeHtml(visibleSummary)}</span>
+    </span>
   `;
 }
 
@@ -6084,7 +7956,7 @@ function statusLine(card) {
   }
   if (card.buffs) items.push(t("buff", locale()));
   if (card.mightModifier) items.push(`${card.mightModifier > 0 ? "+" : ""}${card.mightModifier} ${t("might", locale())}`);
-  return `<span class="status-line">${items.join(" / ")}</span>`;
+  return `<span class="status-line card-state-hud">${items.join(" / ")}</span>`;
 }
 
 function moveButtons(card) {
@@ -6112,16 +7984,16 @@ function actionBar(player, card) {
   if (!card || disabled || waiting) {
     const quickActions = globalActionButtons(player);
     return `
-      <section class="action-bar ${chainSummary ? "showdown-action-bar" : ""} ${rejection ? "action-rejected" : ""}">
+      <section class="action-bar context-action-dock ${chainSummary ? "showdown-action-bar" : ""} ${rejection ? "action-rejected" : ""}">
         <div class="action-context">
           <span class="bar-label">${rejection ? (locale() === LOCALES.KO ? "요청 거부" : "Rejected") : chainSummary ? chainSummary.label : t("action", locale())}</span>
           <strong>${waiting ? t("waitingForOpponent", locale()) : rejection?.title || responseInfo?.title || chainSummary?.title || (disabled ? t("resolvingStep", locale()) : t("noAction", locale()))}</strong>
           <span>${waiting ? t("waitingForOpponent", locale()) : rejection?.detail || responseInfo?.detail || chainSummary?.detail || (disabled ? t("finishDialog", locale()) : t("selectCardHint", locale()))}</span>
         </div>
-        <div class="actions inline">
+        <div class="actions inline action-command-list" data-scroll-key="action-${escapeHtml(card?.instanceId || "global")}">
           ${waiting ? `<button disabled>${t("noAction", locale())}</button>` : responseInfo ? `<button class="primary" data-action="toggle-hand">${handOpen ? t("hideHand", locale()) : t("playReaction", locale())}</button><button data-action="pass-showdown">${t("pass", locale())}</button>` : quickActions.join("") || `<button disabled>${t("noAction", locale())}</button>`}
         </div>
-        <div class="bar-controls">
+        <div class="bar-controls table-action-rail">
           <button data-action="toggle-inspector" ${card ? "" : "disabled"}>${t("cardInfo", locale())}</button>
           <button class="primary" data-action="toggle-hand">${handOpen ? t("hideHand", locale()) : `${t("hand", locale())} ${cardCount}`}</button>
           ${chainSummary
@@ -6134,16 +8006,16 @@ function actionBar(player, card) {
   const context = selectedContext(card.instanceId);
   const actions = mergeActionButtons(selectedActions(card, context), globalActionButtons(player, card));
   return `
-    <section class="action-bar ${chainSummary ? "showdown-action-bar" : ""} ${rejection ? "action-rejected" : ""}">
+    <section class="action-bar context-action-dock ${chainSummary ? "showdown-action-bar" : ""} ${rejection ? "action-rejected" : ""}">
       <div class="action-context">
         <span class="bar-label">${rejection ? (locale() === LOCALES.KO ? "요청 거부" : "Rejected") : chainSummary ? chainSummary.label : t("selected", locale())}</span>
           <strong>${rejection?.title || responseInfo?.title || chainSummary?.title || cardName(card)}</strong>
         <span>${rejection?.detail || (responseInfo ? `${responseInfo.detail} / ${t("selected", locale())}: ${cardName(card)}` : chainSummary ? `${chainSummary.detail} / ${t("selected", locale())}: ${cardName(card)}` : actionHint(card, context, actions))}</span>
       </div>
-      <div class="actions inline">
+      <div class="actions inline action-command-list" data-scroll-key="action-${escapeHtml(card.instanceId || "selected")}">
         ${actions.join("") || `<button disabled>${t("noAction", locale())}</button>`}
       </div>
-      <div class="bar-controls">
+      <div class="bar-controls table-action-rail">
         <button data-action="toggle-inspector">${t("cardInfo", locale())}</button>
         <button class="primary" data-action="toggle-hand">${handOpen ? t("hideHand", locale()) : `${t("hand", locale())} ${cardCount}`}</button>
         ${chainSummary
@@ -6327,7 +8199,7 @@ function actionHint(card, context, actions) {
 function selectedContext(cardId) {
   for (const player of game.players) {
     if (player.legend?.instanceId === cardId) return { playerId: player.id, zone: "legend", location: "legend" };
-    if (player.availableChampions.some((card) => card.instanceId === cardId)) return { playerId: player.id, zone: "champion-choice", location: "champion-choice" };
+    if ((player.availableChampions || []).some((card) => card.instanceId === cardId)) return { playerId: player.id, zone: "champion-choice", location: "champion-choice" };
     if (player.hand.some((card) => card.instanceId === cardId)) return { playerId: player.id, zone: "hand", location: "hand" };
     if (player.base.some((card) => card.instanceId === cardId)) return { playerId: player.id, zone: "base", location: "base" };
     if (player.runes.some((card) => card.instanceId === cardId)) return { playerId: player.id, zone: "rune", location: "rune" };
@@ -6435,8 +8307,19 @@ function canUseTarget(card, context, destination, ownerId) {
 }
 
 function runeSummary(player) {
+  const pendingCard = game.pendingPayment?.playerId === player?.id
+    ? paymentDisplayCard(player, game.pendingPayment)
+    : null;
+  const seat = tabletopSeatView(player, {
+    energyUsable: (resource) => resource?.restriction === "spell"
+      ? pendingCard?.type === "spell"
+      : poolEnergyCanPay(resource, pendingCard),
+    powerUsable: (resource) => resource?.restriction === "spell"
+      ? pendingCard?.type === "spell"
+      : poolPowerCanPay(resource, pendingCard)
+  });
   const counts = new Map();
-  for (const rune of player.runes) {
+  for (const rune of seat.runes) {
     const item = counts.get(rune.domain) || {
       total: 0,
       ready: 0,
@@ -6456,31 +8339,37 @@ function runeSummary(player) {
     }
     counts.set(rune.domain, item);
   }
-  const poolEnergy = runePoolEnergy(player).filter((resource) => poolEnergyCanPay(resource));
-  const poolPower = player.runePool?.power || [];
+  const poolEnergy = seat.runeResources.energy;
+  const poolPower = seat.runeResources.power;
+  const availabilityLabel = (resource) => locale() === LOCALES.KO
+    ? `${resource.usable}/${resource.total} 지금 사용 가능`
+    : `${resource.usable}/${resource.total} available now`;
   return `
-    <div class="rune-summary">
+    <div class="rune-summary" data-scroll-key="rune-summary-${escapeHtml(player?.id || "unknown")}">
       ${[...counts.entries()].map(([domain, item]) => `
         <button type="button" class="rune-count" data-action="select-card" data-card="${item.cardId}" style="--rune:${item.color}" title="${escapeHtml(item.name)} · ${domainText(domain)} ${item.ready}/${item.total}">
           ${item.image ? `<img class="rune-summary-art" src="${item.image}" alt="${escapeHtml(item.name)}" loading="lazy" />` : ""}
           <span class="rune-summary-value"><b>${domainText(domain)}</b><em>${item.ready}/${item.total}</em></span>
         </button>
       `).join("") || `<span class="rune-count muted">${t("noRunes", locale())}</span>`}
-      ${poolEnergy.length ? `<span class="rune-count generated"><span class="rune-summary-symbol" aria-hidden="true">⚡</span><span class="rune-summary-value"><b>${t("energy", locale())}</b><em>+${poolEnergy.length}</em></span></span>` : ""}
-      ${poolPower.length ? `<span class="rune-count power-pool"><span class="rune-summary-symbol" aria-hidden="true">◆</span><span class="rune-summary-value"><b>${t("power", locale())}</b><em>${poolPower.length}</em></span></span>` : ""}
+      ${poolEnergy.total ? `<span class="rune-count generated ${poolEnergy.usable < poolEnergy.total ? "partly-restricted" : ""}" title="${escapeHtml(availabilityLabel(poolEnergy))}"><span class="rune-summary-symbol" aria-hidden="true">⚡</span><span class="rune-summary-value"><b>${t("energy", locale())}</b><em>+${poolEnergy.total} · ${poolEnergy.usable}/${poolEnergy.total}</em></span></span>` : ""}
+      ${poolPower.total ? `<span class="rune-count power-pool ${poolPower.usable < poolPower.total ? "partly-restricted" : ""}" title="${escapeHtml(availabilityLabel(poolPower))}"><span class="rune-summary-symbol" aria-hidden="true">◆</span><span class="rune-summary-value"><b>${t("power", locale())}</b><em>${poolPower.total} · ${poolPower.usable}/${poolPower.total}</em></span></span>` : ""}
     </div>
   `;
 }
 
-function runeChip(rune) {
+function runeChip(rune, index = 0, total = 1) {
+  if (!rune || typeof rune !== "object") return "";
   const spent = rune.exhausted ? " spent" : "";
   const canRecycle = uiCardEffects(rune).some((effect) => effect.timing === "activated" && effect.kind === "addPower" && effect.exhaust === false);
   return `
-    <button type="button" class="rune rune-card-chip${spent}" data-action="select-card" data-card="${rune.instanceId}" style="--rune:${rune.color}" title="${cardText(rune)}">
-      ${rune.image ? `<img src="${rune.image}" alt="${cardName(rune)}" loading="lazy" />` : `<span class="rune-swatch"></span>`}
-      <span class="rune-card-caption">${domainText(rune.domain)}</span>
-      ${rune.exhausted ? `<strong>${t("exhausted", locale())}</strong>` : ""}
-      ${rune.exhausted && canRecycle ? `<small class="rune-recycle-ready">${locale() === LOCALES.KO ? "재활용 가능" : "Can recycle"}</small>` : ""}
+    <button type="button" class="rune rune-card-chip${spent}" data-action="select-card" data-card="${escapeHtml(rune.instanceId || "")}" data-card-id="${escapeHtml(rune.instanceId || "")}" data-rune-card style="--rune:${rune.color || RUNE_COLORS.Any};--rune-index:${index};--rune-count:${Math.max(1, total)}" title="${escapeHtml(cardText(rune))}" aria-pressed="${game.selectedCardId === rune.instanceId}">
+      <span class="rune-orientation-layer">
+        ${rune.image ? `<img src="${escapeHtml(rune.image)}" alt="${escapeHtml(cardName(rune))}" loading="lazy" />` : `<span class="rune-swatch"></span>`}
+        <span class="rune-card-caption">${domainText(rune.domain)}</span>
+        ${rune.exhausted ? `<strong>${t("exhausted", locale())}</strong>` : ""}
+        ${rune.exhausted && canRecycle ? `<small class="rune-recycle-ready">${locale() === LOCALES.KO ? "재활용 가능" : "Can recycle"}</small>` : ""}
+      </span>
     </button>
   `;
 }
@@ -6488,7 +8377,7 @@ function runeChip(rune) {
 function inspector(card) {
   if (!card) {
     return `
-      <aside class="inspector inspector-empty">
+      <aside class="inspector inspector-panel inspector-empty" data-scroll-key="inspector">
         <div class="inspector-toolbar">
           <strong>${t("cardInfo", locale())}</strong>
           <button type="button" data-action="toggle-inspector">${t("close", locale())}</button>
@@ -6507,7 +8396,7 @@ function inspector(card) {
   const cost = card.type === "rune" ? domainText(card.domain) : `${card.energy ?? "-"}${power ? ` + ${power}` : ""}`;
   const attachments = card.attachments || [];
   return `
-    <aside class="inspector">
+    <aside class="inspector inspector-panel" data-scroll-key="inspector">
       <div class="inspector-toolbar">
         <strong>${t("cardInfo", locale())}</strong>
         <button type="button" data-action="toggle-inspector">${t("close", locale())}</button>
@@ -6545,12 +8434,17 @@ function attachedGearPanel(attachments) {
     <div class="attached-gear-panel">
       <span>${t("attachedGear", locale())}</span>
       <div class="attached-gear-list">
-        ${attachments.map((gear) => `
-          <button class="attached-gear-card" data-action="select-card" data-card="${gear.instanceId}" title="${cardName(gear)}">
-            ${gear.image ? `<img src="${gear.image}" alt="${cardName(gear)}" loading="lazy" />` : ""}
-            <strong>${cardName(gear)}</strong>
+        ${attachments.map((gear) => {
+          const state = attachedGearCompactState(gear);
+          return `
+          <button class="attached-gear-card ${gear.exhausted ? "exhausted" : "ready"} ${cardStatusClassNames(gear)}" data-action="select-card" data-card="${escapeHtml(gear.instanceId || "")}" data-card-id="${escapeHtml(gear.instanceId || "")}" data-current-might="${state.might}" data-exhausted="${Boolean(gear.exhausted)}" title="${escapeHtml(`${cardName(gear)} · ${state.summary}`)}">
+            <span class="attachment-orientation-layer">
+              ${gear.image ? `<img src="${escapeHtml(gear.image)}" alt="${escapeHtml(cardName(gear))}" loading="lazy" />` : `<span>${escapeHtml(cardName(gear))}</span>`}
+            </span>
+            <strong>${escapeHtml(cardName(gear))}</strong>
+            ${attachedGearStateMarkup(state)}
           </button>
-        `).join("")}
+        `; }).join("")}
       </div>
     </div>
   `;
@@ -6567,13 +8461,13 @@ function shortCardText(text) {
 function fullCardModal(card) {
   if (!card) return "";
   return `
-    <section class="full-card-modal modal-panel">
+    <section class="full-card-modal modal-panel" role="dialog" aria-modal="true" aria-labelledby="full-card-dialog-title" data-ui-modal data-modal-key="full-card-${escapeHtml(card.instanceId || card.cardNumber || "preview")}" tabindex="-1">
       <div class="section-head">
         <div>
-          <h2>${cardName(card)}</h2>
+          <h2 id="full-card-dialog-title">${cardName(card)}</h2>
           <span>${cardTags(card).join(" / ")}</span>
         </div>
-        <button data-action="close-full-card">${t("close", locale())}</button>
+        <button data-action="close-full-card" data-primary-focus>${t("close", locale())}</button>
       </div>
       <div class="full-card-body">
         ${card.image ? `<img src="${card.image}" alt="${cardName(card)}" />` : ""}
@@ -6585,6 +8479,81 @@ function fullCardModal(card) {
     </section>
   `;
 }
+
+function dismissTopUiLayer() {
+  if (appView !== "game") return false;
+  if (!game || typeof game !== "object") return false;
+  const modalKey = topUiModal()?.dataset.modalKey || "";
+  if (modalKey === "game-exit") {
+    pendingGameExit = null;
+    return true;
+  }
+  if (modalKey === "match-result") {
+    resultDismissed = true;
+    return true;
+  }
+  if (modalKey.startsWith("full-card-")) {
+    fullCardOpen = false;
+    fullCardPreviewCard = null;
+    return true;
+  }
+  if (modalKey.startsWith("payment-") && !replayMode && game.pendingPayment && decisionVisibleToViewer(game.pendingPayment)) {
+    dispatchGameCommand({ kind: "cancelPayment" }, () => cancelPayment(game));
+    return true;
+  }
+  if (modalKey.startsWith("choice-") && !replayMode && game.pendingChoice?.optional && decisionVisibleToViewer(game.pendingChoice)) {
+    dispatchGameCommand({ kind: "declineEffectChoice" }, () => declineEffectChoice(game));
+    return true;
+  }
+  if (attachmentsOpenCardId) {
+    attachmentsOpenCardId = null;
+    return true;
+  }
+  if (graveyardOpenPlayerId) {
+    graveyardOpenPlayerId = null;
+    return true;
+  }
+  if (banishedOpenPlayerId) {
+    banishedOpenPlayerId = null;
+    return true;
+  }
+  if (intelOpenPlayerId) {
+    intelOpenPlayerId = null;
+    return true;
+  }
+  if (logOpen) {
+    logOpen = false;
+    return true;
+  }
+  if (inspectorOpen) {
+    inspectorOpen = false;
+    return true;
+  }
+  if (inspectedChainItemId) {
+    inspectedChainItemId = null;
+    inspectedChainTargetIds.clear();
+    return true;
+  }
+  if (handOpen) {
+    handOpen = false;
+    return true;
+  }
+  if (moveSelection.size) {
+    moveSelection.clear();
+    return true;
+  }
+  if (replayMode) {
+    exitReplayToList();
+    return true;
+  }
+  return false;
+}
+
+window.__riftboundDismissTopUiLayer = () => {
+  const dismissed = dismissTopUiLayer();
+  if (dismissed) render();
+  return dismissed;
+};
 
 function hasKeyword(card, keyword) {
   if ((card.keywords || []).some((item) => item.toLowerCase() === keyword.toLowerCase())) return true;
@@ -6697,6 +8666,12 @@ app.addEventListener("click", (event) => {
     }
 
     const { action, card, unit, destination, player, battlefield, rune, energy, mode, choice, ability } = button.dataset;
+    if (action === "return-menu") {
+      appView = "menu";
+      resetGameUiState();
+      render();
+      return;
+    }
     if (!tutorialAllowsUiAction(action, { ...button.dataset })) {
       render();
       return;
@@ -6720,9 +8695,9 @@ app.addEventListener("click", (event) => {
       if (game.phase === "complete" && aiReplay && !aiReplay.report) completeAiReplay();
       appView = "analysis";
     }
-    if (action === "toggle-log") logOpen = !logOpen;
+    if (action === "toggle-log") toggleTabletopSheet("log");
     if (action === "dismiss-feedback") clearRealtimeFeedback();
-    if (action === "toggle-inspector") inspectorOpen = !inspectorOpen;
+    if (action === "toggle-inspector") toggleTabletopSheet("inspector");
     if (action === "toggle-chain-zone") chainZoneCollapsed = !chainZoneCollapsed;
     if (action === "inspect-chain-effect") {
       inspectedChainItemId = inspectedChainItemId === button.dataset.chainItemId ? null : button.dataset.chainItemId;
@@ -6735,9 +8710,9 @@ app.addEventListener("click", (event) => {
     if (action === "roll-first-player") dispatchGameCommand({ kind: "rollFirstPlayer" }, () => rollFirstPlayer(game, activePlayerId()));
     if (action === "choose-first-player") dispatchGameCommand({ kind: "chooseFirstPlayer", playerId: player }, () => chooseFirstPlayer(game, activePlayerId(), player));
     if (action === "toggle-hand") handOpen = !handOpen;
-    if (action === "toggle-graveyard") graveyardOpenPlayerId = graveyardOpenPlayerId === player ? null : player;
-    if (action === "toggle-banished") banishedOpenPlayerId = banishedOpenPlayerId === player ? null : player;
-    if (action === "toggle-intel") intelOpenPlayerId = intelOpenPlayerId === player ? null : player;
+    if (action === "toggle-graveyard") toggleTabletopSheet("graveyard", player);
+    if (action === "toggle-banished") toggleTabletopSheet("banished", player);
+    if (action === "toggle-intel") toggleTabletopSheet("intel", player);
     if (action === "view-full-card") {
       fullCardPreviewCard = uiSelectedCard();
       fullCardOpen = Boolean(fullCardPreviewCard);
@@ -6874,6 +8849,31 @@ app.addEventListener("keydown", (event) => {
   if (!cardNode || !app.contains(cardNode)) return;
   event.preventDefault();
   setUiSelectedCard(cardNode.dataset.cardId);
+  render();
+});
+
+document.addEventListener("keydown", (event) => {
+  const modal = topUiModal();
+  if (event.key === "Tab" && modal) {
+    trapModalTab(event, modal);
+    return;
+  }
+  if (event.key !== "Escape" || appView !== "game") return;
+  const dismissed = dismissTopUiLayer();
+  if (!dismissed && !modal) return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (dismissed) render();
+}, true);
+
+window.addEventListener("popstate", () => {
+  if (suppressTabletopPopstate) {
+    suppressTabletopPopstate = false;
+    return;
+  }
+  if (!tabletopBackSentinelActive) return;
+  tabletopBackSentinelActive = false;
+  dismissTopUiLayer();
   render();
 });
 
@@ -7489,6 +9489,17 @@ window.addEventListener("error", (event) => {
 window.addEventListener("unhandledrejection", (event) => {
   reportUiException(event.reason, "unhandled promise");
   if (appView === "game") showUiExceptionOverlay(event.reason, "unhandled promise");
+});
+
+window.matchMedia?.("(prefers-reduced-motion: reduce)").addEventListener?.("change", (event) => {
+  if (!event.matches) return;
+  clearEffectAnimations();
+  clearRealtimeFeedback();
+  if (impactDismissTimer) clearTimeout(impactDismissTimer);
+  impactDismissTimer = null;
+  if (["victory", "defeat"].includes(activeImpact?.kind)) resultRevealReady = true;
+  activeImpact = null;
+  if (appView === "game") render();
 });
 
 render();

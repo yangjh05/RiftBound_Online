@@ -2620,8 +2620,7 @@ function potentialActivatedEnergyDuringPayment(game, player, excludedCard, paidC
       if (!isReactionAbility(group.specs) || !activatedAbilityConditionsMet(game, player, source, group.specs)) continue;
       if (source.exhausted && activatedAbilityExhausts(group.specs)) continue;
       if (activatedAbilityCost(game, player, source, group.specs)) continue;
-      if (group.specs.some((spec) => spec.restriction === "spell") && paidCard?.type !== "spell") continue;
-      if (group.specs.some((spec) => spec.restriction === "showdown") && game.phase !== "showdown") continue;
+      if (!group.specs.every((spec) => resourceRestrictionAllowsPayment(game, spec.restriction, paidCard))) continue;
       best = Math.max(best, group.specs.reduce((sum, spec) => sum + Math.max(0, spec.amount || 0), 0));
     }
     total += best;
@@ -2639,15 +2638,15 @@ function potentialActivatedPowerDuringPayment(game, player, excludedCard, paidCa
       if (!isReactionAbility(group.specs) || !activatedAbilityConditionsMet(game, player, source, group.specs)) continue;
       if (source.exhausted && activatedAbilityExhausts(group.specs)) continue;
       if (activatedAbilityCost(game, player, source, group.specs)) continue;
-      if (group.specs.some((spec) => spec.restriction === "spell") && paidCard?.type !== "spell") continue;
-      if (group.specs.some((spec) => spec.restriction === "showdown") && game.phase !== "showdown") continue;
+      if (!group.specs.every((spec) => resourceRestrictionAllowsPayment(game, spec.restriction, paidCard))) continue;
       const generated = group.specs.flatMap((spec) => Array.from(
         { length: Math.max(0, spec.amount || 0) },
         (_, index) => ({
           id: `potential-power-${source.instanceId}-${index}`,
           instanceId: `potential-power-${source.instanceId}-${index}`,
           type: "power",
-          domain: spec.domain || "Any"
+          domain: spec.domain || "Any",
+          restriction: spec.restriction ?? null
         })
       ));
       if (generated.length > best.length) best = generated;
@@ -2694,7 +2693,7 @@ function canActivateAddDuringPayment(game, player, card, specs) {
   const paidCard = paymentCard(player, game.pendingPayment);
   return specs.length > 0 && specs.every((spec) =>
     ["addEnergy", "addPower"].includes(spec.kind)
-    && (spec.restriction !== "spell" || paidCard?.type === "spell")
+    && resourceRestrictionAllowsPayment(game, spec.restriction, paidCard)
     && (!spec.requiresLegion || player.cardsPlayedThisTurn > 0)
   );
 }
@@ -4821,7 +4820,7 @@ function createEffectEnergyPayment(game, player, card, amount, effectPayment, po
 
 function beginEffectEnergyPayment(game, player, card, amount, effectPayment) {
   if (!game.interactive) return false;
-  if (!payEnergyIfPossible(game, player, amount, true)) return false;
+  if (!payEnergyIfPossible(game, player, amount, true, card)) return false;
   game.pendingPayment = createEffectEnergyPayment(game, player, card, amount, effectPayment);
   game.currentPlayerId = player.id;
   game.selectedCardId = card.instanceId;
@@ -5004,7 +5003,7 @@ function promptNextPlayDeclaration(game, player, card, state) {
     return true;
   }
   if (state.completion?.type === "hidden") {
-    if (!payPowerRequirements(game, player, state.deflectPowerCost || [], true)) {
+    if (!payPowerRequirements(game, player, state.deflectPowerCost || [], true, card)) {
       log(game, `${card.name} cannot pay its declared targets' Deflect cost.`);
       return false;
     }
@@ -6380,21 +6379,7 @@ function consumeSelectedPoolEnergy(player, energyIds = []) {
 }
 
 function poolEnergyCanPay(game, resource, card = null) {
-  if (resource.restriction === "showdown") return game.phase === "showdown";
-  if (resource.restriction === "spell") {
-    if (card) return card.type === "spell";
-    if (!game.pendingPayment) return false;
-    const player = game.players.find((candidate) => candidate.id === game.pendingPayment.playerId);
-    return Boolean(player && paymentCard(player, game.pendingPayment)?.type === "spell");
-  }
-  if (resource.restriction === "unitOrUnitAbility") {
-    if (card) return cardHasType(card, "unit");
-    if (!game.pendingPayment) return false;
-    const payingPlayer = game.players.find((candidate) => candidate.id === game.pendingPayment.playerId);
-    const paid = payingPlayer && paymentCard(payingPlayer, game.pendingPayment);
-    return Boolean(paid && cardHasType(paid, "unit"));
-  }
-  return true;
+  return resourceRestrictionAllowsPayment(game, resource?.restriction, card);
 }
 
 function createPoolPower(player, domain = "Any", options = {}) {
@@ -6412,14 +6397,21 @@ function createPoolPower(player, domain = "Any", options = {}) {
 }
 
 function poolPowerCanPay(game, resource, card = null) {
-  if (resource.restriction === "showdown") return game.phase === "showdown";
-  if (resource.restriction === "spell") {
-    if (card) return card.type === "spell";
-    if (!game.pendingPayment) return false;
-    const player = game.players.find((candidate) => candidate.id === game.pendingPayment.playerId);
-    return Boolean(player && paymentCard(player, game.pendingPayment)?.type === "spell");
+  return resourceRestrictionAllowsPayment(game, resource?.restriction, card);
+}
+
+function resourceRestrictionAllowsPayment(game, restriction, card = null) {
+  if (!restriction) return true;
+  if (restriction === "showdown") return game.phase === "showdown";
+  let paidCard = card;
+  if (!paidCard && game.pendingPayment) {
+    const payingPlayer = game.players.find((candidate) => candidate.id === game.pendingPayment.playerId);
+    paidCard = payingPlayer ? paymentCard(payingPlayer, game.pendingPayment) : null;
   }
-  return true;
+  if (restriction === "spell") return Boolean(paidCard && cardHasType(paidCard, "spell"));
+  if (restriction === "unitOrUnitAbility") return Boolean(paidCard && cardHasType(paidCard, "unit"));
+  if (restriction === "gear") return Boolean(paidCard && cardHasType(paidCard, "gear"));
+  return false;
 }
 
 function addPowerToPool(player, domain, options = {}) {
@@ -8853,15 +8845,17 @@ function declineTriggerCost(trigger) {
   trigger.data.triggerCostComplete = true;
 }
 
-function payAutomaticTriggerResourceCost(game, trigger, player, descriptor) {
+function payAutomaticTriggerResourceCost(game, trigger, player, source, descriptor) {
   const amount = descriptor.effect?.costEnergy || descriptor.effect?.amount || trigger.data?.amount || 1;
   const domain = descriptor.effect?.domain || trigger.data?.domain || "Any";
   const requirements = descriptor.effect?.costPower?.length
     ? descriptor.effect.costPower
     : [{ domain, amount: 1 }];
-  if (["energy", "energyAndExhaustSource"].includes(descriptor.kind)) return payEnergyIfPossible(game, player, amount);
+  if (["energy", "energyAndExhaustSource"].includes(descriptor.kind)) {
+    return payEnergyIfPossible(game, player, amount, false, source);
+  }
   if (["power", "powerAndExhaustSource"].includes(descriptor.kind)) {
-    return payPowerRequirements(game, player, requirements);
+    return payPowerRequirements(game, player, requirements, false, source);
   }
   return true;
 }
@@ -9001,7 +8995,7 @@ function prepareTriggerCosts(game, triggers, mode = "queue", continuation = null
           : descriptor.kind === "disempowerControlled"
             ? controlledEmpoweredTriggerCostOptions(game, player)[0]?.cardId
           : null;
-    if (!payAutomaticTriggerResourceCost(game, trigger, player, descriptor)
+    if (!payAutomaticTriggerResourceCost(game, trigger, player, source, descriptor)
       || !payTriggerNonResourceCost(game, trigger, player, source, descriptor, selectionId)) {
       declineTriggerCost(trigger);
       removePendingTriggerChainItem(game, trigger);
@@ -9589,7 +9583,8 @@ function triggerDeclaration(game, trigger) {
       optional: Boolean(spec.optional),
       options: player.trash
         .filter((candidate) => candidate.type === "spell" && (maxEnergy == null || (candidate.energy || 0) <= maxEnergy))
-        .filter((candidate) => payPowerRequirements(game, player, normalizeCardPowerRequirements(candidate, candidate.power || []), true))
+        .filter((candidate) => payPowerRequirements(game, player,
+          normalizeCardPowerRequirements(candidate, candidate.power || []), true, candidate))
         .map(cardOption)
     };
     return declaration.options.length ? declaration : null;
@@ -15873,7 +15868,8 @@ function declineEffectPlayedCardResourcePayment(game, payment) {
 
 function canPayReducedEnergyCard(game, player, card, energyReduction = 0) {
   const cost = adjustedCost(game, player, card, { baseEnergyReduction: energyReduction });
-  return payEnergyIfPossible(game, player, cost.energy, true) && payPowerRequirements(game, player, cost.power, true);
+  return payEnergyIfPossible(game, player, cost.energy, true, card)
+    && payPowerRequirements(game, player, cost.power, true, card);
 }
 
 function playCardIgnoringEnergyCostFromEffect(game, player, played, source, energyReduction = Number.POSITIVE_INFINITY) {
@@ -15881,7 +15877,8 @@ function playCardIgnoringEnergyCostFromEffect(game, player, played, source, ener
     ? { baseEnergyReduction: energyReduction }
     : { ignoreEnergyBaseCost: true };
   const cost = adjustedCost(game, player, played, costOptions);
-  if (!payEnergyIfPossible(game, player, cost.energy, true) || !payPowerRequirements(game, player, cost.power, true)) {
+  if (!payEnergyIfPossible(game, player, cost.energy, true, played)
+    || !payPowerRequirements(game, player, cost.power, true, played)) {
     const owner = game.players.find((candidate) => candidate.id === played.ownerId) || player;
     if (!owner.banished?.some((candidate) => candidate.instanceId === played.instanceId)) {
       banishCards(game, player, [played], source);
@@ -17193,7 +17190,8 @@ function chooseTrashSpell(game, player, card, spec) {
   const maxEnergy = trashSpellMaxEnergy(player, spec);
   const options = player.trash
     .filter((candidate) => candidate.type === "spell" && (maxEnergy == null || (candidate.energy || 0) <= maxEnergy))
-    .filter((candidate) => payPowerRequirements(game, player, normalizeCardPowerRequirements(candidate, candidate.power || []), true))
+    .filter((candidate) => payPowerRequirements(game, player,
+      normalizeCardPowerRequirements(candidate, candidate.power || []), true, candidate))
     .map(cardOption);
   return promptChoice(game, player, card, {
     effect: "playTrashSpell",
@@ -17329,7 +17327,8 @@ function chooseTrashUnitToPlay(game, player, card, spec = {}, finishSpell = fals
     .filter((candidate) => ignoresAllCosts
       || (spec.payCosts
         ? canPayReducedEnergyCard(game, player, candidate, 0)
-        : payPowerRequirements(game, player, normalizeCardPowerRequirements(candidate, candidate.power || []), true)))
+        : payPowerRequirements(game, player,
+          normalizeCardPowerRequirements(candidate, candidate.power || []), true, candidate)))
     .map(cardOption);
   return promptChoice(game, player, card, {
     effect: "playTrashUnit",
@@ -17782,7 +17781,7 @@ function resolveVendettaChoice(context) {
   const { game, choice, option, player, source, target } = context;
   const spec = choice.data?.spec || {};
   const operation = choice.data?.operation;
-  const declineContinues = new Set(["lookTopPlay", "optionalDamageThenMove"]);
+  const declineContinues = new Set(["lookTopPlay", "empowerLookedCard", "optionalDamageThenMove"]);
   if ((option.id === "skip" || option.id === "decline") && !declineContinues.has(operation)) {
     return finishVendettaChoice(context);
   }
@@ -18112,7 +18111,8 @@ function resolveVendettaChoice(context) {
       break;
     }
     case "empowerLookedCard": {
-      const played = findCard(game, choice.data.playedCardId);
+      const played = player.mainDeck.find((card) => card.instanceId === choice.data.playedCardId)
+        || findCard(game, choice.data.playedCardId);
       if (option.id === "empower" && played) played.empowerAfterEffectPlay = true;
       if (played) {
         playCardIgnoringEnergyCostFromEffect(
@@ -21020,12 +21020,14 @@ function resolvePlayTrashUnitChoice(context) {
     const canStartPlay = ignoresAllCosts
       || (paysAllCosts
         ? canPayReducedEnergyCard(game, player, candidate, 0)
-        : payPowerRequirements(game, player, normalizeCardPowerRequirements(candidate, candidate.power || []), true));
+        : payPowerRequirements(game, player,
+          normalizeCardPowerRequirements(candidate, candidate.power || []), true, candidate));
     if (canStartPlay) {
       const destination = choice.data?.destination ?? null;
       if (ignoresAllCosts) playCardIgnoringCostFromEffect(game, player, candidate, source, destination);
       else if (paysAllCosts) queueEffectPlayedCard(game, player, candidate, source, destination);
-      else if (payPowerRequirements(game, player, normalizeCardPowerRequirements(candidate, candidate.power || []))) {
+      else if (payPowerRequirements(game, player,
+        normalizeCardPowerRequirements(candidate, candidate.power || []), false, candidate)) {
         playCardIgnoringCostFromEffect(game, player, candidate, source, destination);
       }
       log(game, `${source.name} plays ${candidate.name} from trash.`);
@@ -23491,7 +23493,7 @@ function offerPredictChoice(game, player, source, parentChoice = {}, extraData =
     fromShowdownChain: Boolean(parentChoice.fromShowdownChain || extraData.fromShowdownChain)
   };
   game.currentPlayerId = player.id;
-  log(game, `${source.name} predicts ${top.name}.`);
+  log(game, `${source.name} predicts the top card.`);
   return true;
 }
 
@@ -23780,9 +23782,9 @@ function resolvePredictChoice(game, player, source, option, choice) {
   if (option.id === "recycle") {
     player.mainDeck.shift();
     recycleMainDeckCards(game, player, [top], source);
-    log(game, `${player.name} recycles ${top.name} with ${source.name}.`);
+    log(game, `${player.name} recycles the predicted card with ${source.name}.`);
   } else {
-    log(game, `${player.name} keeps ${top.name} on top with ${source.name}.`);
+    log(game, `${player.name} keeps the predicted card on top with ${source.name}.`);
   }
   markEffect(game, source, [source.instanceId, top.instanceId], `${source.name} predicts.`);
   resolveUnleashedAfterPredict(game, player, source, choice.data || {});
@@ -24573,7 +24575,8 @@ function canChooseUnit(game, player, sourceCard, unit) {
   if ((sourceCard?.deflectPaidTargetIds || []).includes(unit.instanceId)) return true;
   if (!sourceIgnoresDeflect(game, sourceCard, unit)
     && (hasKeyword(unit, "Deflect", game) || hasStaticEffect(unit, "deflect"))) {
-    return payAdditionalPower(game, player, { domain: "Any", amount: deflectAmount(game, unit) }, true);
+    return payAdditionalPower(game, player,
+      { domain: "Any", amount: deflectAmount(game, unit) }, true, sourceCard);
   }
   return Boolean(sourceCard);
 }
@@ -24588,12 +24591,13 @@ function payDeflectIfNeeded(game, player, sourceCard, unit) {
   if (!sourceCard || unit.controllerId === player.id) return true;
   if (sourceIgnoresDeflect(game, sourceCard, unit)) return true;
   if (!hasKeyword(unit, "Deflect", game) && !hasStaticEffect(unit, "deflect")) return true;
-  return payAdditionalPower(game, player, { domain: "Any", amount: deflectAmount(game, unit) });
+  return payAdditionalPower(game, player,
+    { domain: "Any", amount: deflectAmount(game, unit) }, false, sourceCard);
 }
 
-function payPowerRequirements(game, player, requirements = [], dryRun = false) {
+function payPowerRequirements(game, player, requirements = [], dryRun = false, paidCard = null) {
   if (!requirements.length) return true;
-  const chosen = choosePowerPaymentSources(player, requirements, game, null);
+  const chosen = choosePowerPaymentSources(player, requirements, game, paidCard);
   if (!chosen) return false;
   if (dryRun) return true;
   consumeSelectedPoolPower(player, chosen.poolPowerIds);
@@ -25079,7 +25083,7 @@ function resolveRecycleTopBeforeRevealChoice({ game, choice, option, player, sou
   if (option.id === "recycle" && top?.instanceId === choice.data?.topCardId) {
     const triggers = [];
     recycleMainDeckCards(game, player, [top], source, { triggerCollector: triggers });
-    log(game, `${source.name} recycles ${top.name} before the deck is revealed.`);
+    log(game, `${source.name} recycles the top card before the deck is revealed.`);
     markEffect(game, source, [source.instanceId, top.instanceId], `${source.name} replaces the pending reveal.`);
     if (triggers.length) {
       const mode = game.phase === "showdown" && game.showdown
@@ -25092,7 +25096,7 @@ function resolveRecycleTopBeforeRevealChoice({ game, choice, option, player, sou
       });
     }
   } else if (top) {
-    log(game, `${player.name} leaves ${top.name} on top with ${source.name}.`);
+    log(game, `${player.name} leaves the top card in place with ${source.name}.`);
   }
   return continueMainDeckRevealReplacements(game, player, choice.data?.replacementState || {});
 }
@@ -25429,9 +25433,9 @@ function setChampionZoneState(player, champion, zone) {
   player.championPlayed = zone === "played";
 }
 
-function payEnergyIfPossible(game, player, amount, dryRun = false) {
+function payEnergyIfPossible(game, player, amount, dryRun = false, paidCard = null) {
   const poolIds = runePoolEnergy(player)
-    .filter((resource) => poolEnergyCanPay(game, resource))
+    .filter((resource) => poolEnergyCanPay(game, resource, paidCard))
     .slice(0, amount)
     .map((resource) => resource.id);
   const ready = player.runes.filter((rune) => !rune.exhausted).slice(0, amount);
@@ -25443,9 +25447,9 @@ function payEnergyIfPossible(game, player, amount, dryRun = false) {
   return true;
 }
 
-function payAdditionalPower(game, player, requirement, dryRun = false) {
+function payAdditionalPower(game, player, requirement, dryRun = false, paidCard = null) {
   if (!requirement) return true;
-  return payPowerRequirements(game, player, [requirement], dryRun);
+  return payPowerRequirements(game, player, [requirement], dryRun, paidCard);
 }
 
 function swapUnitLocations(game, responsiblePlayer, first, second) {

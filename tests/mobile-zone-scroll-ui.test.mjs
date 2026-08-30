@@ -5,13 +5,13 @@ import { readFile } from "node:fs/promises";
 const appSource = await readFile(new URL("../src/app.mjs", import.meta.url), "utf8");
 const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
 
-test("player summary exposes the current level before scrollable zone counts", () => {
+test("player summary exposes the current level before scrollable hand and intel controls", () => {
   assert.match(appSource, /class="player-stats" data-scroll-key="player-stats-\$\{player\.id\}"/);
-  assert.match(appSource, /class="xp-stat">\$\{t\("level", locale\(\)\)\} \$\{player\.xp \|\| 0\}/);
+  assert.match(appSource, /class="xp-stat">\$\{t\("level", locale\(\)\)\} <b>\$\{seat\.xp\}<\/b>/);
 
   const levelIndex = appSource.indexOf('class="xp-stat"');
-  const deckIndex = appSource.indexOf('class="deck-stat"', levelIndex);
-  assert.ok(levelIndex >= 0 && levelIndex < deckIndex, "level should remain visible at the leading edge of the mobile scroller");
+  const handIndex = appSource.indexOf('class="hand-stat"', levelIndex);
+  assert.ok(levelIndex >= 0 && levelIndex < handIndex, "level should remain visible at the leading edge of the mobile scroller");
 });
 
 test("player zones preserve their own horizontal scroll positions", () => {
