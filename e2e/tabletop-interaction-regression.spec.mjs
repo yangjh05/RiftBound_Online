@@ -372,6 +372,23 @@ async function installInteractionFixture(page, scenario) {
     }
 
     if (name === "reaction") {
+      const reactionSeed = player.hand[0] || player.mainDeck[0] || player.legend;
+      const reaction = cloneCard(reactionSeed, "e2e-selected-reaction", player.id, {
+        type: "spell",
+        name: "Selected Reaction Regression",
+        energy: 0,
+        power: [],
+        tags: ["Reaction"],
+        keywords: [],
+        effects: [],
+        additionalCost: null,
+        translations: {
+          ...(structuredClone(reactionSeed?.translations || {})),
+          ko: { name: "선택된 반응 회귀 카드", text: "반응 우선권 UI 회귀 테스트용 카드입니다." }
+        }
+      });
+      player.hand.push(reaction);
+      game.selectedCardId = reaction.instanceId;
       game.actionChain = {
         turnPlayerId: player.id,
         priorityPlayerId: player.id,
@@ -381,6 +398,7 @@ async function installInteractionFixture(page, scenario) {
         chainOpenedBy: "e2e-response-group",
         chain: []
       };
+      fixture = { ...fixture, reactionCardId: reaction.instanceId };
     }
 
     if (name === "optional-trigger-choice") {
@@ -612,6 +630,25 @@ async function installInteractionFixture(page, scenario) {
       };
     }
 
+    if (name === "champion-drag") {
+      const champion = player.champion;
+      if (!champion) throw new Error("champion-drag fixture requires a selected Champion");
+      champion.zone = "champion";
+      champion.energy = 0;
+      champion.power = [];
+      champion.keywords = [];
+      champion.effects = [];
+      champion.additionalCost = null;
+      champion.exhausted = false;
+      champion.stunned = false;
+      player.championPlayed = false;
+      fixture = {
+        ...fixture,
+        championId: champion.instanceId,
+        battlefieldIds: game.battlefields.map((battlefield) => battlefield.instanceId)
+      };
+    }
+
     if (name === "base-unit-drag") {
       const unitSource = allCards(player).find((card) => card?.type === "unit");
       if (!unitSource) throw new Error("base-unit-drag fixture requires a Unit template");
@@ -816,9 +853,6 @@ test("collapsed Chain card choices use the wide drawer and confirm the exact opt
   const chainToggle = chain.locator('[data-action="toggle-chain-zone"]');
   await expect(chain).toBeVisible();
   await expect(chainToggle).toHaveAttribute("aria-expanded", "true");
-  await chainToggle.click();
-  await expect(chain).toHaveClass(/is-collapsed/u);
-  await expect(chainToggle).toHaveAttribute("aria-expanded", "false");
 
   await page.evaluate((data) => {
     const game = window.__riftboundGame;
@@ -839,6 +873,34 @@ test("collapsed Chain card choices use the wide drawer and confirm the exact opt
     };
     window.__riftboundRender();
   }, fixture);
+
+  await expect(page.locator('.action-window-toggle[data-action="toggle-hand"]')).toHaveCount(0);
+  const inspectedItem = chain.locator(`.chain-zone-item[data-card-id="${fixture.exactCardId}"]`);
+  await inspectedItem.click();
+  const inspector = page.locator(".inspector.inspector-panel");
+  await expect(inspector).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.__riftboundGame.selectedCardId)).toBe(fixture.exactCardId);
+
+  await inspector.locator('[data-action="toggle-inspector"]').click();
+  await expect(inspector).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => window.__riftboundGame.pendingChoice?.id))
+    .toBe("e2e-collapsed-chain-card-choice");
+  await expect(chain).toBeVisible();
+  await expect(page.locator(".chain-context-panel.showing-targets")).toBeVisible();
+  const viewChainCard = page.locator(`.chain-context-panel [data-action="view-chain-card"][data-card-id="${fixture.exactCardId}"]`);
+  await expect(viewChainCard).toBeVisible();
+  await viewChainCard.click();
+  await expect(page.locator(".full-card-modal")).toBeVisible();
+  await page.locator('.full-card-modal [data-action="close-full-card"]').click();
+
+  await chainToggle.click();
+  await expect(chain).toHaveClass(/is-collapsed/u);
+  await expect(chainToggle).toHaveAttribute("aria-expanded", "false");
+  const chainContent = chain.locator("#chain-zone-content");
+  await expect(chainContent).toHaveAttribute("hidden", "");
+  await expect(chainContent).toBeHidden();
+  await expect.poll(async () => (await chain.boundingBox())?.width || Number.POSITIVE_INFINITY).toBeLessThanOrEqual(252);
+  await expect.poll(async () => (await chain.boundingBox())?.height || Number.POSITIVE_INFINITY).toBeLessThanOrEqual(48);
 
   const drawer = page.locator(".table-command-layer > .choice-zone-drawer");
   const exact = drawer.locator(
@@ -1088,22 +1150,19 @@ test("reaction and pass controls form one priority decision group", async ({ pag
   await expect(actionRail.locator(".action-command-list")).toHaveCount(1);
   await expect(actionRail.locator('[data-action="toggle-hand"]')).toContainText(/행동 사용|Play Action/iu);
 
-  await installInteractionFixture(page, "reaction");
+  const reactionFixture = await installInteractionFixture(page, "reaction");
 
   const group = page.locator('.context-action-dock > .table-action-rail .action-command-list > .priority-response-controls[role="group"]');
   await expect(group).toBeVisible();
   await expect(group).toHaveAttribute("aria-label", /반응 또는 패스|React or pass/iu);
-  await expect(group.locator('[data-action="toggle-hand"]')).toHaveCount(1);
-  await expect(group.locator('[data-action="toggle-hand"]')).toContainText(/반응 사용|Play Reaction/iu);
+  await expect(group.locator('[data-action="toggle-hand"]')).toHaveCount(0);
+  const reactionAction = group.locator(`.priority-card-actions [data-action="begin-play"][data-card="${reactionFixture.reactionCardId}"]`);
+  await expect(reactionAction).toHaveCount(1);
+  await expect(reactionAction).toContainText(/반응|Reaction/iu);
   await expect(group.locator('[data-action="pass-showdown"]')).toHaveCount(1);
   await expect(page.locator('.table-action-rail [data-action="pass-showdown"]')).toHaveCount(1);
   await expect(page.locator('.action-context [data-action="toggle-hand"], .action-context [data-action="pass-showdown"]')).toHaveCount(0);
   await expect(page.locator('[data-action="pass-showdown"]')).toHaveCount(1);
-
-  const hand = page.locator('.persistent-hand[data-side="bottom"], .hand-drawer.persistent-hand');
-  const handClassBefore = await hand.getAttribute("class");
-  await group.locator('[data-action="toggle-hand"]').click();
-  await expect.poll(() => hand.getAttribute("class")).not.toBe(handClassBefore);
 
   await page.locator('.priority-response-controls [data-action="pass-showdown"]:enabled').click();
   await expect.poll(() => page.evaluate(() => window.__riftboundGame.actionChain?.consecutivePasses)).toBe(1);
@@ -1360,6 +1419,62 @@ test("hand drag exposes only legal destinations and rejects a forged drop target
   expect(accepted.destination).toBe("base");
   expect(accepted.chainHasCard).toBe(true);
   await expect(page.locator("#app")).not.toHaveClass(/is-dragging-card/u);
+  await assertRuntimeHealthy(page, runtimeFailures);
+});
+
+test("the selected Champion drags to a legal destination and starts beginPlayChampion", async ({ page }) => {
+  const runtimeFailures = captureRuntimeFailures(page);
+  await openReadyBoard(page);
+  const fixture = await installInteractionFixture(page, "champion-drag");
+
+  const championZone = page.locator(
+    `.table-seat[data-player-id="${fixture.playerId}"] [data-zone="champion"]`
+  );
+  const champion = championZone.locator(`.identity-button[data-card-id="${fixture.championId}"]`);
+  await expect(champion).toHaveCount(1);
+  await expect(champion).toHaveAttribute("data-card-drag", "champion");
+  await expect(champion).toHaveAttribute("draggable", "true");
+  const destinations = String(await champion.getAttribute("data-play-destinations"))
+    .split(/\s+/u)
+    .filter(Boolean);
+  expect(destinations).toContain("base");
+
+  const legalBase = page.locator(
+    `.table-seat[data-player-id="${fixture.playerId}"] [data-zone="base"] [data-play-destination="base"]`
+  );
+  await champion.dispatchEvent("dragstart");
+  await expect(page.locator("#app")).toHaveClass(/is-dragging-card/u);
+  await expect(page.locator("#app")).toHaveClass(/is-dragging-champion/u);
+  await expect(champion).toHaveClass(/drag-source-active/u);
+  await expect(legalBase).toHaveClass(/is-legal-drop/u);
+  await legalBase.dispatchEvent("dragover");
+  await expect(legalBase).toHaveClass(/drag-over|drop-target-active/u);
+  await legalBase.dispatchEvent("drop");
+
+  const started = await page.evaluate(({ playerId, championId }) => {
+    const game = window.__riftboundGame;
+    const player = game.players.find((candidate) => candidate.id === playerId);
+    const chainItem = game.actionChain?.chain?.find((item) => item.card?.instanceId === championId);
+    return {
+      championZone: player.champion?.zone || "",
+      championPlayed: Boolean(player.championPlayed),
+      pendingCardId: game.pendingPayment?.cardId || "",
+      paymentSource: game.pendingPayment?.source || "",
+      paymentDestination: game.pendingPayment?.destination || "",
+      chainCardId: chainItem?.card?.instanceId || "",
+      chainDestination: chainItem?.destination || ""
+    };
+  }, { playerId: fixture.playerId, championId: fixture.championId });
+  expect(started).toEqual({
+    championZone: "chain",
+    championPlayed: false,
+    pendingCardId: fixture.championId,
+    paymentSource: "champion",
+    paymentDestination: "base",
+    chainCardId: fixture.championId,
+    chainDestination: "base"
+  });
+  await expect(page.locator("#app")).not.toHaveClass(/is-dragging-card|is-dragging-champion/u);
   await assertRuntimeHealthy(page, runtimeFailures);
 });
 

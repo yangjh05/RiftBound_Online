@@ -111,13 +111,13 @@ function finalizedTriggerItem(card, playerId, id) {
 function selectAndConfirmTriggerOrder(game, optionIds = null) {
   assert.equal(game.pendingChoice?.effect, "triggerOrder");
   const triggerOptions = game.pendingChoice.options.filter((option) => !option.confirmTriggerOrder);
-  const ids = optionIds || triggerOptions.filter((option) => !option.optionalTrigger).map((option) => option.id);
+  const ids = optionIds || triggerOptions.map((option) => option.id);
   for (const optionId of ids) {
     assert.equal(chooseEffectOption(game, optionId).ok, true);
     assert.equal(game.pendingChoice?.effect, "triggerOrder");
   }
   const confirm = game.pendingChoice.options.find((option) => option.confirmTriggerOrder);
-  assert.ok(confirm, "confirmation is available after every mandatory trigger is selected");
+  assert.ok(confirm, "confirmation is available after every committed trigger is selected");
   assert.equal(confirm.disabled, false);
   assert.equal(chooseEffectOption(game, confirm.id).ok, true);
 }
@@ -8294,10 +8294,14 @@ test("showdown start choices resume remaining battlefield defend triggers", () =
   opponent.mainDeck = [dianaSpell, conservatorySpell];
 
   assert.equal(moveUnit(game, "resume-attacker", field.instanceId).ok, true);
+  assert.equal(game.pendingChoice?.effect, "declareOptionalTrigger");
+  assert.equal(game.pendingChoice.card?.instanceId, diana.instanceId);
+  assert.equal(chooseEffectOption(game, "use-optional-trigger").ok, true);
   assert.equal(game.pendingChoice?.effect, "triggerOrder");
   const dianaTrigger = game.pendingChoice.options.find((option) => option.cardId === diana.instanceId);
   const conservatoryFirst = game.pendingChoice.options.find((option) => option.cardId === field.instanceId);
-  assert.equal(dianaTrigger.optionalTrigger, true);
+  assert.equal(dianaTrigger.optionalTrigger, false);
+  assert.equal(dianaTrigger.wasOptionalTrigger, true);
   selectAndConfirmTriggerOrder(game, [dianaTrigger.id, conservatoryFirst.id]);
   assert.equal(game.pendingChoice, null);
   assert.equal(game.pendingPayment.source, "triggeredAbility");
@@ -8652,7 +8656,7 @@ test("multiple spell-play battlefield triggers queue after the spell resolves", 
   assert.equal(game.pendingChoice, null);
 });
 
-test("unselected optional simultaneous triggers are not placed on the chain", () => {
+test("declined optional simultaneous triggers are excluded before trigger ordering", () => {
   const game = createGame({ interactive: true });
   finishSetup(game);
   const player = currentPlayer(game);
@@ -8672,17 +8676,83 @@ test("unselected optional simultaneous triggers are not placed on the chain", ()
   opponent.mainDeck = [instance(cards.gust, opponent.id, "optional-order-reveal")];
 
   assert.equal(moveUnit(game, attacker.instanceId, field.instanceId).ok, true);
-  assert.equal(game.pendingChoice?.effect, "triggerOrder");
-  const optionalDiana = game.pendingChoice.options.find((option) => option.cardId === diana.instanceId);
-  const mandatoryConservatory = game.pendingChoice.options.find((option) => option.cardId === field.instanceId);
-  assert.equal(optionalDiana.optionalTrigger, true);
-  assert.equal(mandatoryConservatory.optionalTrigger, false);
-  selectAndConfirmTriggerOrder(game, [mandatoryConservatory.id]);
+  assert.equal(game.pendingChoice?.effect, "declareOptionalTrigger");
+  assert.equal(game.pendingChoice.card?.instanceId, diana.instanceId);
+  assert.equal(chooseEffectOption(game, "decline-optional-trigger").ok, true);
   assert.equal(game.pendingChoice, null);
   assert.equal(game.pendingPayment, null);
   assert.equal(game.showdown.chain.length, 1);
   assert.equal(game.showdown.chain[0].trigger.sourceCardId, field.instanceId);
   assert.equal(opponent.runes[0].exhausted, false);
+});
+
+test("all optional triggers are decided before accepted and mandatory simultaneous triggers are ordered", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const opponent = game.players[1];
+  const field = {
+    ...instance(cards.ravenbloomConservatory, opponent.id, "optional-batch-conservatory"),
+    controlledBy: opponent.id,
+    hidden: [],
+    units: []
+  };
+  game.battlefields[0] = field;
+  const attacker = instance(cards.lonelyPoro, player.id, "optional-batch-attacker");
+  const acceptedDiana = instance(cards.dianaLunari, opponent.id, "optional-batch-accepted-diana");
+  const declinedDiana = instance(cards.dianaLunari, opponent.id, "optional-batch-declined-diana");
+  player.base = [attacker];
+  field.units = [acceptedDiana, declinedDiana];
+  opponent.runes = [
+    rune(DOMAINS.MIND, opponent.id, "optional-batch-energy-1"),
+    rune(DOMAINS.MIND, opponent.id, "optional-batch-energy-2")
+  ];
+  opponent.mainDeck = [
+    instance(cards.gust, opponent.id, "optional-batch-reveal-1"),
+    instance(cards.stupefy, opponent.id, "optional-batch-reveal-2")
+  ];
+
+  assert.equal(moveUnit(game, attacker.instanceId, field.instanceId).ok, true);
+  assert.equal(game.pendingChoice?.effect, "declareOptionalTrigger");
+  assert.equal(game.pendingChoice.card?.instanceId, acceptedDiana.instanceId);
+  assert.equal(chooseEffectOption(game, "use-optional-trigger").ok, true);
+
+  assert.equal(game.pendingChoice?.effect, "declareOptionalTrigger",
+    "trigger ordering stays hidden until every optional trigger has been decided");
+  assert.equal(game.pendingChoice.card?.instanceId, declinedDiana.instanceId);
+  assert.equal(chooseEffectOption(game, "decline-optional-trigger").ok, true);
+
+  assert.equal(game.pendingChoice?.effect, "triggerOrder");
+  const triggerOptions = game.pendingChoice.options.filter((option) => !option.confirmTriggerOrder);
+  assert.deepEqual(
+    new Set(triggerOptions.map((option) => option.cardId)),
+    new Set([acceptedDiana.instanceId, field.instanceId]),
+    "the order contains the accepted optional trigger and mandatory trigger, but not the declined trigger"
+  );
+  const acceptedOption = triggerOptions.find((option) => option.cardId === acceptedDiana.instanceId);
+  const mandatoryOption = triggerOptions.find((option) => option.cardId === field.instanceId);
+  assert.equal(acceptedOption.optionalTrigger, false,
+    "an accepted optional trigger is committed during ordering");
+  assert.equal(acceptedOption.wasOptionalTrigger, true);
+  assert.equal(game.pendingChoice.options.find((option) => option.confirmTriggerOrder).disabled, true);
+
+  assert.equal(chooseEffectOption(game, mandatoryOption.id).ok, true);
+  let confirm = game.pendingChoice.options.find((option) => option.confirmTriggerOrder);
+  assert.equal(confirm.disabled, true,
+    "confirmation remains disabled while any committed trigger is unordered");
+  assert.equal(chooseEffectOption(game, confirm.id).ok, false);
+  assert.equal(game.pendingChoice?.effect, "triggerOrder");
+
+  assert.equal(chooseEffectOption(game, acceptedOption.id).ok, true);
+  confirm = game.pendingChoice.options.find((option) => option.confirmTriggerOrder);
+  assert.equal(confirm.disabled, false);
+  assert.equal(chooseEffectOption(game, confirm.id).ok, true);
+  assert.equal(game.pendingChoice, null);
+  assert.equal(game.pendingPayment?.source, "triggeredAbility");
+  assert.deepEqual(
+    new Set(game.showdown.chain.map((item) => item.trigger?.sourceCardId)),
+    new Set([acceptedDiana.instanceId, field.instanceId])
+  );
 });
 
 test("the dreaming tree draws when a spell first chooses a friendly unit there", () => {

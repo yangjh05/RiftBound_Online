@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { LOCALES, t } from "../src/i18n.mjs";
 import { cardStatusItems } from "../src/ui/card-status.mjs";
 
 test("card status UI describes every active unit modifier in Korean", () => {
@@ -53,16 +54,32 @@ test("permanent and temporary Might are not double-counted", () => {
   assert.equal(statuses.some((status) => status.kind === "lastingMight"), false);
 });
 
-test("card selection keeps the board visible until Card Info is explicitly opened", async () => {
+test("card selection opens Card Info and keeps an explicit close/toggle path", async () => {
   const source = await readFile(new URL("../src/app.mjs", import.meta.url), "utf8");
-  assert.match(source, /function cardStatusBadges\(card\)/u);
+  assert.match(source, /function cardStatusBadges\(card,/u);
   assert.match(source, /function cardStatusPanel\(card/u);
-  const selectionHandler = source.match(/function setUiSelectedCard\(cardId\) \{[\s\S]*?\n\}/u)?.[0] || "";
-  assert.doesNotMatch(selectionHandler, /inspectorOpen|toggleTabletopSheet/u);
+  const selectionHandler = source.match(/function setUiSelectedCard\(cardId,[\s\S]*?\n\}/u)?.[0] || "";
+  assert.match(selectionHandler, /openInspector = true/u);
+  assert.match(selectionHandler, /inspectorOpen = true/u);
+  assert.match(selectionHandler, /closeTabletopSheets\("inspector"\)/u);
+  assert.match(source, /function toggleUiSelectedCard\(cardId\)/u);
   assert.match(source, /if \(kind === "inspector"\) inspectorOpen = true;/u);
   assert.match(source, /data-action="toggle-inspector"/u);
   assert.match(source, /cardStatusPanel\(card, \{ compact: true \}\)/u);
   assert.match(source, /\$\{cardStatusPanel\(card\)\}/u);
+});
+
+test("mulligan instructions say to draw replacements before recycling set-aside cards", () => {
+  const korean = t("mulliganInstruction", LOCALES.KO);
+  const english = t("mulliganInstruction", LOCALES.EN);
+
+  assert.match(korean, /따로 둔/u);
+  assert.ok(korean.indexOf("먼저 뽑") < korean.indexOf("재활용"));
+  assert.doesNotMatch(korean, /덱 맨 아래[^.]*후[^.]*뽑/u);
+
+  assert.match(english, /set aside/iu);
+  assert.ok(english.toLowerCase().indexOf("draw") < english.toLowerCase().indexOf("recycle"));
+  assert.doesNotMatch(english, /bottom[^.]*then draw/iu);
 });
 
 test("board cards keep state accessible while rendering only corner stats and status badges", async () => {

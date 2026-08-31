@@ -8175,6 +8175,7 @@
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: thin;
+  pointer-events: none;
 }
 
 .tabletop-layout .choice-stage-actions > button {
@@ -8183,6 +8184,12 @@
   padding: 5px 9px;
   font-size: var(--tt-font-small, 12px);
   white-space: nowrap;
+  pointer-events: auto;
+}
+
+.tabletop-layout .choice-stage-actions .choice-stage-variants,
+.tabletop-layout .choice-stage-actions .choice-stage-variants > button {
+  pointer-events: auto;
 }
 
 .tabletop-layout .choice-stage-actions .confirm-staged-choice {
@@ -9810,4 +9817,256 @@ body > .board-card-drag-ghost > :not(.card-exhaust-layer) {
     min-height: 115px;
     aspect-ratio: auto;
   }
+}
+
+/* Authoritative Chain/identity seal. Keep this at physical EOF. */
+.tabletop-layout {
+  --tt-inspector-width: clamp(276px, 18vw, 336px);
+}
+
+.tabletop-layout .chain-zone-content[hidden] { display: none !important; }
+
+.tabletop-layout .chain-zone-content {
+  grid-template-columns: minmax(0, 1fr) !important;
+  grid-template-rows: auto auto !important;
+  gap: 6px !important;
+  overflow: clip !important;
+}
+
+.tabletop-layout .chain-stack {
+  position: relative;
+  z-index: 1;
+  display: flex !important;
+  flex-flow: row nowrap !important;
+  align-items: stretch !important;
+  gap: 7px !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  padding: 1px 2px 7px !important;
+  scroll-snap-type: x proximity;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  pointer-events: none;
+}
+
+.tabletop-layout .chain-zone-item {
+  flex: 0 0 clamp(188px, 19vw, 232px) !important;
+  grid-template-columns: 42px minmax(0, 1fr) !important;
+  align-items: center !important;
+  gap: 7px !important;
+  width: clamp(188px, 19vw, 232px) !important;
+  min-width: 188px !important;
+  min-height: 76px !important;
+  max-height: 94px !important;
+  overflow: hidden !important;
+  padding: 6px !important;
+  scroll-snap-align: start;
+  pointer-events: auto;
+}
+
+.tabletop-layout .chain-zone-copy { gap: 3px !important; overflow: hidden; }
+
+.tabletop-layout .chain-zone-copy > strong,
+.tabletop-layout .chain-zone-target {
+  display: -webkit-box;
+  overflow: hidden;
+  line-height: 1.2 !important;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.tabletop-layout .chain-context-panel {
+  position: relative;
+  z-index: 3;
+  align-content: start !important;
+  max-height: 78px !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  pointer-events: auto;
+}
+
+.tabletop-layout .tabletop-identity-dock {
+  position: relative;
+  z-index: 4;
+  isolation: isolate;
+}
+
+.tabletop-layout .table-pile-dock { position: relative; z-index: 1; }
+
+.tabletop-layout .identity-button,
+.tabletop-layout .identity-button > .identity-orientation-layer,
+.tabletop-layout .identity-button img,
+.tabletop-layout .champion-away-reference img {
+  opacity: 1 !important;
+  filter: none !important;
+  image-rendering: auto;
+}
+
+.tabletop-layout .identity-button.status-empowered {
+  border-color: #ffd75b !important;
+  box-shadow: 0 0 0 1px rgba(76, 42, 0, 0.86), 0 0 13px rgba(255, 196, 38, 0.62) !important;
+}
+
+.tabletop-layout .identity-empowered-marker {
+  position: absolute;
+  z-index: 6;
+  top: 2px;
+  right: auto;
+  bottom: auto;
+  left: 2px;
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  max-width: calc(100% - 4px);
+  min-height: 13px;
+  overflow: hidden;
+  border: 1px solid #fff0a1;
+  border-radius: 4px;
+  padding: 1px 3px;
+  color: #281500;
+  font-size: 8px;
+  font-weight: 1000;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: linear-gradient(180deg, #fff184, #e7ad31);
+  box-shadow: 0 0 0 1px rgba(51, 26, 0, 0.76), 0 0 9px rgba(255, 199, 49, 0.58);
+  pointer-events: none;
+}
+
+.tabletop-layout .physical-board-card .empowered-board-marker {
+  top: 2px !important;
+  left: 2px !important;
+  gap: 1px !important;
+  max-width: calc(100% - 4px) !important;
+  min-height: 14px !important;
+  border-radius: 4px !important;
+  padding: 1px 3px !important;
+  font-size: 8px !important;
+}
+
+.tabletop-layout .physical-board-card.status-empowered .unit-board-overlay > .unit-state-badges {
+  top: 18px !important;
+}
+
+.tabletop-layout :is(.unit-token.field-token, .unit-token.base-token).physical-board-card > .owner-chip {
+  top: -10px !important;
+  right: auto !important;
+  left: 0 !important;
+  max-width: 32px !important;
+}
+
+.tabletop-layout .pile-banished .pile-cards {
+  box-shadow: 2px 2px 0 rgba(126, 72, 174, 0.22), 0 0 7px rgba(137, 65, 197, 0.18) !important;
+}
+
+@media (min-width: 1200px) {
+  .tabletop-layout .table-pile-dock {
+    grid-template-columns: repeat(3, var(--tt-shelf-card-width)) !important;
+    gap: 4px !important;
+    width: calc(var(--tt-shelf-card-width) * 3 + 8px) !important;
+    max-width: calc(var(--tt-shelf-card-width) * 3 + 8px) !important;
+  }
+
+  .tabletop-layout .table-pile-dock .table-card-pile {
+    width: var(--tt-shelf-card-width) !important;
+    min-width: var(--tt-shelf-card-width) !important;
+    max-width: var(--tt-shelf-card-width) !important;
+  }
+
+  .tabletop-layout .chain-pod {
+    position: absolute !important;
+    z-index: 98 !important;
+    top: calc(var(--tt-opponent-row) + 8px) !important;
+    right: calc(var(--tt-action-rail) + 10px) !important;
+    bottom: auto !important;
+    left: 10px !important;
+    width: auto !important;
+    max-width: none !important;
+    height: auto !important;
+    max-height: 220px !important;
+    transform: none !important;
+  }
+
+  .tabletop-layout.inspector-open .chain-pod {
+    right: calc(var(--tt-action-rail) + var(--tt-inspector-width) + 18px) !important;
+  }
+
+  .tabletop-layout.inspector-open .floating-panels.has-blocking-decision {
+    right: calc(var(--tt-action-rail) + var(--tt-inspector-width) + 18px) !important;
+  }
+
+  .tabletop-layout.inspector-open .table-command-layer {
+    right: calc(var(--tt-action-rail) + var(--tt-inspector-width) + 18px) !important;
+  }
+
+  .tabletop-layout.inspector-open .inspector.inspector-panel {
+    z-index: 112 !important;
+    right: calc(var(--tt-action-rail) + 8px) !important;
+    display: grid !important;
+    width: var(--tt-inspector-width) !important;
+    max-width: var(--tt-inspector-width) !important;
+  }
+
+  .tabletop-layout:has(.chain-pod.is-collapsed) .chain-pod.is-collapsed,
+  .tabletop-layout .chain-pod.is-collapsed,
+  .tabletop-layout.inspector-open .chain-pod.is-collapsed {
+    right: calc(var(--tt-action-rail) + 10px) !important;
+    left: auto !important;
+    width: clamp(208px, 16vw, 248px) !important;
+    max-width: clamp(208px, 16vw, 248px) !important;
+    height: 42px !important;
+    min-height: 0 !important;
+    max-height: 42px !important;
+    padding: 4px 6px !important;
+  }
+}
+
+.tabletop-layout [data-card-drag="champion"] {
+  cursor: grab;
+  touch-action: none;
+}
+
+.tabletop-layout.is-dragging-champion [data-card-drag="champion"].drag-source-active {
+  z-index: 96 !important;
+  opacity: 1 !important;
+  filter: none !important;
+  outline: 3px solid #ffd861;
+  outline-offset: 3px;
+}
+
+body > .champion-card-drag-ghost {
+  position: fixed;
+  z-index: 320;
+  width: 82px !important;
+  height: 115px !important;
+  overflow: hidden !important;
+  border: 2px solid #ffd861;
+  border-radius: 8px;
+  padding: 0 !important;
+  opacity: 0.96;
+  background: #071a2a;
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.55), 0 0 20px rgba(255, 205, 71, 0.5);
+  transform: translate(-50%, -50%) rotate(2deg) !important;
+  pointer-events: none;
+}
+
+body > .champion-card-drag-ghost > .identity-orientation-layer,
+body > .champion-card-drag-ghost img {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover;
+  opacity: 1 !important;
+  filter: none !important;
+  transform: none !important;
+}
+
+body > .champion-card-drag-ghost > :not(.identity-orientation-layer) {
+  display: none !important;
 }

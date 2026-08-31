@@ -176,9 +176,15 @@ async function installRichBoardFixture(page) {
       };
       player.burnOuts = index + 1;
       player.xp = index + 2;
+      if (player.legend) {
+        player.legend.empoweredCount = 1;
+        player.legend.maxEmpowerCount = Math.max(2, Number(player.legend.maxEmpowerCount) || 0);
+      }
       if (player.champion) {
         player.champion.zone = "champion";
         player.championPlayed = false;
+        player.champion.empoweredCount = 1;
+        player.champion.maxEmpowerCount = Math.max(2, Number(player.champion.maxEmpowerCount) || 0);
       }
 
       fixture.players.push({
@@ -191,6 +197,10 @@ async function installRichBoardFixture(page) {
         base: player.base.length,
         legend: player.legend ? 1 : 0,
         champion: player.champion ? 1 : 0,
+        legendId: player.legend?.instanceId || "",
+        championId: player.champion?.instanceId || "",
+        legendEmpoweredCount: player.legend?.empoweredCount || 0,
+        championEmpoweredCount: player.champion?.empoweredCount || 0,
         runes: player.runes.length,
         xp: player.xp,
         burnOuts: player.burnOuts,
@@ -1041,6 +1051,93 @@ async function assertPersistentTable(page, fixture) {
     await expect(seat.locator(".pile-main-deck .pile-label")).toBeVisible();
     await expect(seat.locator(".pile-trash .pile-label")).toBeVisible();
     await expect(seat.locator(".pile-banished .pile-label")).toBeVisible();
+    const identityDock = seat.locator(".tabletop-identity-dock");
+    const identityPresentation = await identityDock.evaluate((dock, data) => {
+      const serializeRect = (rect) => ({
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        left: rect.left
+      });
+      const overlapArea = (left, right) => {
+        const width = Math.max(0, Math.min(left.right, right.right) - Math.max(left.left, right.left));
+        const height = Math.max(0, Math.min(left.bottom, right.bottom) - Math.max(left.top, right.top));
+        return width * height;
+      };
+      const pile = dock.parentElement?.querySelector(".pile-banished");
+      const pileDock = dock.parentElement?.querySelector(".table-pile-dock");
+      const inspect = (zone, cardId) => {
+        const card = dock.querySelector(`[data-zone="${zone}"] .identity-button[data-card-id="${CSS.escape(cardId)}"]`);
+        const layer = card?.querySelector(":scope > .identity-orientation-layer");
+        const image = layer?.querySelector("img");
+        const marker = card?.querySelector(":scope > .identity-empowered-marker");
+        if (!card || !layer || !image || !marker) return null;
+        const cardRect = card.getBoundingClientRect();
+        const markerRect = marker.getBoundingClientRect();
+        return {
+          markerText: marker.textContent || "",
+          markerCount: marker.getAttribute("data-empowered-count") || "",
+          markerWidth: markerRect.width,
+          markerHeight: markerRect.height,
+          cardWidth: cardRect.width,
+          cardOpacity: getComputedStyle(card).opacity,
+          cardFilter: getComputedStyle(card).filter,
+          layerOpacity: getComputedStyle(layer).opacity,
+          layerFilter: getComputedStyle(layer).filter,
+          imageOpacity: getComputedStyle(image).opacity,
+          imageFilter: getComputedStyle(image).filter
+        };
+      };
+      return {
+        legend: inspect("legend", data.legendId),
+        champion: inspect("champion", data.championId),
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+        identityDockRect: serializeRect(dock.getBoundingClientRect()),
+        pileDockRect: pileDock ? serializeRect(pileDock.getBoundingClientRect()) : null,
+        banishedPileRect: pile ? serializeRect(pile.getBoundingClientRect()) : null,
+        banishedIdentityOverlap: pile
+          ? overlapArea(dock.getBoundingClientRect(), pile.getBoundingClientRect())
+          : -1
+      };
+    }, { legendId: player.legendId, championId: player.championId });
+    expect.soft(
+      identityPresentation.banishedIdentityOverlap,
+      `${player.id} banished pile must not cover the identity dock: ${JSON.stringify({
+        viewport: identityPresentation.viewport,
+        identityDock: identityPresentation.identityDockRect,
+        pileDock: identityPresentation.pileDockRect,
+        banishedPile: identityPresentation.banishedPileRect
+      })}`
+    ).toBe(0);
+    for (const [kind, presentation, count] of [
+      ["legend", identityPresentation.legend, player.legendEmpoweredCount],
+      ["champion", identityPresentation.champion, player.championEmpoweredCount]
+    ]) {
+      expect(presentation, `${player.id} ${kind} identity presentation is missing`).not.toBeNull();
+      expect.soft(presentation.markerText, `${player.id} ${kind} empowered marker text`).toMatch(/강화됨|Empowered/iu);
+      expect.soft(presentation.markerCount, `${player.id} ${kind} empowered marker count`).toBe(String(count));
+      expect.soft({
+        cardOpacity: presentation.cardOpacity,
+        cardFilter: presentation.cardFilter,
+        layerOpacity: presentation.layerOpacity,
+        layerFilter: presentation.layerFilter,
+        imageOpacity: presentation.imageOpacity,
+        imageFilter: presentation.imageFilter
+      }, `${player.id} ${kind} identity art must remain crisp`).toEqual({
+        cardOpacity: "1",
+        cardFilter: "none",
+        layerOpacity: "1",
+        layerFilter: "none",
+        imageOpacity: "1",
+        imageFilter: "none"
+      });
+      expect.soft(presentation.markerHeight, `${player.id} ${kind} empowered marker must stay compact`).toBeLessThanOrEqual(18);
+      expect.soft(presentation.markerWidth, `${player.id} ${kind} empowered marker must fit inside its card`).toBeLessThan(presentation.cardWidth);
+    }
     const unit = seat.locator(`[data-card-id="${player.unitId}"]`);
     await expect(unit).toHaveClass(/physical-board-card/u);
     await expect(unit).toHaveAttribute("data-current-might", /^-?\d+$/u);

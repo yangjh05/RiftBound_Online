@@ -255,7 +255,6 @@ let localMatch = null;
 let sideboardDrafts = [];
 let sideboardPlayerId = "p1";
 let sideboardSelectedMain = null;
-let sideboardFirstPlayerId = null;
 let aiMode = false;
 let aiHumanPlayerId = null;
 let aiPlayerId = null;
@@ -1832,6 +1831,7 @@ function gameUiRenderIssue(candidate) {
   if (candidate.phase === "first-player") {
     const decision = candidate.firstPlayerDecision;
     if (!decision || typeof decision !== "object" || Array.isArray(decision)) return "Play-order decision is invalid.";
+    if (!["roll", "designated", "preset"].includes(decision.method)) return "Play-order method is invalid.";
     if (decision.method === "roll") {
       if (!decision.rolls || typeof decision.rolls !== "object" || Array.isArray(decision.rolls)
         || [...playerIds].some((playerId) => !Object.prototype.hasOwnProperty.call(decision.rolls, playerId))) {
@@ -1844,8 +1844,20 @@ function gameUiRenderIssue(candidate) {
       if (decision.status === "rolling" && !playerIds.has(decision.rollerId)) return "Play-order roller is invalid.";
       if (decision.status === "choosing" && (!playerIds.has(decision.chooserId) || !playerIds.has(decision.winnerId))) return "Play-order chooser is invalid.";
       if (!["rolling", "choosing"].includes(decision.status)) return "Play-order status is invalid.";
-    } else if (!playerIds.has(candidate.firstPlayerId)) return "First player is invalid.";
+    } else if (decision.method === "designated") {
+      if (decision.status !== "choosing"
+        || !playerIds.has(decision.chooserId)
+        || decision.winnerId !== decision.chooserId
+        || candidate.firstPlayerId != null) return "Designated play-order chooser is invalid.";
+    } else if (decision.status !== "ready" || !playerIds.has(candidate.firstPlayerId)) {
+      return "Preset first player is invalid.";
+    }
     if (candidate.players.some((player) => !player.legend)) return "First-player legends are unavailable.";
+    if (candidate.officialMatchSetup) {
+      if (candidate.players.some((player) => !player.champion)) return "First-player champions are unavailable.";
+      if (candidate.battlefields.length < 2) return "First-player Battlefields are unavailable.";
+      if (candidate.players.some((player) => player.hand.length !== 0)) return "Opening hands were drawn before play order was chosen.";
+    }
   }
   if (candidate.phase === "champion-select") {
     if (!playerIds.has(candidate.championSelectPlayerId)) return "Champion selector is invalid.";
@@ -1974,10 +1986,12 @@ function renderApp() {
     decisionVisibleToViewer(game.pendingPayment, nextViewerPlayerId)
     || pendingChoiceVisible
   );
-  // Decisions temporarily occupy the interaction surface, but they must not
-  // erase the user's inspector preference. Once the decision closes, the last
-  // inspected card returns automatically unless the user explicitly closed it.
-  if (blockingDecisionVisible) closeTabletopSheets("inspector");
+  const chainDecisionVisible = Boolean(
+    pendingChoiceVisible && pendingChoiceSharesChainSurface(game.pendingChoice)
+  );
+  // Standalone choices own the interaction surface. A choice that belongs to
+  // the live Chain must still allow its source/target card to remain readable.
+  if (pendingChoiceVisible && !chainDecisionVisible) closeTabletopSheets("inspector");
   const player = viewerPlayer();
   if (viewerCanAct()) uiLegalActions = enumerateLegalActions(game, nextViewerPlayerId);
   pruneMoveSelection();
@@ -1986,7 +2000,12 @@ function renderApp() {
   const presentationUpdate = updateGamePresentation();
   const interaction = interactionStatus();
   const utilitySheetOpen = Boolean(graveyardOpenPlayerId || banishedOpenPlayerId || intelOpenPlayerId || logOpen);
-  const inspectorVisible = Boolean(inspectorOpen && uiSelectedCard() && !blockingDecisionVisible && !utilitySheetOpen);
+  const inspectorVisible = Boolean(
+    inspectorOpen
+    && uiSelectedCard()
+    && (!pendingChoiceVisible || chainDecisionVisible)
+    && !utilitySheetOpen
+  );
   window.__riftboundGame = game;
   window.__riftboundRender = render;
   app.innerHTML = `
@@ -2661,6 +2680,7 @@ function handleReplayGameClick(event) {
   if (action === "toggle-chain-zone") { chainZoneCollapsed = !chainZoneCollapsed; return; }
   if (action === "inspect-chain-effect") {
     inspectedChainItemId = inspectedChainItemId === button.dataset.chainItemId ? null : button.dataset.chainItemId;
+    if (inspectedChainItemId && button.dataset.cardId) setUiSelectedCard(button.dataset.cardId, { openInspector: true });
     syncInspectedChainTargets();
     return;
   }
@@ -4279,7 +4299,6 @@ function recordLocalGameIfComplete() {
   sideboardDrafts = localMatch.currentDecks.map((deck) => structuredClone(deck));
   sideboardPlayerId = "p1";
   sideboardSelectedMain = null;
-  sideboardFirstPlayerId = localMatch.nextFirstPlayerId || null;
   resultDismissed = true;
 }
 
@@ -4293,8 +4312,10 @@ function sideboardingView() {
   const playerIndex = playerId === "p2" ? 1 : 0;
   const draft = isOnlineGame() ? online.match?.currentDeck : sideboardDrafts[playerIndex];
   const submitted = Boolean(match?.submissions?.[playerId]);
-  const locked = match?.phase === "between-games" || match?.lastGameWasDraw;
-  const chooser = match?.firstPlayerChooserId === playerId;
+  const sideboardingEnabled = isOnlineGame()
+    ? Boolean(online.room?.sideboardingEnabled)
+    : Boolean(match?.sideboardingEnabled);
+  const locked = !sideboardingEnabled;
   const wins = match?.wins || { p1: 0, p2: 0 };
   if (!draft) return `<main class="shell-screen sideboarding-screen"><p class="empty">${locale() === LOCALES.KO ? "사이드보드 정보를 기다리고 있습니다." : "Waiting for sideboard data."}</p></main>`;
   return `
@@ -4303,12 +4324,17 @@ function sideboardingView() {
         <header class="sideboarding-head">
           <div>
             <p class="eyebrow visible">${locale() === LOCALES.KO ? `게임 ${match.gameNumber} 종료` : `Game ${match.gameNumber} complete`}</p>
-            <h1>${locked ? (locale() === LOCALES.KO ? "무승부 후 다음 게임 준비" : "Prepare after a draw") : (locale() === LOCALES.KO ? "사이드보딩" : "Sideboarding")}</h1>
-            <p>${locked ? (locale() === LOCALES.KO ? "무승부였으므로 카드를 교체할 수 없고 직전 전장을 그대로 사용합니다." : "Cards cannot be exchanged after a draw, and both previous Battlefields are locked.") : (locale() === LOCALES.KO ? "주 덱 카드와 사이드 카드를 같은 수만큼 교환해 주세요." : "Exchange the same number of Main Deck and Sideboard cards.")}</p>
+            <h1>${locked ? (locale() === LOCALES.KO ? "다음 게임 준비" : "Prepare for the next game") : (locale() === LOCALES.KO ? "사이드보딩" : "Sideboarding")}</h1>
+            <p>${locked
+              ? (locale() === LOCALES.KO ? "등록한 덱 구성으로 다음 게임을 준비합니다." : "Prepare the next game with the registered deck configuration.")
+              : match?.lastGameWasDraw
+                ? (locale() === LOCALES.KO ? "이전 선후공은 유지되고 무승부 전장은 다시 선택할 수 있습니다. 주 덱과 사이드 카드를 같은 수만큼 교환해 주세요." : "The previous play order is retained and Battlefields from the drawn game remain available. Exchange the same number of Main Deck and Sideboard cards.")
+                : (locale() === LOCALES.KO ? "주 덱 카드와 사이드 카드를 같은 수만큼 교환해 주세요." : "Exchange the same number of Main Deck and Sideboard cards.")}</p>
           </div>
           <div class="match-score"><strong>${locale() === LOCALES.KO ? "플레이어 1" : "P1"} ${wins.p1}</strong><span>:</span><strong>${wins.p2} ${locale() === LOCALES.KO ? "플레이어 2" : "P2"}</strong></div>
         </header>
         <div class="sideboarding-player-banner">${isOnlineGame() ? (locale() === LOCALES.KO ? "내 사이드보드" : "Your sideboard") : `${playerId.toUpperCase()} · ${locale() === LOCALES.KO ? "다른 플레이어는 화면을 보지 마세요" : "Other player, please look away"}`}</div>
+        ${match?.firstPlayerChooserId ? `<p class="deck-note">${locale() === LOCALES.KO ? "양쪽 전장을 비공개로 고른 뒤 동시에 공개하면, 직전 경기의 패자가 선후공을 선택합니다." : "After both private Battlefield choices are revealed together, the previous game's loser chooses the play order."}</p>` : ""}
         <div class="sideboarding-grid">
           <section class="sideboarding-column">
             <div class="deck-zone-title"><strong>${t("mainDeck", locale())}</strong><span>${mainDeckCount(draft)}/${DECK_RULES.tournamentMainExact}</span></div>
@@ -4321,10 +4347,9 @@ function sideboardingView() {
             <div class="sideboarding-card-list">${draft.sideboard.map(([number, count]) => sideboardCardRow(number, count, "sideboard", locked || submitted)).join("") || `<p class="empty">${locale() === LOCALES.KO ? "등록된 사이드 카드가 없습니다." : "No registered Sideboard cards."}</p>`}</div>
           </section>
         </div>
-        ${chooser ? `<fieldset class="first-player-choice" ${submitted ? "disabled" : ""}><legend>${locale() === LOCALES.KO ? "이전 게임 패자: 다음 게임의 선공 플레이어를 선택하세요." : "Previous game loser: choose who plays first."}</legend><label><input type="radio" name="next-first" value="p1" data-action="sideboard-first-player" ${sideboardFirstPlayerId === "p1" ? "checked" : ""}/> ${locale() === LOCALES.KO ? "플레이어 1" : "P1"}</label><label><input type="radio" name="next-first" value="p2" data-action="sideboard-first-player" ${sideboardFirstPlayerId === "p2" ? "checked" : ""}/> ${locale() === LOCALES.KO ? "플레이어 2" : "P2"}</label></fieldset>` : ""}
         <div class="sideboarding-actions">
           ${sideboardSelectedMain ? `<button class="secondary" data-action="sideboard-cancel-selection">${locale() === LOCALES.KO ? "선택 취소" : "Cancel selection"}</button>` : ""}
-          <button class="primary" data-action="sideboard-submit" ${submitted || (chooser && !sideboardFirstPlayerId) ? "disabled" : ""}>${submitted ? (locale() === LOCALES.KO ? "상대 준비 대기 중" : "Waiting for opponent") : (locale() === LOCALES.KO ? "구성 확정" : "Confirm configuration")}</button>
+          <button class="primary" data-action="sideboard-submit" ${submitted ? "disabled" : ""}>${submitted ? (locale() === LOCALES.KO ? "상대 준비 대기 중" : "Waiting for opponent") : (locale() === LOCALES.KO ? "구성 확정" : "Confirm configuration")}</button>
         </div>
       </section>
     </main>
@@ -4348,24 +4373,20 @@ function swapSideboardCard(draft, mainNumber, sideNumber) {
 }
 
 async function submitSideboardDraft() {
-  const match = activeBetweenGamesMatch();
   const playerId = isOnlineGame() ? online.playerId : sideboardPlayerId;
   const index = playerId === "p2" ? 1 : 0;
   const draft = isOnlineGame() ? online.match.currentDeck : sideboardDrafts[index];
-  const firstPlayerId = match.firstPlayerChooserId === playerId ? sideboardFirstPlayerId : null;
   if (isOnlineGame()) {
-    dispatchGameCommand({ kind: "submitSideboard", deckRecord: draft, firstPlayerId });
+    dispatchGameCommand({ kind: "submitSideboard", deckRecord: draft });
     return;
   }
-  const result = submitSideboardConfiguration(localMatch, playerId, draft, cardByNumber, firstPlayerId);
+  const result = submitSideboardConfiguration(localMatch, playerId, draft, cardByNumber);
   if (!result.ok) { recentFeedback = { tone: "error", message: result.message }; return; }
   if (aiMode && playerId === "p1") {
-    const aiFirst = localMatch.firstPlayerChooserId === "p2" ? "p2" : null;
-    submitSideboardConfiguration(localMatch, "p2", sideboardDrafts[1], cardByNumber, aiFirst);
+    submitSideboardConfiguration(localMatch, "p2", sideboardDrafts[1], cardByNumber);
   } else if (!localMatch.submissions.p2) {
     sideboardPlayerId = "p2";
     sideboardSelectedMain = null;
-    sideboardFirstPlayerId = localMatch.nextFirstPlayerId || null;
   }
   if (localMatch.phase === "ready-next-game") startNextLocalMatchGame();
 }
@@ -4375,8 +4396,9 @@ function startNextLocalMatchGame() {
   if (!next.ok) return;
   game = createGame({
     interactive: true,
-    randomFirstPlayer: !next.firstPlayerId,
+    randomFirstPlayer: !next.firstPlayerId && !next.firstPlayerChooserId,
     firstPlayerId: next.firstPlayerId,
+    firstPlayerChooserId: next.firstPlayerChooserId,
     lockedBattlefields: next.lockedBattlefields,
     unavailableBattlefields: next.unavailableBattlefields,
     format: localMatch.sideboardingEnabled ? "match" : "duel",
@@ -5065,7 +5087,12 @@ function diffSet(current, previous) {
 
 function headline() {
   if (game.phase === "complete") return t("wins", locale(), { name: winnerName() });
-  if (game.phase === "first-player") return t("firstPlayerRoll", locale());
+  if (game.phase === "first-player") {
+    const method = game.firstPlayerDecision?.method;
+    if (method === "roll") return t("firstPlayerRoll", locale());
+    if (method === "preset") return locale() === LOCALES.KO ? "선후공 확인" : "Confirm play order";
+    return locale() === LOCALES.KO ? "선후공 선택" : "Choose play order";
+  }
   if (game.phase === "champion-select") {
     const championPlayer = game.players.find((player) => player.id === game.championSelectPlayerId);
     return `${playerName(championPlayer)}: ${t("chooseChampion", locale())}`;
@@ -5166,7 +5193,11 @@ function interactionStatus() {
 }
 
 function turnLabel() {
-  if (game.phase === "first-player") return t("roll", locale());
+  if (game.phase === "first-player") {
+    return game.firstPlayerDecision?.method === "roll"
+      ? t("roll", locale())
+      : (locale() === LOCALES.KO ? "선후공" : "Play order");
+  }
   if (game.phase === "champion-select") return t("champion", locale());
   if (game.phase === "battlefield-select") return t("setup", locale());
   if (game.phase === "mulligan") return t("mulligan", locale());
@@ -5177,15 +5208,19 @@ function turnLabel() {
 function firstPlayerPanel() {
   const decision = game.firstPlayerDecision;
   if (decision?.method === "roll") return firstPlayerRollPanel(decision);
+  if (decision?.method === "designated") return designatedFirstPlayerPanel(decision);
   const first = game.players.find((player) => player.id === game.firstPlayerId);
   const second = game.players.find((player) => player.id !== game.firstPlayerId);
+  if (!first || !second) return privateFirstPlayerWaitingPanel(null);
   return `
     <section class="first-player-screen">
       <article class="first-player-card">
         <div class="section-head">
           <div>
             <h2>${t("firstPlayer", locale())}</h2>
-            <span>${t("decidedBeforeSetup", locale())}</span>
+            <span>${game.officialMatchSetup
+              ? (locale() === LOCALES.KO ? "전장 공개 후 확정된 선후공입니다." : "This play order is confirmed after both Battlefields are revealed.")
+              : t("decidedBeforeSetup", locale())}</span>
           </div>
         </div>
         <div class="first-player-result">
@@ -5457,6 +5492,40 @@ function gamePanel(player) {
         ${handDrawer(player)}
       </div>
     </div>
+  `;
+}
+
+function designatedFirstPlayerPanel(decision) {
+  const chooser = game.players.find((player) => player.id === decision.chooserId);
+  if (!setupSelectionVisibleToViewer(chooser?.id)) return privateFirstPlayerWaitingPanel(chooser);
+  const canChoose = Boolean(chooser && viewerCanAct());
+  return `
+    <section class="first-player-screen">
+      <article class="first-player-card designated-order-card">
+        <div class="section-head">
+          <div>
+            <h2>${locale() === LOCALES.KO ? "선후공 선택" : "Choose play order"}</h2>
+            <span>${locale() === LOCALES.KO ? "전장을 동시에 공개했습니다." : "Both Battlefields have been revealed."}</span>
+          </div>
+        </div>
+        <p class="dice-order-notice">${locale() === LOCALES.KO
+          ? `${escapeHtml(playerName(chooser))}님이 이번 게임의 선공 플레이어를 선택합니다.`
+          : `${escapeHtml(playerName(chooser))} chooses who plays first this game.`}</p>
+        <div class="first-player-result">
+          ${game.players.map((player, index) => `
+            ${index ? `<div class="versus">${locale() === LOCALES.KO ? "대" : "VS"}</div>` : ""}
+            <div class="first-seat">
+              ${imageCard(player.legend, "select-only")}
+              <strong>${escapeHtml(playerName(player))}</strong>
+              <span>${locale() === LOCALES.KO ? "선공 후보" : "First-player candidate"}</span>
+            </div>
+          `).join("")}
+        </div>
+        <div class="play-order-actions">
+          ${game.players.map((player) => `<button class="${player.id === chooser?.id ? "primary" : "secondary"}" data-action="choose-first-player" data-player="${escapeHtml(player.id)}" ${canChoose ? "" : "disabled"}>${locale() === LOCALES.KO ? `${escapeHtml(playerName(player))} 선공` : `${escapeHtml(playerName(player))} plays first`}</button>`).join("")}
+        </div>
+      </article>
+    </section>
   `;
 }
 
@@ -6147,7 +6216,9 @@ function choiceModalAttributes(choice, { inline = false } = {}) {
   const key = `choice-${choice?.id || choice?.effect || "pending"}`;
   const label = localizedChoicePrompt(choice) || (locale() === LOCALES.KO ? "효과 선택" : "Effect choice");
   if (replayMode) return `role="region" aria-label="${escapeHtml(label)}" aria-readonly="true" data-replay-readonly-decision inert`;
-  if (inline) return `role="region" aria-label="${escapeHtml(label)}" aria-live="polite" data-choice-stage="${escapeHtml(key)}"`;
+  if (inline || pendingChoiceSharesChainSurface(choice)) {
+    return `role="region" aria-label="${escapeHtml(label)}" aria-live="polite" data-choice-stage="${escapeHtml(key)}"`;
+  }
   return `role="dialog" aria-modal="true" aria-label="${escapeHtml(label)}" data-ui-modal data-modal-key="${escapeHtml(key)}" tabindex="-1"`;
 }
 
@@ -6509,7 +6580,7 @@ function triggerOrderPanel(choice) {
   const triggerOptions = choice.options.filter((option) => !option.confirmTriggerOrder);
   const confirmOption = choice.options.find((option) => option.confirmTriggerOrder);
   const total = triggerOptions.length;
-  const mandatoryRemaining = triggerOptions.filter((option) => !option.optionalTrigger && !option.selected).length;
+  const requiredRemaining = triggerOptions.filter((option) => !option.selected).length;
   return `
     <section class="choice-panel modal-panel trigger-order-panel" ${choiceModalAttributes(choice)}>
       <div class="section-head trigger-order-head">
@@ -6517,7 +6588,7 @@ function triggerOrderPanel(choice) {
           <h2>${t("triggerOrderTitle", locale())}</h2>
           <span>${t("triggerOrderProgress", locale(), { selected: chosen.length, total })}</span>
           <p class="choice-instruction trigger-order-instruction">${t("triggerOrderHelp", locale())}</p>
-          ${mandatoryRemaining ? `<p class="trigger-order-required">${t("triggerOrderMandatoryRemaining", locale(), { n: mandatoryRemaining })}</p>` : ""}
+          ${requiredRemaining ? `<p class="trigger-order-required">${t("triggerOrderMandatoryRemaining", locale(), { n: requiredRemaining })}</p>` : ""}
         </div>
         ${confirmOption ? `
           <div class="trigger-order-confirm">
@@ -6561,7 +6632,7 @@ function triggerOrderOptionButton(choice, option) {
       <button type="button" class="choice-option trigger-order-option ${option.selected ? "is-selected" : ""}" data-action="choose-effect" data-choice="${option.id}" data-card-id="${option.cardId || ""}" aria-pressed="${Boolean(option.selected)}">
         <strong class="trigger-order-rank">${option.selected
           ? t("triggerOrderChooseRank", locale(), { n: option.selectionOrder })
-          : t(option.optionalTrigger ? "triggerOrderOptional" : "triggerOrderMandatory", locale())}</strong>
+          : t(option.wasOptionalTrigger ? "triggerOrderAcceptedOptional" : "triggerOrderMandatory", locale())}</strong>
         ${option.cardId ? choiceOptionImage(option) : ""}
         <span class="choice-card-name">${sourceName}</span>
         <span class="trigger-order-kind">${triggerKindLabel(trigger) || t("triggeredAbility", locale())}</span>
@@ -7203,7 +7274,6 @@ function chainZonePanel() {
     chainZoneCollapsed = false;
     return "";
   }
-  if (counteredItems.length) chainZoneCollapsed = false;
   return `
     <section class="chain-zone chain-pod ${chainZoneCollapsed ? "is-collapsed" : ""} ${counteredItems.length ? "has-counter-animation" : ""}" data-zone="chain" aria-label="${t("processingQueue", locale())}" aria-live="polite">
       <div class="chain-zone-head">
@@ -7217,7 +7287,7 @@ function chainZonePanel() {
           ${t(chainZoneCollapsed ? "showChain" : "hideChain", locale())}
         </button>
       </div>
-      <div id="chain-zone-content" class="chain-zone-content" data-scroll-key="chain-zone-content" ${chainZoneCollapsed ? "hidden" : ""}>
+      <div id="chain-zone-content" class="chain-zone-content" ${chainZoneCollapsed ? "hidden" : ""}>
         <div class="chain-stack" data-scroll-key="chain-stack">
           ${counteredItems.map(counteredChainZoneItem).join("")}${items.map((item, index) => chainZoneItem(item, items.length - index, { active: index === 0 })).join("") || `<p class="empty">${t("noChainItem", locale())}</p>`}
         </div>
@@ -7241,17 +7311,26 @@ function currentChainTreeItems() {
       status: trigger.status || "pending"
     }))
   ];
+  const liveItems = [...chainItems, ...triggerItems];
+  if (resolvingItem) {
+    const matchingIndex = liveItems.findIndex((item) => chainPresentationItemsMatch(resolvingItem, item));
+    if (matchingIndex >= 0) {
+      liveItems[matchingIndex] = { ...liveItems[matchingIndex], status: "resolving" };
+    } else {
+      liveItems.unshift(resolvingItem);
+    }
+  }
   const seen = new Set();
-  const liveItems = [resolvingItem, ...chainItems, ...triggerItems].filter((item) => {
+  const uniqueLiveItems = liveItems.filter((item) => {
     if (!item) return false;
     const id = String(item.id || "");
     if (id && seen.has(id)) return false;
     if (id) seen.add(id);
     return true;
   });
-  if (liveItems.length) {
-    chainTreePresentationItems = liveItems.map(snapshotChainPresentationItem);
-    return liveItems;
+  if (uniqueLiveItems.length) {
+    chainTreePresentationItems = uniqueLiveItems.map(snapshotChainPresentationItem);
+    return uniqueLiveItems;
   }
   const pending = game?.pendingChoice || game?.pendingPayment;
   const activeChainState = Boolean(
@@ -7274,6 +7353,19 @@ function currentChainTreeItems() {
   return [];
 }
 
+function chainPresentationItemsMatch(pendingItem, chainItem) {
+  if (!pendingItem || !chainItem) return false;
+  const ownedChainItemId = String(pendingItem.presentationChainItemId || "");
+  if (ownedChainItemId) return ownedChainItemId === String(chainItem.id || "");
+  const pendingTriggerId = String(pendingItem.trigger?.id || "");
+  const chainTriggerId = String(chainItem.trigger?.id || "");
+  if (pendingTriggerId && chainTriggerId) return pendingTriggerId === chainTriggerId;
+  const pendingCardId = String(chainItemSourceCard(pendingItem)?.instanceId || pendingItem.trigger?.sourceCardId || "");
+  const chainCardId = String(chainItemSourceCard(chainItem)?.instanceId || chainItem.trigger?.sourceCardId || "");
+  if (!pendingCardId || pendingCardId !== chainCardId) return false;
+  return String(pendingItem.itemType || "card") === String(chainItem.itemType || "card");
+}
+
 function pendingResolutionChainItem() {
   const pending = game?.pendingChoice || game?.pendingPayment;
   if (!pending || typeof pending !== "object") return null;
@@ -7293,6 +7385,7 @@ function pendingResolutionChainItem() {
   const id = triggerId || `resolving-${chainKind || "trigger"}-${pending.id || sourceCardId || pending.effect || "effect"}`;
   const item = {
     id,
+    presentationChainItemId: pendingResolutionOwnerChainItemId(pending),
     itemType,
     playerId: pending.playerId || card?.controllerId || card?.ownerId || "",
     card,
@@ -7311,12 +7404,35 @@ function pendingResolutionChainItem() {
   return chainItemVisibleInTree(item) ? item : null;
 }
 
+function pendingResolutionOwnerChainItemId(pending) {
+  if (!pending || typeof pending !== "object") return "";
+  return String(
+    pending.playProcess?.chainItemId
+    || pending.effectPlay?.chainItemId
+    || pending.activatedAbility?.sourceCard?.activationProcess?.chainItemId
+    || pending.card?.activationProcess?.chainItemId
+    || pending.triggeredAbility?.trigger?.pendingChainItemId
+    || pending.data?.trigger?.pendingChainItemId
+    || ""
+  );
+}
+
 function pendingDecisionChainKind(pending) {
   if (!pending || typeof pending !== "object") return null;
   if (pending.fromShowdownChain) return "showdown";
   if (pending.fromActionChain) return "action";
   const contextKind = pending.gameEffectResolution?.context?.chainKind;
   return ["action", "showdown"].includes(contextKind) ? contextKind : null;
+}
+
+function pendingChoiceSharesChainSurface(pending) {
+  if (!pending || typeof pending !== "object") return false;
+  return Boolean(
+    pendingDecisionChainKind(pending)
+    || game?.actionChain
+    || (Array.isArray(game?.showdown?.chain) && game.showdown.chain.length)
+    || (Array.isArray(game?.triggerQueue) && game.triggerQueue.length)
+  );
 }
 
 function snapshotChainPresentationItem(item) {
@@ -7439,8 +7555,6 @@ function chainZoneItem(item = {}, order = 0, { active = false } = {}) {
   const playerId = String(item?.playerId || "");
   const player = (Array.isArray(game?.players) ? game.players : []).find((candidate) => candidate?.id === item?.playerId);
   const targets = chainItemTargetIds(item).map(targetLabel).filter(Boolean).map(escapeHtml);
-  const source = chainItemSourceTitle(item);
-  const effectText = chainItemEffectText(item);
   const previewCard = chainItemSourceCard(item);
   const previewCardId = String(previewCard?.instanceId || item?.trigger?.sourceCardId || "");
   const snapshotPreview = previewCard === triggerSnapshotCard(item?.trigger);
@@ -7457,11 +7571,6 @@ function chainZoneItem(item = {}, order = 0, { active = false } = {}) {
     `status-${statusClass}`,
     choiceCardStateClasses(previewCardId)
   ].filter(Boolean).join(" ");
-  const effectMarkup = effectText.summary || effectText.detail
-    ? active
-      ? `<p class="chain-active-effect-text">${effectText.summary ? `<strong class="chain-selected-ability">${escapeHtml(effectText.summary)}</strong>${effectText.detail ? "<br />" : ""}` : ""}${effectText.detail ? `<span>${escapeHtml(effectText.detail)}</span>` : ""}</p>`
-      : `<p class="chain-zone-effect">${effectText.summary ? `<strong class="chain-selected-ability">${escapeHtml(effectText.summary)}</strong>${effectText.detail ? "<br />" : ""}` : ""}${effectText.detail ? `<span>${escapeHtml(effectText.detail)}</span>` : ""}</p>`
-    : "";
   return `
     <button type="button" class="${itemClass}" data-action="inspect-chain-effect" data-chain-item-id="${escapeHtml(itemId)}" data-card-id="${escapeHtml(previewCardId)}" title="${escapeHtml(t("target", locale()))}">
       <span class="chain-card-motion-anchor" data-motion-anchor data-motion-zone="chain" data-motion-player-id="${escapeHtml(playerId)}" data-motion-card-id="${escapeHtml(previewCardId)}" aria-hidden="true">
@@ -7470,9 +7579,7 @@ function chainZoneItem(item = {}, order = 0, { active = false } = {}) {
       <span class="chain-zone-copy">
         <span class="chain-zone-meta"><b>[${escapeHtml(order)}] ${escapeHtml(playerPerspectiveLabel(player?.id || playerId))}</b><em>${escapeHtml(localizedDynamicText(t(status, locale())))}</em></span>
         <strong>${escapeHtml(chainItemTitle(item))}</strong>
-        <span class="chain-zone-source">${escapeHtml(t("source", locale()))}: ${escapeHtml(source)}</span>
         <span class="chain-zone-target">${escapeHtml(t("target", locale()))}: ${targets.length ? targets.join(", ") : escapeHtml(t("noTargetDeclared", locale()))}</span>
-        ${effectMarkup}
       </span>
     </button>
   `;
@@ -7552,7 +7659,6 @@ function priorityResponseControls(actionMarkup = "") {
   return `
     <div class="priority-response-controls" role="group" aria-label="${escapeHtml(locale() === LOCALES.KO ? "반응 또는 패스" : "React or pass")}">
       ${actionMarkup ? `<div class="priority-card-actions">${actionMarkup}</div>` : ""}
-      <button class="primary action-window-toggle" data-action="toggle-hand">${handOpen ? t("hideHand", locale()) : playWindowControlLabel()}</button>
       ${passControlButton()}
     </div>
   `;
@@ -7962,11 +8068,18 @@ function miniIdentity(card, player = null) {
   const exhausted = card?.exhausted ? " exhausted" : "";
   const sourceGlow = uiMotion.sourceIds.has(card?.instanceId) ? " source-card-glow" : "";
   const chainTarget = chainTargetClass(card?.instanceId) ? " chain-effect-target" : "";
+  const championDestinations = player && card?.instanceId === player.champion?.instanceId
+    ? legalChampionPlayDestinations(card.instanceId)
+    : [];
+  const dragAttributes = championDestinations.length
+    ? `data-card-drag="champion" data-play-destinations="${escapeHtml(championDestinations.join(" "))}" draggable="true"`
+    : `draggable="false"`;
   return `
-    <button class="identity-button${championState}${exhausted}${sourceGlow}${chainTarget} ${choiceCardStateClasses(card.instanceId)}" data-action="select-card" data-card="${escapeHtml(card.instanceId || "")}" data-card-id="${escapeHtml(card.instanceId || "")}" data-exhausted="${Boolean(card.exhausted)}" title="${escapeHtml(cardName(card))}">
+    <button class="identity-button${championState}${exhausted}${sourceGlow}${chainTarget} ${cardStatusClassNames(card)} ${choiceCardStateClasses(card.instanceId)}" data-action="select-card" data-card="${escapeHtml(card.instanceId || "")}" data-card-id="${escapeHtml(card.instanceId || "")}" data-exhausted="${Boolean(card.exhausted)}" ${dragAttributes} title="${escapeHtml(cardName(card))}">
       <span class="identity-orientation-layer card-exhaust-layer">
         ${card.image ? `<img src="${escapeHtml(card.image)}" alt="${escapeHtml(cardName(card))}" loading="lazy" />` : `<span class="identity-card-fallback">${escapeHtml(cardName(card))}</span>`}
       </span>
+      ${identityEmpoweredMarker(card)}
       ${championState || exhausted ? `<span class="identity-state-label">${card.exhausted ? t("spent", locale()) : championState.trim() === "deployed" ? t("used", locale()) : t("zone", locale())}</span>` : ""}
     </button>
   `;
@@ -8158,8 +8271,9 @@ function championIdentityReference(player, champion) {
     physical: false,
     zone,
     markup: `
-      <button class="identity-button champion-away-reference zone-${escapeHtml(zone)}" data-action="select-card" data-card="${escapeHtml(champion.instanceId || "")}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">
+      <button class="identity-button champion-away-reference zone-${escapeHtml(zone)} ${cardStatusClassNames(champion)}" data-action="select-card" data-card="${escapeHtml(champion.instanceId || "")}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">
         ${champion.image ? `<img src="${escapeHtml(champion.image)}" alt="" loading="lazy" />` : `<span class="identity-card-fallback">${escapeHtml(cardName(champion))}</span>`}
+        ${identityEmpoweredMarker(champion)}
         <span>${location}</span>
       </button>
     `
@@ -8347,6 +8461,37 @@ function legalHandCardPlayDestinations(cardId) {
     .filter(Boolean))];
 }
 
+function legalChampionPlayDestinations(cardId) {
+  const requestedCardId = String(cardId || "");
+  const player = viewerPlayer();
+  if (!requestedCardId || !player || replayMode || game?.pendingChoice || game?.pendingPayment || online.commandPending || !viewerCanAct()) return [];
+  if (player.champion?.instanceId !== requestedCardId || player.championPlayed || player.champion?.zone !== "champion") return [];
+  return [...new Set(uiLegalActions
+    .filter((action) => action?.kind === "beginPlayChampion" && typeof action.destination === "string")
+    .filter((action) => tutorialAllowsUiAction("begin-champion", { card: requestedCardId, destination: action.destination }))
+    .map((action) => action.destination)
+    .filter(Boolean))];
+}
+
+function requestChampionPlay(cardId, destination) {
+  const requestedCardId = String(cardId || "");
+  const requestedDestination = String(destination || "");
+  if (!requestedCardId || !requestedDestination) return false;
+  if (!legalChampionPlayDestinations(requestedCardId).includes(requestedDestination)) return false;
+  const player = viewerPlayer();
+  const legalAction = uiLegalActions.find((action) =>
+    action?.kind === "beginPlayChampion" && action.destination === requestedDestination
+  );
+  if (!player || player.champion?.instanceId !== requestedCardId || !legalAction
+    || !tutorialAllowsUiAction("begin-champion", { card: requestedCardId, destination: requestedDestination })) return false;
+  handOpen = false;
+  dispatchGameCommand(
+    { kind: "beginPlayChampion", destination: requestedDestination },
+    () => beginPlayChampion(game, requestedDestination)
+  );
+  return true;
+}
+
 function requestHandCardPlay(cardId, destination) {
   const requestedCardId = String(cardId || "");
   const requestedDestination = String(destination || "");
@@ -8402,18 +8547,20 @@ function cardDragDescriptor(sourceNode) {
   if (!(sourceNode instanceof HTMLElement)) return null;
   const kind = sourceNode.dataset.cardDrag;
   const cardId = String(sourceNode.dataset.cardId || "");
-  if (!cardId || !["play", "move"].includes(kind)) return null;
+  if (!cardId || !["play", "move", "champion"].includes(kind)) return null;
   const destinations = kind === "play"
     ? legalHandCardPlayDestinations(cardId)
-    : legalUnitMoveDestinations(cardId);
+    : kind === "champion"
+      ? legalChampionPlayDestinations(cardId)
+      : legalUnitMoveDestinations(cardId);
   return destinations.length ? { kind, cardId } : null;
 }
 
 function dragSessionDestinations(session = draggingCardSession) {
   if (!session?.cardId) return [];
-  return session.kind === "move"
-    ? legalUnitMoveDestinations(session.cardId)
-    : legalHandCardPlayDestinations(session.cardId);
+  if (session.kind === "move") return legalUnitMoveDestinations(session.cardId);
+  if (session.kind === "champion") return legalChampionPlayDestinations(session.cardId);
+  return legalHandCardPlayDestinations(session.cardId);
 }
 
 function legalDropDestinationNode(node, session = draggingCardSession) {
@@ -8456,7 +8603,7 @@ function updateCardDragDestination(node) {
 function clearCardDragPresentation() {
   const pointerSession = pointerCardDrag;
   pointerCardDrag = null;
-  app.classList.remove("is-dragging-card", "is-dragging-play", "is-dragging-move");
+  app.classList.remove("is-dragging-card", "is-dragging-play", "is-dragging-move", "is-dragging-champion");
   for (const node of app.querySelectorAll(".drag-source-active, [data-play-destination].is-legal-drop, [data-play-destination].drag-over, [data-play-destination].drop-target-active")) {
     node.classList.remove("drag-source-active", "is-legal-drop", "drag-over", "drop-target-active");
   }
@@ -8478,7 +8625,11 @@ function createPointerDragGhost(sourceNode) {
   ghost.removeAttribute("draggable");
   ghost.removeAttribute("tabindex");
   ghost.removeAttribute("role");
-  ghost.classList.add(sourceNode.dataset.cardDrag === "move" ? "board-card-drag-ghost" : "hand-card-drag-ghost");
+  ghost.classList.add(sourceNode.dataset.cardDrag === "move"
+    ? "board-card-drag-ghost"
+    : sourceNode.dataset.cardDrag === "champion"
+      ? "champion-card-drag-ghost"
+      : "hand-card-drag-ghost");
   ghost.setAttribute("aria-hidden", "true");
   document.body.appendChild(ghost);
   return ghost;
@@ -8762,6 +8913,13 @@ function empoweredBoardMarker(card) {
   return `<span class="empowered-board-marker" data-empowered-count="${Math.max(1, Number(card.empoweredCount) || 1)}" title="${escapeHtml(status.badge)}" aria-label="${escapeHtml(status.badge)}"><span aria-hidden="true">✦</span>${escapeHtml(visibleLabel)}</span>`;
 }
 
+function identityEmpoweredMarker(card) {
+  const status = visibleCardStatuses(card).find((candidate) => candidate.kind === "empowered");
+  if (!status) return "";
+  const visibleLabel = locale() === LOCALES.KO ? "강화됨" : "Empowered";
+  return `<span class="identity-empowered-marker" data-empowered-count="${Math.max(1, Number(card.empoweredCount) || 1)}" title="${escapeHtml(status.badge)}" aria-label="${escapeHtml(status.badge)}"><span aria-hidden="true">✦</span>${escapeHtml(visibleLabel)}</span>`;
+}
+
 function boardCardCornerOverlay(card, stats = null) {
   const statusMarkup = cardStatusBadges(card, { excludeKinds: ["empowered"] });
   if (!stats && !statusMarkup) return "";
@@ -8985,7 +9143,7 @@ function actionBar(player, card) {
             ${commandMarkup}
           </div>
           <button data-action="toggle-inspector" ${card ? "" : "disabled"}>${t("cardInfo", locale())}</button>
-          ${responseInfo ? "" : `<button class="primary action-window-toggle" data-action="toggle-hand" title="${escapeHtml(`${t("hand", locale())} ${cardCount}`)}">${handOpen ? t("hideHand", locale()) : playWindowControlLabel()}</button>`}
+          ${!chainSummary && !responseInfo && actionUseWindowAvailable() ? `<button class="primary action-window-toggle" data-action="toggle-hand" title="${escapeHtml(`${t("hand", locale())} ${cardCount}`)}">${handOpen ? t("hideHand", locale()) : playWindowControlLabel()}</button>` : ""}
           ${chainSummary
             ? (responseInfo ? "" : passControlButton({ disabled: waiting || disabled }))
             : `<button data-action="end-turn" ${game.phase !== "action" || waiting || disabled ? "disabled" : ""}>${t("endTurn", locale())}</button>`}
@@ -9010,7 +9168,7 @@ function actionBar(player, card) {
           ${commandMarkup}
         </div>
         <button data-action="toggle-inspector">${t("cardInfo", locale())}</button>
-        ${responseInfo ? "" : `<button class="primary action-window-toggle" data-action="toggle-hand" title="${escapeHtml(`${t("hand", locale())} ${cardCount}`)}">${handOpen ? t("hideHand", locale()) : playWindowControlLabel()}</button>`}
+        ${!chainSummary && !responseInfo && actionUseWindowAvailable() ? `<button class="primary action-window-toggle" data-action="toggle-hand" title="${escapeHtml(`${t("hand", locale())} ${cardCount}`)}">${handOpen ? t("hideHand", locale()) : playWindowControlLabel()}</button>` : ""}
         ${chainSummary
           ? (responseInfo ? "" : passControlButton({ disabled }))
           : `<button data-action="end-turn" ${game.phase !== "action" || !viewerCanAct() ? "disabled" : ""}>${t("endTurn", locale())}</button>`}
@@ -9698,6 +9856,7 @@ app.addEventListener("drop", (event) => {
   clearCardDragPresentation();
   if (destination) {
     if (session.kind === "move") requestUnitMove(session.cardId, destination);
+    else if (session.kind === "champion") requestChampionPlay(session.cardId, destination);
     else requestHandCardPlay(session.cardId, destination);
   }
   render();
@@ -9755,6 +9914,7 @@ app.addEventListener("pointerup", (event) => {
   clearCardDragPresentation();
   if (destination) {
     if (session.kind === "move") requestUnitMove(session.cardId, destination);
+    else if (session.kind === "champion") requestChampionPlay(session.cardId, destination);
     else requestHandCardPlay(session.cardId, destination);
   }
   render();
@@ -9775,7 +9935,7 @@ app.addEventListener("click", (event) => {
 
 function handlePendingChoiceClick(event) {
   if (replayMode || appView !== "game" || !game.pendingChoice) return false;
-  const button = event.target.closest("button[data-action='choose-effect'], button[data-action='decline-effect'], button[data-action='assign-alpha-strike'], button[data-action='adjust-alpha-damage'], button[data-action='confirm-staged-choice'], button[data-action='toggle-choice-drawer'], button[data-action='stage-choice-option'], button[data-action='toggle-hand'], button[data-action='view-choice-card'], button[data-action='close-full-card'], [data-action='stage-choice-card']");
+  const button = event.target.closest("button[data-action='choose-effect'], button[data-action='decline-effect'], button[data-action='assign-alpha-strike'], button[data-action='adjust-alpha-damage'], button[data-action='confirm-staged-choice'], button[data-action='toggle-choice-drawer'], button[data-action='stage-choice-option'], button[data-action='toggle-hand'], button[data-action='toggle-chain-zone'], button[data-action='toggle-inspector'], button[data-action='inspect-chain-effect'], button[data-action='view-chain-card'], button[data-action='focus-chain-target'], button[data-action='view-choice-card'], button[data-action='close-full-card'], [data-action='stage-choice-card']");
   const inlineCard = ["hand", "board"].includes(choiceCardSurface(game.pendingChoice))
     ? event.target.closest("[data-card-id]")
     : null;
@@ -9788,7 +9948,8 @@ function handlePendingChoiceClick(event) {
   const action = button?.dataset.action || "stage-choice-card";
   const choice = button?.dataset.choice;
   const localChoiceUiAction = [
-    "stage-choice-card", "stage-choice-option", "toggle-choice-drawer", "toggle-hand", "adjust-alpha-damage",
+    "stage-choice-card", "stage-choice-option", "toggle-choice-drawer", "toggle-hand", "toggle-chain-zone", "toggle-inspector",
+    "inspect-chain-effect", "view-chain-card", "focus-chain-target", "adjust-alpha-damage",
     "view-choice-card", "close-full-card", "confirm-staged-choice"
   ].includes(action);
   if (!localChoiceUiAction && !tutorialAllowsUiAction(action, { ...(button?.dataset || control.dataset || {}) })) {
@@ -9802,6 +9963,40 @@ function handlePendingChoiceClick(event) {
   }
   if (action === "toggle-hand") {
     handOpen = !handOpen;
+    render();
+    return true;
+  }
+  if (action === "toggle-chain-zone") {
+    chainZoneCollapsed = !chainZoneCollapsed;
+    render();
+    return true;
+  }
+  if (action === "toggle-inspector") {
+    toggleTabletopSheet("inspector");
+    render();
+    return true;
+  }
+  if (action === "inspect-chain-effect") {
+    inspectedChainItemId = inspectedChainItemId === button.dataset.chainItemId ? null : button.dataset.chainItemId;
+    const previewId = String(button.dataset.cardId || "");
+    if (previewId && inspectedChainItemId) setUiSelectedCard(previewId, { openInspector: true });
+    syncInspectedChainTargets();
+    render();
+    return true;
+  }
+  if (action === "view-chain-card") {
+    const previewId = String(button.dataset.cardId || "");
+    const snapshotItem = currentChainTreeItems().find((item) => {
+      const source = chainItemSourceCard(item);
+      return source?.instanceId === previewId || item?.trigger?.sourceCardId === previewId;
+    });
+    fullCardPreviewCard = findVisibleCard(previewId) || chainItemSourceCard(snapshotItem);
+    fullCardOpen = Boolean(fullCardPreviewCard);
+    render();
+    return true;
+  }
+  if (action === "focus-chain-target") {
+    setUiSelectedCard(button.dataset.cardId, { openInspector: true });
     render();
     return true;
   }
@@ -9902,7 +10097,7 @@ app.addEventListener("click", (event) => {
       event.stopPropagation();
       return;
     }
-    if (Date.now() < suppressCardClickUntil && event.target.closest?.("[data-hand-card], .hand-drawer, [data-card-drag='move']")) {
+    if (Date.now() < suppressCardClickUntil && event.target.closest?.("[data-hand-card], .hand-drawer, [data-card-drag]")) {
       event.preventDefault();
       event.stopPropagation();
       return;
@@ -10010,6 +10205,7 @@ app.addEventListener("click", (event) => {
       inspectedChainItemId = inspectedChainItemId === button.dataset.chainItemId ? null : button.dataset.chainItemId;
       fullCardOpen = false;
       fullCardPreviewCard = null;
+      if (inspectedChainItemId && button.dataset.cardId) setUiSelectedCard(button.dataset.cardId, { openInspector: true });
       syncInspectedChainTargets();
     }
     if (action === "focus-chain-target") setUiSelectedCard(button.dataset.cardId);
@@ -10236,11 +10432,6 @@ app.addEventListener("input", (event) => {
     if (action === "settings-sideboarding") {
       settings.sideboardingEnabled = target.checked;
       saveSettings();
-      render();
-      return;
-    }
-    if (action === "sideboard-first-player") {
-      sideboardFirstPlayerId = target.value;
       render();
       return;
     }

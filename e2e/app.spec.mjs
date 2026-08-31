@@ -64,6 +64,21 @@ async function roomCode(page) {
   return match[1];
 }
 
+async function clickFirstEnabledAcross(pages, selector) {
+  await expect.poll(async () => {
+    const counts = await Promise.all(pages.map((page) => page.locator(`${selector}:enabled`).count()));
+    return counts.reduce((sum, count) => sum + count, 0);
+  }).toBeGreaterThan(0);
+  for (const page of pages) {
+    const enabled = page.locator(`${selector}:enabled`);
+    if (await enabled.count()) {
+      await enabled.first().click();
+      return page;
+    }
+  }
+  throw new Error(`No enabled ${selector} control was found`);
+}
+
 test("local game reaches the real board without a browser runtime error", async ({ page }) => {
   const pageErrors = capturePageErrors(page);
 
@@ -634,6 +649,148 @@ test("two isolated browser sessions can start, reconnect to, and complete an onl
     await expect(host.locator('[data-action="confirm-online-result"]')).toBeVisible();
     await expect(guest.locator('[data-action="confirm-online-result"]')).toBeVisible();
 
+    expect(hostErrors).toEqual([]);
+    expect(guestErrors).toEqual([]);
+  } finally {
+    await hostContext.close();
+    await guestContext.close();
+  }
+});
+
+test("official best-of-three UI follows first-game and prior-loser setup order", async ({ browser }) => {
+  test.setTimeout(90_000);
+  const hostContext = await browser.newContext();
+  const guestContext = await browser.newContext();
+  const host = await hostContext.newPage();
+  const guest = await guestContext.newPage();
+  const hostErrors = capturePageErrors(host);
+  const guestErrors = capturePageErrors(guest);
+  const pages = [host, guest];
+
+  try {
+    await host.route("**/build-info.json", (route) => route.fulfill({ status: 404, body: "Not found" }));
+    await host.goto("/");
+    await host.locator('[data-action="settings-sideboarding"]').check();
+    await host.locator('[data-action="menu-multiplayer"]').click();
+    await host.locator('[data-action="online-create"]').click();
+    const code = await roomCode(host);
+
+    await openLocalMultiplayer(guest);
+    await guest.locator('[data-action="online-code-input"]').fill(code);
+    await guest.locator('[data-action="online-join-code"]').click();
+    await host.locator('[data-action="online-submit-deck"]').click();
+    await guest.locator('[data-action="online-submit-deck"]').click();
+    await host.locator('[data-action="online-ready"]').click();
+    await guest.locator('[data-action="online-ready"]').click();
+
+    await expect(host.locator(".champion-setup")).toBeVisible();
+    await expect(guest.locator(".champion-setup")).toBeVisible();
+    await expect(host.locator(".first-player-screen")).toHaveCount(0);
+    for (let index = 0; index < 2; index += 1) {
+      await clickFirstEnabledAcross(pages, '[data-action="choose-champion"]');
+    }
+    for (let index = 0; index < 2; index += 1) {
+      await clickFirstEnabledAcross(pages, '[data-action="choose-battlefield"]');
+    }
+
+    await expect(host.locator(".first-player-screen")).toBeVisible();
+    await expect(guest.locator(".first-player-screen")).toBeVisible();
+    const beforePlayOrder = await host.evaluate(() => ({
+      phase: window.__riftboundGame.phase,
+      battlefieldCount: window.__riftboundGame.battlefields.length,
+      handCounts: window.__riftboundGame.players.map((player) => player.hand.length),
+      method: window.__riftboundGame.firstPlayerDecision?.method
+    }));
+    expect(beforePlayOrder).toEqual({
+      phase: "first-player",
+      battlefieldCount: 2,
+      handCounts: [0, 0],
+      method: "roll"
+    });
+
+    let chosePlayOrder = false;
+    for (let step = 0; step < 30; step += 1) {
+      const beforeDecision = await host.evaluate(() => JSON.stringify({
+        phase: window.__riftboundGame.phase,
+        decision: window.__riftboundGame.firstPlayerDecision
+      }));
+      await clickFirstEnabledAcross(
+        pages,
+        ':is([data-action="choose-first-player"], [data-action="roll-first-player"])'
+      );
+      await expect.poll(async () => host.evaluate(() => JSON.stringify({
+        phase: window.__riftboundGame.phase,
+        decision: window.__riftboundGame.firstPlayerDecision
+      }))).not.toBe(beforeDecision);
+      if (await host.evaluate(() => window.__riftboundGame.phase === "mulligan")) {
+        chosePlayOrder = true;
+        break;
+      }
+    }
+    expect(chosePlayOrder).toBe(true);
+
+    await expect(host.locator(".mulligan")).toBeVisible();
+    await expect(guest.locator(".mulligan")).toBeVisible();
+    const opening = await host.evaluate(() => ({
+      phase: window.__riftboundGame.phase,
+      firstPlayerId: window.__riftboundGame.firstPlayerId,
+      mulliganPlayerId: window.__riftboundGame.mulligan?.playerId,
+      handCounts: window.__riftboundGame.players.map((player) => player.hand.length)
+    }));
+    expect(opening.phase).toBe("mulligan");
+    expect(opening.mulliganPlayerId).toBe(opening.firstPlayerId);
+    expect(opening.handCounts).toEqual([4, 4]);
+
+    const firstMulliganPage = await clickFirstEnabledAcross(pages, '[data-action="skip-mulligan"]');
+    const firstSeat = await firstMulliganPage.evaluate(() => JSON.parse(localStorage.getItem("riftbound.onlineSeat.v1") || "null")?.playerId);
+    expect(firstSeat).toBe(opening.firstPlayerId);
+    await clickFirstEnabledAcross(pages, '[data-action="skip-mulligan"]');
+    await expect(host.locator(".board-panel")).toBeVisible();
+    await expect(guest.locator(".board-panel")).toBeVisible();
+    expect(await host.evaluate(() => window.__riftboundGame.currentPlayerId)).toBe(opening.firstPlayerId);
+
+    const usedBattlefields = await host.evaluate(() => Object.fromEntries(
+      window.__riftboundGame.battlefields.map((field) => [field.ownerId, field.cardNumber])
+    ));
+    const guestSeat = await guest.evaluate(() => JSON.parse(localStorage.getItem("riftbound.onlineSeat.v1") || "null")?.playerId);
+    await guest.locator('[data-action="surrender"]').click();
+    await guest.locator('[data-action="confirm-game-exit"]').click();
+    await expect(host.locator(".sideboarding-screen")).toBeVisible();
+    await expect(guest.locator(".sideboarding-screen")).toBeVisible();
+    await host.locator('[data-action="sideboard-submit"]').click();
+    await guest.locator('[data-action="sideboard-submit"]').click();
+
+    await expect(host.locator(".champion-setup")).toBeVisible();
+    await expect(guest.locator(".champion-setup")).toBeVisible();
+    for (let index = 0; index < 2; index += 1) {
+      await clickFirstEnabledAcross(pages, '[data-action="choose-champion"]');
+    }
+    await expect.poll(async () => host.evaluate(() => window.__riftboundGame.phase)).toBe("battlefield-select");
+    const remainingBattlefields = {
+      p1: await host.evaluate(() => window.__riftboundGame.players.find((player) => player.id === "p1")?.availableBattlefields.map((field) => field.cardNumber)),
+      p2: await guest.evaluate(() => window.__riftboundGame.players.find((player) => player.id === "p2")?.availableBattlefields.map((field) => field.cardNumber))
+    };
+    expect(remainingBattlefields.p1).not.toContain(usedBattlefields.p1);
+    expect(remainingBattlefields.p2).not.toContain(usedBattlefields.p2);
+    for (let index = 0; index < 2; index += 1) {
+      await clickFirstEnabledAcross(pages, '[data-action="choose-battlefield"]');
+    }
+
+    await expect(host.locator(".first-player-screen")).toBeVisible();
+    await expect(guest.locator(".first-player-screen")).toBeVisible();
+    const nextDecision = await host.evaluate(() => ({
+      method: window.__riftboundGame.firstPlayerDecision?.method,
+      chooserId: window.__riftboundGame.firstPlayerDecision?.chooserId,
+      handCounts: window.__riftboundGame.players.map((player) => player.hand.length)
+    }));
+    expect(nextDecision).toEqual({ method: "designated", chooserId: guestSeat, handCounts: [0, 0] });
+    await expect(host.locator('[data-action="choose-first-player"]:enabled')).toHaveCount(0);
+    await expect(guest.locator('[data-action="choose-first-player"]:enabled')).toHaveCount(2);
+    const selectedNextFirstPlayer = await guest.locator('[data-action="choose-first-player"]:enabled').first().getAttribute("data-player");
+    await guest.locator('[data-action="choose-first-player"]:enabled').first().click();
+    await expect(host.locator(".mulligan")).toBeVisible();
+    await expect(guest.locator(".mulligan")).toBeVisible();
+    expect(await host.evaluate(() => window.__riftboundGame.mulligan?.playerId)).toBe(selectedNextFirstPlayer);
     expect(hostErrors).toEqual([]);
     expect(guestErrors).toEqual([]);
   } finally {

@@ -219,23 +219,38 @@ function finishMatchGame(room) {
 function submitMatchSideboard(room, playerId, command) {
   if (!room.match) return fail("The match has not started.");
   const deck = normalizeSubmittedDeck(command.deckRecord);
-  const result = submitSideboardConfiguration(room.match, playerId, deck, cardByNumber, command.firstPlayerId || null);
+  const result = submitSideboardConfiguration(room.match, playerId, deck, cardByNumber);
   if (!result.ok) return result;
   if (result.ready) {
     const next = beginNextMatchGame(room.match);
     if (!next.ok) return next;
-    room.game = createRoomGame(room, next.decks, next.firstPlayerId, next.lockedBattlefields, next.unavailableBattlefields);
+    room.game = createRoomGame(
+      room,
+      next.decks,
+      next.firstPlayerId,
+      next.firstPlayerChooserId,
+      next.lockedBattlefields,
+      next.unavailableBattlefields
+    );
     room.game.hostPlayerId = room.hostPlayerId || "p1";
     room.status = "playing";
   }
   return { ok: true };
 }
 
-function createRoomGame(room, deckRecords, firstPlayerId = null, lockedBattlefields = null, unavailableBattlefields = null) {
+function createRoomGame(
+  room,
+  deckRecords,
+  firstPlayerId = null,
+  firstPlayerChooserId = null,
+  lockedBattlefields = null,
+  unavailableBattlefields = null
+) {
   const game = createGame({
     interactive: true,
-    randomFirstPlayer: !firstPlayerId,
+    randomFirstPlayer: !firstPlayerId && !firstPlayerChooserId,
     firstPlayerId,
+    firstPlayerChooserId,
     lockedBattlefields,
     unavailableBattlefields,
     format: room.sideboardingEnabled ? "match" : "duel",

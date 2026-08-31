@@ -40,9 +40,12 @@ export function createGame(options = {}) {
       !unavailable.has(field.cardNumber) && !unavailable.has(field.collectorNumber));
   }
   const sanctionedFormat = options.format === "match" ? "match" : "duel";
-  const usesFirstPlayerRoll = Boolean(options.randomFirstPlayer && !options.firstPlayerId);
-  const firstPlayerId = options.firstPlayerId || players[0].id;
-  const firstPlayer = players.find((player) => player.id === firstPlayerId) || players[0];
+  const officialMatchSetup = sanctionedFormat === "match";
+  const designatedChooser = players.find((player) => player.id === options.firstPlayerChooserId) || null;
+  const requestedFirstPlayer = players.find((player) => player.id === options.firstPlayerId) || null;
+  const usesFirstPlayerRoll = Boolean(options.randomFirstPlayer && !requestedFirstPlayer && !designatedChooser);
+  const firstPlayer = requestedFirstPlayer || players[0];
+  const firstPlayerId = usesFirstPlayerRoll || designatedChooser ? null : firstPlayer.id;
   const turnOrder = [
     firstPlayer.id,
     ...players.filter((player) => player.id !== firstPlayer.id).map((player) => player.id)
@@ -50,13 +53,14 @@ export function createGame(options = {}) {
   const game = {
     mode: "duel",
     sanctionedFormat,
+    officialMatchSetup,
     battlefieldSelectionMode: options.battlefieldSelectionMode
       || (sanctionedFormat === "match" ? "manual" : "random"),
     victoryScore: 8,
     players,
     turnOrder,
-    firstPlayerId: usesFirstPlayerRoll ? null : firstPlayer.id,
-    currentPlayerId: firstPlayer.id,
+    firstPlayerId,
+    currentPlayerId: officialMatchSetup ? players[0].id : firstPlayer.id,
     firstPlayerDecision: usesFirstPlayerRoll ? {
       method: "roll",
       status: "rolling",
@@ -66,6 +70,15 @@ export function createGame(options = {}) {
       previousRolls: null,
       winnerId: null,
       chooserId: null
+    } : designatedChooser ? {
+      method: "designated",
+      status: "choosing",
+      round: 0,
+      rollerId: null,
+      rolls: {},
+      previousRolls: null,
+      winnerId: designatedChooser.id,
+      chooserId: designatedChooser.id
     } : {
       method: "preset",
       status: "ready",
@@ -76,11 +89,11 @@ export function createGame(options = {}) {
       winnerId: null,
       chooserId: null
     },
-    championSelectPlayerId: null,
+    championSelectPlayerId: officialMatchSetup ? players[0].id : null,
     setupPlayerId: null,
     turnNumber: 1,
     turnSequence: 0,
-    phase: "first-player",
+    phase: officialMatchSetup ? "champion-select" : "first-player",
     interactive: Boolean(options.interactive),
     manualActionChainPriority: Boolean(options.manualActionChainPriority),
     decisionSafety: options.decisionSafety ? {
@@ -130,9 +143,11 @@ export function createGame(options = {}) {
   game.setupBattlefieldSelections = {};
   game.forcedBattlefieldSelections = options.lockedBattlefields || null;
 
-  log(game, usesFirstPlayerRoll
-    ? "Each player rolls a die to decide who chooses the play order."
-    : `${firstPlayer.name} is set as the first player.`);
+  log(game, officialMatchSetup
+    ? "Each player places their Legend and chooses one starting champion."
+    : usesFirstPlayerRoll
+      ? "Each player rolls a die to decide who chooses the play order."
+      : `${firstPlayer.name} is set as the first player.`);
   return game;
 }
 
@@ -140,7 +155,9 @@ export function firstPlayerDecisionActorId(game) {
   if (game?.phase !== "first-player") return null;
   const decision = game.firstPlayerDecision;
   if (decision?.method === "roll" && decision.status === "rolling") return decision.rollerId || null;
-  if (decision?.method === "roll" && decision.status === "choosing") return decision.chooserId || null;
+  if (["roll", "designated"].includes(decision?.method) && decision.status === "choosing") {
+    return decision.chooserId || null;
+  }
   return game.hostPlayerId || game.firstPlayerId || game.players[0]?.id || null;
 }
 
@@ -186,8 +203,10 @@ export function rollFirstPlayer(game, playerId) {
 export function chooseFirstPlayer(game, playerId, firstPlayerId) {
   if (game.phase !== "first-player") return fail(game, "The first player has already been chosen.");
   const decision = game.firstPlayerDecision;
-  if (decision?.method !== "roll" || decision.status !== "choosing") return fail(game, "No player can choose the play order right now.");
-  if (decision.chooserId !== playerId) return fail(game, "Only the roll winner can choose the play order.");
+  if (!["roll", "designated"].includes(decision?.method) || decision.status !== "choosing") {
+    return fail(game, "No player can choose the play order right now.");
+  }
+  if (decision.chooserId !== playerId) return fail(game, "Only the designated player can choose the play order.");
   if (!game.players.some((candidate) => candidate.id === firstPlayerId)) return fail(game, "Unknown first player.");
 
   const first = setFirstPlayer(game, firstPlayerId);
@@ -199,7 +218,9 @@ export function chooseFirstPlayer(game, playerId, firstPlayerId) {
 
 export function confirmFirstPlayer(game) {
   if (game.phase !== "first-player") return fail(game, "First player has already been confirmed.");
-  if (game.firstPlayerDecision?.method === "roll") return fail(game, "The roll winner must choose who goes first.");
+  if (game.firstPlayerDecision?.method !== "preset") {
+    return fail(game, "The designated player must choose who goes first.");
+  }
   setFirstPlayer(game, game.firstPlayerId || game.players[0]?.id);
   return advanceFromFirstPlayerDecision(game);
 }
@@ -213,6 +234,11 @@ function setFirstPlayer(game, firstPlayerId) {
 }
 
 function advanceFromFirstPlayerDecision(game) {
+  if (game.officialMatchSetup) {
+    drawOpeningHands(game);
+    beginMulligans(game);
+    return { ok: true };
+  }
   const first = game.players.find((player) => player.id === game.firstPlayerId) || game.players[0];
   game.phase = "champion-select";
   game.currentPlayerId = first.id;
@@ -236,6 +262,32 @@ function shuffle(cards, game = null, randomStreamId = null) {
     [copy[i], copy[j]] = [copy[j], copy[i]];
   }
   return copy;
+}
+
+function shuffleInPlace(cards, game = null, randomStreamId = null) {
+  if (!Array.isArray(cards)) return cards;
+  const shuffled = shuffle(cards, game, randomStreamId);
+  cards.splice(0, cards.length, ...shuffled);
+  return cards;
+}
+
+function shuffleSetupDecks(game) {
+  if (game.setupDecksShuffled) return false;
+  for (const player of game.players) {
+    shuffleInPlace(player.mainDeck, game, player.id);
+    invalidateBottomDeckKnowledge(player);
+    shuffleInPlace(player.runeDeck, game, player.id);
+  }
+  game.setupDecksShuffled = true;
+  return true;
+}
+
+function drawOpeningHands(game) {
+  if (game.openingHandsDrawn) return false;
+  for (const player of game.players) draw(player, 4);
+  game.openingHandsDrawn = true;
+  log(game, "Each player draws 4 cards for their opening hand.");
+  return true;
 }
 
 function nextShuffleRandom(game, randomStreamId = null) {
@@ -265,7 +317,7 @@ export function selectBattlefield(game, playerId, battlefieldId) {
   const [chosen] = player.availableBattlefields.splice(chosenIndex, 1);
   stageBattlefieldSelection(game, player, chosen);
 
-  const next = turnOrderedPlayers(game).find((candidate) => !candidate.selectedBattlefieldId);
+  const next = setupOrderedPlayers(game).find((candidate) => !candidate.selectedBattlefieldId);
   if (next) {
     game.setupPlayerId = next.id;
     return { ok: true };
@@ -284,7 +336,7 @@ function stageBattlefieldSelection(game, player, chosen) {
 }
 
 function finalizeBattlefieldSelections(game) {
-  const selected = turnOrderedPlayers(game).map((player) => ({
+  const selected = setupOrderedPlayers(game).map((player) => ({
     player,
     battlefield: game.setupBattlefieldSelections?.[player.id]
   }));
@@ -300,13 +352,32 @@ function finalizeBattlefieldSelections(game) {
   }
   game.setupBattlefieldSelections = {};
   game.setupPlayerId = null;
+  if (game.officialMatchSetup) {
+    shuffleSetupDecks(game);
+    game.phase = "first-player";
+    const decision = game.firstPlayerDecision;
+    game.currentPlayerId = decision?.status === "rolling"
+      ? decision.rollerId
+      : decision?.status === "choosing"
+        ? decision.chooserId
+        : game.firstPlayerId || game.players[0]?.id;
+    log(game, decision?.method === "roll"
+      ? "Battlefields are revealed. Each player shuffles their decks, then rolls to designate who chooses the play order."
+      : decision?.method === "designated"
+        ? "Battlefields are revealed. Each player shuffles their decks, then the designated player chooses the play order."
+        : "Battlefields are revealed. Each player shuffles their decks, then keeps the previous play order.");
+    // A draw preserves the previous play order, so there is no decision for a
+    // host to confirm. Continue immediately to the opening hand and mulligans.
+    if (decision?.method === "preset") advanceFromFirstPlayerDecision(game);
+    return true;
+  }
   log(game, "Battlefields are set. Each player may mulligan up to 2 cards.");
   beginMulligans(game);
   return true;
 }
 
 function randomlySelectBattlefields(game) {
-  for (const [playerIndex, player] of turnOrderedPlayers(game).entries()) {
+  for (const [playerIndex, player] of setupOrderedPlayers(game).entries()) {
     if (!player.availableBattlefields.length) return fail(game, `${player.name} has no unused Battlefield.`);
     const randomValue = Number(game.setupRandomValues?.[playerIndex] ?? Math.random());
     const index = Math.min(player.availableBattlefields.length - 1,
@@ -336,7 +407,7 @@ export function selectChampion(game, playerId, championId) {
   game.selectedCardId = chosen.instanceId;
   log(game, `${player.name} chooses ${chosen.name} as their starting champion.`);
 
-  const next = turnOrderedPlayers(game).find((candidate) => !candidate.champion);
+  const next = setupOrderedPlayers(game).find((candidate) => !candidate.champion);
   if (next) {
     game.championSelectPlayerId = next.id;
     game.currentPlayerId = next.id;
@@ -344,20 +415,19 @@ export function selectChampion(game, playerId, championId) {
   }
 
   game.championSelectPlayerId = null;
-  game.setupPlayerId = game.firstPlayerId;
-  game.currentPlayerId = game.firstPlayerId;
-  for (const candidate of game.players) {
-    candidate.mainDeck = shuffle(candidate.mainDeck, game, candidate.id);
-    invalidateBottomDeckKnowledge(candidate);
-    candidate.runeDeck = shuffle(candidate.runeDeck, game, candidate.id);
-    draw(candidate, 4);
+  const firstSetupPlayer = setupOrderedPlayers(game)[0] || game.players[0];
+  game.setupPlayerId = firstSetupPlayer.id;
+  game.currentPlayerId = firstSetupPlayer.id;
+  if (!game.officialMatchSetup) {
+    shuffleSetupDecks(game);
+    drawOpeningHands(game);
   }
   game.phase = "battlefield-select";
   log(game, game.battlefieldSelectionMode === "random"
     ? "Each player randomly selects one starting Battlefield."
     : "Each player selects one starting Battlefield.");
   if (game.forcedBattlefieldSelections) {
-    for (const candidate of turnOrderedPlayers(game)) {
+    for (const candidate of setupOrderedPlayers(game)) {
       const cardNumber = game.forcedBattlefieldSelections[candidate.id];
       const battlefield = candidate.availableBattlefields.find((field) => field.cardNumber === cardNumber || field.collectorNumber === cardNumber);
       if (!battlefield) return fail(game, "The Battlefield locked after a draw is not registered.");
@@ -476,6 +546,13 @@ function controllerOfCard(game, card) {
 function turnOrderedPlayers(game) {
   const ids = game.turnOrder || game.players.map((player) => player.id);
   return ids.map((id) => game.players.find((player) => player.id === id)).filter(Boolean);
+}
+
+function setupOrderedPlayers(game) {
+  // Official match setup selects Champions and Battlefields before turn order
+  // exists. Seat order serializes the private decisions without giving either
+  // player information about the other's hidden Battlefield selection.
+  return game.officialMatchSetup ? game.players : turnOrderedPlayers(game);
 }
 
 function nextPlayerId(game, playerId) {
@@ -8668,6 +8745,9 @@ function prepareAndQueueTriggers(game, triggers, mode = "queue", continuation = 
     return trigger;
   });
   declineUnavailableOptionalTriggerPlacements(game, normalized);
+  // Core Rules 383.3.a: every optional trigger is accepted or declined
+  // before any simultaneous accepted and mandatory triggers are ordered.
+  if (prepareOptionalTriggerPlacements(game, normalized, mode, continuation)) return true;
   const active = normalized.filter((trigger) => !trigger.declined);
   if (!active.length) {
     if (continuation) return runTriggerContinuation(game, continuation);
@@ -8682,7 +8762,6 @@ function prepareAndQueueTriggers(game, triggers, mode = "queue", continuation = 
       continuation
     });
   }
-  if (prepareOptionalTriggerPlacements(game, normalized, mode, continuation)) return true;
   return prepareTriggerDeclarations(game, [...groups].reverse().flatMap((group) => group.triggers), mode, continuation);
 }
 
@@ -8722,7 +8801,7 @@ function combineTriggerContinuations(batches) {
 function continueTriggerOrderChoice(game, state) {
   while (state.groupIndex < state.groups.length) {
     const group = state.groups[state.groupIndex];
-    if (group.triggers.length === 1 && !triggerIsOptional(group.triggers[0])) {
+    if (group.triggers.length === 1) {
       group.orderedTriggers = [...group.triggers];
       group.confirmed = true;
       state.groupIndex += 1;
@@ -8737,9 +8816,8 @@ function continueTriggerOrderChoice(game, state) {
       || group.triggers[0].sourceCardSnapshot
       || { name: "Triggered Abilities" };
     game.currentPlayerId = group.playerId;
-    const mandatoryTriggers = group.triggers.filter((trigger) => !triggerIsOptional(trigger));
     const selectedIds = new Set(group.orderedTriggers.map((trigger) => trigger.id));
-    const canConfirm = mandatoryTriggers.every((trigger) => selectedIds.has(trigger.id));
+    const canConfirm = group.triggers.every((trigger) => selectedIds.has(trigger.id));
     const triggerOptions = group.triggers.map((trigger) => {
       const triggerSource = findCard(game, trigger.sourceCardId) || trigger.sourceCardSnapshot;
       const effectKinds = (trigger.data?.specs || []).map((spec) => spec.kind).filter(Boolean);
@@ -8749,7 +8827,8 @@ function continueTriggerOrderChoice(game, state) {
         label: `${triggerSource?.name || displayKind}: ${displayKind}`,
         cardId: trigger.sourceCardId || null,
         effectKind: displayKind,
-        optionalTrigger: triggerIsOptional(trigger),
+        optionalTrigger: false,
+        wasOptionalTrigger: triggerIsOptional(trigger),
         selected: selectedIds.has(trigger.id),
         selectionOrder: group.orderedTriggers.findIndex((candidate) => candidate.id === trigger.id) + 1
       };
@@ -8789,23 +8868,10 @@ function resolveTriggerOrderChoice({ game, choice, option }) {
   if (!state || !group) return;
   if (option.id === "confirm-trigger-order") {
     const selectedIds = new Set(group.orderedTriggers.map((trigger) => trigger.id));
-    const missingMandatory = group.triggers.some((trigger) => !triggerIsOptional(trigger) && !selectedIds.has(trigger.id));
-    if (missingMandatory) {
+    const missingTrigger = group.triggers.some((trigger) => !selectedIds.has(trigger.id));
+    if (missingTrigger) {
       continueTriggerOrderChoice(game, state);
       return;
-    }
-    for (const trigger of group.triggers) {
-      if (!triggerIsOptional(trigger)) continue;
-      trigger.optionalPlacementComplete = true;
-      const source = findCard(game, trigger.sourceCardId) || trigger.sourceCardSnapshot || { name: "A triggered ability" };
-      const player = game.players.find((candidate) => candidate.id === trigger.playerId);
-      if (selectedIds.has(trigger.id)) {
-        log(game, `${player?.name || "A player"} chooses to place ${source.name}'s optional trigger on the Chain.`);
-      } else {
-        trigger.declined = true;
-        removePendingTriggerChainItem(game, trigger);
-        log(game, `${player?.name || "A player"} does not place ${source.name}'s optional trigger on the Chain.`);
-      }
     }
     group.confirmed = true;
     state.groupIndex += 1;

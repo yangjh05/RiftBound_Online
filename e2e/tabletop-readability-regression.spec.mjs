@@ -7,7 +7,6 @@ const MIN_PORTRAIT_RATIO = 0.62;
 const MAX_PORTRAIT_RATIO = 0.82;
 const MIN_FUNCTIONAL_FONT_PX = 11;
 const MIN_DECORATIVE_FONT_PX = 10;
-const MIN_CHAIN_EFFECT_HEIGHT_PX = 112;
 
 function captureRuntimeFailures(page) {
   const failures = [];
@@ -302,6 +301,30 @@ async function installReadableChainFixture(page) {
     window.__riftboundRender();
     return { cardId: card.instanceId, effectText: card.translations.ko.text, selectedAbility: "Score" };
   });
+}
+
+async function expandReadableChainFixture(page, count = 8) {
+  return page.evaluate((itemCount) => {
+    const game = window.__riftboundGame;
+    const chain = game.showdown?.chain;
+    const template = chain?.[0];
+    if (!template) throw new Error("expandReadableChainFixture requires an active Showdown Chain item");
+    game.showdown.chain = Array.from({ length: itemCount }, (_, index) => {
+      const item = structuredClone(template);
+      item.id = `readability-chain-item-${index}`;
+      item.card.instanceId = `readability-chain-card-${index}`;
+      item.card.name = `Readable Chain Regression ${index + 1}`;
+      item.card.translations ||= {};
+      item.card.translations.ko ||= {};
+      item.card.translations.ko.name = `체인 항목 ${index + 1}`;
+      return item;
+    });
+    game.showdown.chainSequence = itemCount;
+    window.__riftboundRender();
+    return {
+      cardIds: game.showdown.chain.map((item) => item.card.instanceId)
+    };
+  }, count);
 }
 
 async function installReadableTriggerOrderFixture(page) {
@@ -788,30 +811,43 @@ test("inspector, trash, and banished panes never cover the command row or perman
   await assertNoLiteralInvalidValues(page, runtimeFailures);
 });
 
-test("an active Chain keeps its full effect readable and exposes exactly one enabled pass action", async ({ page }) => {
+test("an active Chain stays compact, scrolls horizontally, and keeps Card Info available", async ({ page }) => {
   const runtimeFailures = captureRuntimeFailures(page);
   await openReadyBoard(page);
   await installReadabilityFixture(page);
   const chain = await installReadableChainFixture(page);
+  const expanded = await expandReadableChainFixture(page);
 
-  const item = page.locator(`.chain-zone-item.chain-zone-active[data-card-id="${chain.cardId}"]`);
+  const stack = page.locator(".chain-stack");
+  const items = stack.locator(".chain-zone-item");
+  await expect(items).toHaveCount(expanded.cardIds.length);
+  const item = items.first();
   await visibleBox(item, "active Chain item");
+  await expect(item.locator(".chain-zone-copy > strong")).not.toBeEmpty();
+  await expect(item.locator(".chain-zone-target")).toContainText(/대상|Target/iu);
+  await expect(item.locator(".chain-zone-source, .chain-zone-effect, .chain-active-effect-text, .chain-selected-ability")).toHaveCount(0);
+  await expect(item).not.toContainText(chain.effectText);
 
-  const effect = item.locator(".chain-active-effect-text");
-  const effectBox = await visibleBox(effect, "active Chain effect");
-  expect.soft(effectBox.height, "active Chain effect must reserve readable vertical space").toBeGreaterThanOrEqual(MIN_CHAIN_EFFECT_HEIGHT_PX - MAX_ALLOWED_OVERLAP_PX);
-  await expect(effect).toContainText(chain.effectText);
-  await expect(effect.locator(".chain-selected-ability")).toContainText(chain.selectedAbility);
-  const effectVisibility = await effect.evaluate((element) => ({
+  const track = await stack.evaluate((element) => ({
     clientWidth: element.clientWidth,
     scrollWidth: element.scrollWidth,
-    clientHeight: element.clientHeight,
-    scrollHeight: element.scrollHeight,
-    fontSize: Number.parseFloat(getComputedStyle(element).fontSize)
+    display: getComputedStyle(element).display,
+    flexFlow: getComputedStyle(element).flexFlow,
+    overflowX: getComputedStyle(element).overflowX
   }));
-  expect.soft(effectVisibility.fontSize).toBeGreaterThanOrEqual(MIN_FUNCTIONAL_FONT_PX);
-  expect.soft(effectVisibility.scrollWidth, "Chain effect must not clip horizontally").toBeLessThanOrEqual(effectVisibility.clientWidth + 1);
-  expect.soft(effectVisibility.scrollHeight, "Chain effect must not be line-clamped or clipped").toBeLessThanOrEqual(effectVisibility.clientHeight + 1);
+  expect(track.display).toBe("flex");
+  expect(track.flexFlow).toContain("row");
+  expect(["auto", "scroll"]).toContain(track.overflowX);
+  expect.soft(track.scrollWidth, "multiple Chain cards must overflow into a horizontal track").toBeGreaterThan(track.clientWidth);
+
+  await items.last().scrollIntoViewIfNeeded();
+  await expect(items.last()).toBeInViewport();
+
+  await item.click();
+  const inspector = page.locator(".inspector.inspector-panel");
+  await expect(inspector).toBeVisible();
+  await expect(page.locator(".chain-context-panel.showing-targets")).toBeVisible();
+  await expect(page.locator('.chain-context-panel [data-action="view-chain-card"]')).toBeVisible();
 
   const activePassButtons = page.locator('button[data-action="pass-showdown"]:visible:not([disabled])');
   const activePassCount = await activePassButtons.count();
@@ -853,9 +889,12 @@ test("an active Chain floats over the board center without covering right-side s
     expectNoVisualOverlap(chainBox, railBox, "Chain and right action rail");
     expectNoVisualOverlap(panelBox, railBox, `${label} and right action rail`);
     expectContained(chainBox, boardBox, "Chain inside tabletop board");
-    const availableCenter = boardBox.x + (railBox.x - boardBox.x) / 2;
+    const availableRight = panelBox.x > boardBox.x + boardBox.width / 2
+      ? Math.min(railBox.x, panelBox.x)
+      : railBox.x;
+    const availableCenter = boardBox.x + (availableRight - boardBox.x) / 2;
     const chainCenter = chainBox.x + chainBox.width / 2;
-    expect.soft(Math.abs(chainCenter - availableCenter), "Chain must be centered in the board area left of the action rail").toBeLessThanOrEqual(12);
+    expect.soft(Math.abs(chainCenter - availableCenter), "Chain must be centered in the usable board area left of the open utility sheet").toBeLessThanOrEqual(12);
     await expect(chainItem, `Chain item must remain visible with ${label}`).toBeVisible();
   };
 
@@ -916,7 +955,7 @@ test("complex trigger-order choices float over the board without covering the ri
   await assertNoLiteralInvalidValues(page, runtimeFailures);
 });
 
-test("snapshot-only triggers retain their source, full text, and target in every Chain path", async ({ page }) => {
+test("snapshot-only triggers retain their title and target without expanding long rules text", async ({ page }) => {
   const runtimeFailures = captureRuntimeFailures(page);
   await openReadyBoard(page);
   await installReadabilityFixture(page);
@@ -926,9 +965,9 @@ test("snapshot-only triggers retain their source, full text, and target in every
     const item = page.locator(`.chain-zone-item[data-card-id="${expected.sourceId}"]`);
     await expect(item, `${mode} snapshot trigger must render`).toBeVisible();
     await expect(item.locator(".chain-zone-copy > strong")).toContainText(expected.sourceName);
-    await expect(item.locator(".chain-zone-source")).toContainText(expected.sourceName);
     await expect(item.locator(".chain-zone-target")).toContainText(expected.targetName);
-    await expect(item.locator(".chain-active-effect-text, .chain-zone-effect")).toContainText(expected.effectText);
+    await expect(item.locator(".chain-zone-source, .chain-active-effect-text, .chain-zone-effect")).toHaveCount(0);
+    await expect(item).not.toContainText(expected.effectText);
     await assertNoLiteralInvalidValues(page, runtimeFailures);
   }
 });
@@ -1111,7 +1150,23 @@ test("Legend and Seal resource abilities remain usable inside the in-board payme
     game.phase = "action";
     game.currentPlayerId = player.id;
     game.turnPlayerId = player.id;
-    game.actionChain = null;
+    const ownerChainItemId = "readability-source-chain-item";
+    game.actionChain = {
+      turnPlayerId: player.id,
+      priorityPlayerId: player.id,
+      playerIds: game.players.map((candidate) => candidate.id),
+      consecutivePasses: 0,
+      chainSequence: 1,
+      chainOpenedBy: "readability-source-payment",
+      chain: [{
+        id: ownerChainItemId,
+        itemType: "card",
+        playerId: player.id,
+        card: paidCard,
+        destination: "base",
+        status: "pending"
+      }]
+    };
     game.showdown = null;
     game.pendingChoice = null;
     game.pendingPayment = {
@@ -1134,20 +1189,31 @@ test("Legend and Seal resource abilities remain usable inside the in-board payme
       xpCost: 0,
       optionalPowerEffects: []
     };
+    game.pendingPayment.fromActionChain = true;
+    game.pendingPayment.playProcess = { chainItemId: ownerChainItemId, card: paidCard };
     window.__riftboundRender();
-    return { legendId: legend.instanceId, sealId: seal.instanceId };
+    return {
+      legendId: legend.instanceId,
+      sealId: seal.instanceId,
+      paidCardId: paidCard.instanceId,
+      ownerChainItemId
+    };
   });
 
   const legendResource = page.locator(`[data-action="activate-card"][data-card="${fixture.legendId}"]`);
   const sealResource = page.locator(`[data-action="activate-card"][data-card="${fixture.sealId}"]`);
+  const paymentChainCard = page.locator(`.chain-zone-item[data-card-id="${fixture.paidCardId}"]`);
   await expect(legendResource).toBeVisible();
   await expect(sealResource).toBeVisible();
+  await expect(paymentChainCard).toHaveCount(1);
+  await expect(paymentChainCard).toHaveAttribute("data-chain-item-id", fixture.ownerChainItemId);
 
   await legendResource.click();
   await expect.poll(() => page.evaluate(() => ({
     pending: Boolean(window.__riftboundGame.pendingPayment),
     energy: window.__riftboundGame.players[0].runePool.energy.length
   }))).toEqual({ pending: true, energy: 1 });
+  await expect(paymentChainCard).toHaveCount(1);
   const generatedEnergy = page.locator('[data-action="pay-pool-energy"]').first();
   await expect(generatedEnergy).toContainText(/에너지|Energy/u);
   await generatedEnergy.click();
@@ -1158,6 +1224,7 @@ test("Legend and Seal resource abilities remain usable inside the in-board payme
     pending: Boolean(window.__riftboundGame.pendingPayment),
     power: window.__riftboundGame.players[0].runePool.power.length
   }))).toEqual({ pending: true, power: 1 });
+  await expect(paymentChainCard).toHaveCount(1);
   const generatedPower = page.locator('[data-action="pay-pool-power"]').first();
   await expect(generatedPower).toContainText(/힘|Power/u);
   await expect(generatedPower).toContainText(/문장|Seal/u);

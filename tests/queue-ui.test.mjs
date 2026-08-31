@@ -4,20 +4,25 @@ import { readFile } from "node:fs/promises";
 
 const appSource = await readFile(new URL("../src/app.mjs", import.meta.url), "utf8");
 const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
+const tabletopStyles = await readFile(new URL("../src/tabletop.css", import.meta.url), "utf8");
 
-test("processing queue renders the exact activated ability before the full localized card text", () => {
-  assert.match(appSource, /class="chain-zone-effect"/);
-  assert.match(appSource, /function chainItemEffectText\(item\)/);
-  assert.match(appSource, /item\?\.itemType !== "activated"/);
-  assert.match(appSource, /Array\.isArray\(item\.specs\)/);
-  assert.match(appSource, /function activatedChainSpecLabel\(spec\)/);
-  assert.match(appSource, /class="chain-selected-ability"/);
+test("processing queue cards render only their title and declared targets", () => {
+  const renderer = appSource.slice(
+    appSource.indexOf("function chainZoneItem("),
+    appSource.indexOf("function chainItemEffectText(")
+  );
+  assert.match(renderer, /<strong>\$\{escapeHtml\(chainItemTitle\(item\)\)\}<\/strong>/);
+  assert.match(renderer, /class="chain-zone-target"/);
+  assert.match(renderer, /chainItemTargetIds\(item\)/);
+  assert.doesNotMatch(renderer, /chain-zone-source/);
+  assert.doesNotMatch(renderer, /chain-zone-effect/);
+  assert.doesNotMatch(renderer, /chain-active-effect-text/);
+  assert.doesNotMatch(renderer, /chain-selected-ability/);
 });
 
-test("processing queue items wrap readable text instead of forcing one-line ellipsis", () => {
-  assert.match(styles, /\.chain-zone-effect\s*\{[\s\S]*white-space:\s*normal/);
-  assert.match(styles, /\.chain-zone-item span,[\s\S]*\.chain-zone-item small\s*\{[\s\S]*white-space:\s*normal/);
-  assert.match(styles, /\.chain-zone-item\s*\{[\s\S]*min-height:\s*128px/);
+test("processing queue uses a compact horizontal scrolling card track", () => {
+  assert.match(tabletopStyles, /\.tabletop-layout \.chain-stack\s*\{[\s\S]*display:\s*flex !important;[\s\S]*flex-flow:\s*row nowrap !important;[\s\S]*overflow-x:\s*auto !important;[\s\S]*overflow-y:\s*hidden !important;/);
+  assert.match(tabletopStyles, /\.tabletop-layout \.chain-zone-item\s*\{[\s\S]*flex:\s*0 0 clamp\(188px, 19vw, 232px\) !important;[\s\S]*max-height:\s*94px !important;/);
 });
 
 test("Pending hand plays are visible only to their player until Finalize", () => {
@@ -49,17 +54,34 @@ test("processing queue can collapse so the battlefield remains visible", () => {
   assert.match(appSource, /data-action="toggle-chain-zone"/);
   assert.match(appSource, /aria-expanded="\$\{chainZoneCollapsed \? "false" : "true"\}"/);
   assert.match(appSource, /data-scroll-key="chain-stack"/);
-  assert.match(styles, /\.chain-zone\.is-collapsed\s*\{[\s\S]*right:\s*auto/);
-  assert.match(styles, /\.chain-zone\.is-collapsed\s*\{[\s\S]*width:\s*min\(360px, calc\(100% - 24px\)\)/);
+  assert.match(appSource, /button\[data-action='toggle-chain-zone'\]/);
+  assert.match(appSource, /"toggle-chain-zone",(?:\s*"toggle-inspector",)?\s*\n\s*"inspect-chain-effect"/);
+  assert.match(tabletopStyles, /\.tabletop-layout \.chain-zone-content\[hidden\]\s*\{\s*display:\s*none !important;\s*\}/);
+  assert.match(tabletopStyles, /\.tabletop-layout \.chain-pod\.is-collapsed,[\s\S]*width:\s*clamp\(208px, 16vw, 248px\) !important;[\s\S]*height:\s*42px !important;/);
 });
 
-test("a resolving Chain item remains visible while its choice or payment continuation is open", () => {
+test("a resolving Chain item remains visible once and reuses its owning Chain item id", () => {
   assert.match(appSource, /let chainTreePresentationItems = \[\]/);
   assert.match(appSource, /function pendingResolutionChainItem\(\)/);
   assert.match(appSource, /pending\.gameEffectResolution\?\.context\?\.chainKind/);
-  assert.match(appSource, /chainTreePresentationItems = liveItems\.map\(snapshotChainPresentationItem\)/);
+  assert.match(appSource, /function pendingResolutionOwnerChainItemId\(pending\)/);
+  assert.match(appSource, /pending\.playProcess\?\.chainItemId/);
+  assert.match(appSource, /presentationChainItemId:\s*pendingResolutionOwnerChainItemId\(pending\)/);
+  assert.match(appSource, /liveItems\.findIndex\(\(item\) => chainPresentationItemsMatch\(resolvingItem, item\)\)/);
+  assert.match(appSource, /chainTreePresentationItems = uniqueLiveItems\.map\(snapshotChainPresentationItem\)/);
   assert.match(appSource, /resolutionStillOpen && chainTreePresentationItems\.length/);
   assert.match(appSource, /chainTreePresentationItems = \[\];\s*return \[\];/);
+});
+
+test("priority response controls contain only the selected reaction actions and pass", () => {
+  const renderer = appSource.slice(
+    appSource.indexOf("function priorityResponseControls("),
+    appSource.indexOf("function actionUseWindowAvailable(")
+  );
+  assert.match(renderer, /priority-card-actions/);
+  assert.match(renderer, /\$\{actionMarkup/);
+  assert.match(renderer, /\$\{passControlButton\(\)\}/);
+  assert.doesNotMatch(renderer, /data-action="toggle-hand"/);
 });
 
 test("large resolving card choices expose a stable card-grid contract and filter their wrappers", () => {
