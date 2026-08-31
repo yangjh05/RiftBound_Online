@@ -225,9 +225,11 @@ let inspectorOpen = false;
 let stagedChoiceKey = null;
 let stagedChoiceOptionId = null;
 let choiceDrawerCollapsed = false;
-let draggingHandCardId = null;
-let pointerHandCardDrag = null;
+let draggingCardSession = null;
+let pointerCardDrag = null;
+let pointerRuneScroll = null;
 let suppressCardClickUntil = 0;
+let suppressRuneClickUntil = 0;
 let pendingGameExit = null;
 let paymentRunesScrollLeft = 0;
 let handScrollLeft = 0;
@@ -438,7 +440,8 @@ function localizedCommandFailure(message) {
 }
 
 function render() {
-  if (draggingHandCardId || pointerHandCardDrag) clearHandCardDragPresentation();
+  if (draggingCardSession || pointerCardDrag) clearCardDragPresentation();
+  clearRuneScrollGesture();
   const previousGeometry = captureTabletopGeometry();
   const previousFocus = captureFocusState();
   const previousModalKey = topUiModalKey();
@@ -4240,9 +4243,11 @@ function resetGameUiState() {
   stagedChoiceKey = null;
   stagedChoiceOptionId = null;
   choiceDrawerCollapsed = false;
-  draggingHandCardId = null;
-  pointerHandCardDrag = null;
+  draggingCardSession = null;
+  pointerCardDrag = null;
+  pointerRuneScroll = null;
   suppressCardClickUntil = 0;
+  suppressRuneClickUntil = 0;
   pendingGameExit = null;
   lastViewerPlayerId = null;
   lastInteractionPhase = null;
@@ -6200,13 +6205,35 @@ function syncStagedChoiceUi(choice) {
   if (!stillAvailable) stagedChoiceOptionId = null;
 }
 
+const BINARY_EFFECT_CHOICES = new Set([
+  "declareOptionalTrigger",
+  "declareTriggerUse"
+]);
+
+const FLOATING_EFFECT_CHOICES = new Set([
+  ...BINARY_EFFECT_CHOICES,
+  "triggerOrder",
+  "payDeflect",
+  "predictChoice",
+  "observedTopDeckSelfAbility",
+  "acknowledgeReveal",
+  "chooseDrawOrBuffSelf",
+  "unleashedPutUnitInDeck",
+  "unleashedStunMoveSelf",
+  "attachedUnusedMode",
+  "damageOrDrawInstead",
+  "preparedDeathRecallPayment",
+  "moveWithFriendlyFromSameBattlefield",
+  "deathReplacementSource"
+]);
+
 function choiceCardSurface(choice) {
   if (!choice || !decisionVisibleToViewer(choice)) return "none";
   if (["combatDamage", "alphaStrikeDamage", "splitDamageAllocation"].includes(choice.effect)) return "damage";
-  if ([
-    "triggerOrder", "payDeflect", "predictChoice", "observedTopDeckSelfAbility",
-    "acknowledgeReveal"
-  ].includes(choice.effect)) return "panel";
+  // These decisions describe whether/how an effect is used. Some engine
+  // options carry their source card id solely for context; that id must never
+  // be mistaken for a target that the player has to click again.
+  if (FLOATING_EFFECT_CHOICES.has(choice.effect)) return "panel";
   const cardOptions = validChoiceOptions(choice).filter(choiceOptionHasPhysicalCard);
   if (!cardOptions.length) return "panel";
   const zones = cardOptions.map((option) => choiceCardContext(choiceOptionCardId(option), choicePreviewCard(option))?.zone || "unknown");
@@ -6431,6 +6458,7 @@ function commandChoiceSurface(choice) {
 function choicePanel() {
   const choice = game.pendingChoice;
   if (!choice || !Array.isArray(choice.options)) return "";
+  if (BINARY_EFFECT_CHOICES.has(choice.effect)) return binaryEffectChoicePanel(choice);
   if (choice.effect === "triggerOrder") return triggerOrderPanel(choice);
   if (choice.effect === "combatDamage") return combatDamagePanel(choice);
   if (["alphaStrikeDamage", "splitDamageAllocation"].includes(choice.effect)) return alphaStrikeDamagePanel(choice);
@@ -6587,6 +6615,34 @@ function predictChoicePanel(choice) {
             </button>
           ` : ""}
         </div>
+      </div>
+    </section>
+  `;
+}
+
+function binaryEffectChoicePanel(choice) {
+  const options = validChoiceOptions(choice);
+  const source = choice?.card;
+  const sourceName = source ? cardName(source) : t("effect", locale());
+  const title = locale() === LOCALES.KO ? "효과 발동 여부" : "Use this effect?";
+  const prompt = locale() === LOCALES.KO
+    ? `${sourceName}의 효과를 발동하시겠습니까?`
+    : `Do you want to use ${sourceName}'s effect?`;
+  return `
+    <section class="choice-panel modal-panel binary-effect-choice-panel" ${choiceModalAttributes(choice)}>
+      <div class="binary-effect-copy">
+        <span>${locale() === LOCALES.KO ? "선택 효과" : "Optional effect"}</span>
+        <h2>${escapeHtml(title)}</h2>
+        <strong>${escapeHtml(sourceName)}</strong>
+        <p>${escapeHtml(prompt)}</p>
+      </div>
+      ${source?.image ? `<button type="button" class="binary-effect-source" data-action="view-choice-card" data-card-id="${escapeHtml(source.instanceId || "")}" aria-label="${escapeHtml(`${sourceName} · ${t("cardInfo", locale())}`)}"><img src="${escapeHtml(source.image)}" alt="${escapeHtml(sourceName)}" loading="lazy" /></button>` : ""}
+      <div class="binary-effect-actions" role="group" aria-label="${escapeHtml(title)}">
+        ${options.map((option, index) => `
+          <button type="button" class="${index === 0 ? "primary" : "secondary"}" data-action="choose-effect" data-choice="${escapeHtml(option.id || "")}" ${option.disabled ? "disabled aria-disabled=\"true\"" : ""}>
+            ${escapeHtml(localizedChoiceOptionLabel(option))}
+          </button>
+        `).join("")}
       </div>
     </section>
   `;
@@ -6757,6 +6813,8 @@ function localizedChoiceOptionLabel(option) {
     decline: t("decline", locale()),
     continue: t("confirm", locale()),
     "use-trigger": t("useEffect", locale()),
+    "use-optional-trigger": locale() === LOCALES.KO ? "효과 발동" : "Use effect",
+    "decline-optional-trigger": locale() === LOCALES.KO ? "발동하지 않음" : "Do not use",
     pay: t("payCost", locale()),
     keep: t("keepOnTop", locale()),
     recycle: t("recycle", locale()),
@@ -7491,13 +7549,28 @@ function responsePrompt(info) {
 }
 
 function priorityResponseControls(actionMarkup = "") {
-  const reactionControl = actionMarkup || `<button class="primary" data-action="toggle-hand">${handOpen ? t("hideHand", locale()) : t("playReaction", locale())}</button>`;
   return `
     <div class="priority-response-controls" role="group" aria-label="${escapeHtml(locale() === LOCALES.KO ? "반응 또는 패스" : "React or pass")}">
-      ${reactionControl}
+      ${actionMarkup ? `<div class="priority-card-actions">${actionMarkup}</div>` : ""}
+      <button class="primary action-window-toggle" data-action="toggle-hand">${handOpen ? t("hideHand", locale()) : playWindowControlLabel()}</button>
       ${passControlButton()}
     </div>
   `;
+}
+
+function actionUseWindowAvailable() {
+  if (!viewerCanAct() || game?.pendingChoice || game?.pendingPayment || game?.actionChain) return false;
+  if (game?.phase === "showdown" && game?.showdown) {
+    const hasFocus = game.showdown.priorityPlayerId === viewerPlayerId();
+    const chainEmpty = !Array.isArray(game.showdown.chain) || game.showdown.chain.filter(Boolean).length === 0;
+    return hasFocus && chainEmpty;
+  }
+  return game?.phase === "action" && activePlayerId() === viewerPlayerId();
+}
+
+function playWindowControlLabel() {
+  if (locale() === LOCALES.KO) return actionUseWindowAvailable() ? "행동 사용" : "반응 사용";
+  return actionUseWindowAvailable() ? "Play Action" : "Play Reaction";
 }
 
 function chainItemTitle(item) {
@@ -7841,7 +7914,7 @@ function playerSide(player, side) {
           ${tableCardPile({ zone: "rune-deck", player, cards: seat.runeDeck, label: t("runeDeck", locale()), cardBack: true, compact: true })}
           <div class="rune-play-area">
             ${runeSummary(player)}
-            <div class="resource-row rune-card-stack">
+            <div class="resource-row rune-card-stack" data-rune-scroll-track data-scroll-key="runes-${escapeHtml(player.id)}" tabindex="0" aria-label="${escapeHtml(locale() === LOCALES.KO ? "배치된 룬 카드 · 좌우로 끌어서 이동" : "Played Rune cards · drag sideways to scroll")}">
               ${seat.runes.map((rune, index) => runeChip(rune, index, seat.runes.length, player.id)).join("")}
             </div>
           </div>
@@ -8253,8 +8326,11 @@ function handCard(card, index = 0, total = 1) {
   const choiceSelectable = Boolean(choiceOption && ["hand", "board"].includes(choiceSurface) && !choiceOption.disabled);
   const playDestinations = legalHandCardPlayDestinations(card.instanceId);
   const draggable = !choiceSelectable && playDestinations.length > 0;
+  const dragAttributes = draggable
+    ? `data-card-drag="play" data-play-destinations="${escapeHtml(playDestinations.join(" "))}" draggable="true"`
+    : `data-play-destinations="" draggable="false"`;
   return `
-    <article class="hand-fan-card ${imageCardClass(card, `${card.type || "card"} ${motionCardClass(card, "hand")}`)}" data-card-id="${escapeHtml(card.instanceId || "")}" data-hand-card ${choiceSelectable ? `data-action="stage-choice-card" data-choice="${escapeHtml(choiceOption.id || "")}"` : ""} data-play-destinations="${escapeHtml(playDestinations.join(" "))}" draggable="${draggable}" style="${fanCardStyle(index, total)}" role="button" tabindex="0" aria-label="${escapeHtml(cardName(card))}" aria-pressed="${choiceSelectable ? choiceOptionCardId(stagedChoiceOption()) === card.instanceId : game.selectedCardId === card.instanceId}">
+    <article class="hand-fan-card ${imageCardClass(card, `${card.type || "card"} ${motionCardClass(card, "hand")}`)}" data-card-id="${escapeHtml(card.instanceId || "")}" data-hand-card ${choiceSelectable ? `data-action="stage-choice-card" data-choice="${escapeHtml(choiceOption.id || "")}"` : ""} ${dragAttributes} style="${fanCardStyle(index, total)}" role="button" tabindex="0" aria-label="${escapeHtml(cardName(card))}" aria-pressed="${choiceSelectable ? choiceOptionCardId(stagedChoiceOption()) === card.instanceId : game.selectedCardId === card.instanceId}">
       <div class="card-orientation-layer">
         <div class="card-face-layer">${cardImage(card)}</div>
       </div>
@@ -8293,26 +8369,82 @@ function requestHandCardPlay(cardId, destination) {
   return true;
 }
 
-function legalDropDestinationNode(node, cardId = draggingHandCardId) {
-  const destinationNode = node?.closest?.("[data-play-destination]") || null;
-  if (!destinationNode || !app.contains(destinationNode)) return null;
-  const destination = String(destinationNode.dataset.playDestination || "");
-  return legalHandCardPlayDestinations(cardId).includes(destination) ? destinationNode : null;
+function legalUnitMoveDestinations(unitId) {
+  if (!unitId || replayMode || game?.pendingChoice || game?.pendingPayment || online.commandPending || !viewerCanAct()) return [];
+  return [...new Set(legalMoveDestinationIds(uiLegalActions, String(unitId))
+    .filter((destination) => tutorialAllowsUiAction("move", { unit: String(unitId), destination }))
+    .filter(Boolean))];
 }
 
-function beginHandCardDragPresentation(cardId, sourceNode = null) {
-  const destinations = new Set(legalHandCardPlayDestinations(cardId));
-  if (!cardId || !destinations.size) return false;
-  draggingHandCardId = String(cardId);
-  app.classList.add("is-dragging-card");
+function requestUnitMove(unitId, destination) {
+  const requestedUnitId = String(unitId || "");
+  const requestedDestination = String(destination || "");
+  if (!requestedUnitId || !requestedDestination) return false;
+  if (!legalUnitMoveDestinations(requestedUnitId).includes(requestedDestination)) return false;
+  const legalAction = uiLegalActions.find((action) =>
+    action?.kind === "moveUnit"
+      && action.unitId === requestedUnitId
+      && action.destinationId === requestedDestination
+  );
+  if (!legalAction || !tutorialAllowsUiAction("move", {
+    unit: requestedUnitId,
+    destination: requestedDestination
+  })) return false;
+  dispatchGameCommand(
+    { kind: "moveUnit", unitId: requestedUnitId, destinationId: requestedDestination },
+    () => moveUnit(game, requestedUnitId, requestedDestination)
+  );
+  moveSelection.clear();
+  return true;
+}
+
+function cardDragDescriptor(sourceNode) {
+  if (!(sourceNode instanceof HTMLElement)) return null;
+  const kind = sourceNode.dataset.cardDrag;
+  const cardId = String(sourceNode.dataset.cardId || "");
+  if (!cardId || !["play", "move"].includes(kind)) return null;
+  const destinations = kind === "play"
+    ? legalHandCardPlayDestinations(cardId)
+    : legalUnitMoveDestinations(cardId);
+  return destinations.length ? { kind, cardId } : null;
+}
+
+function dragSessionDestinations(session = draggingCardSession) {
+  if (!session?.cardId) return [];
+  return session.kind === "move"
+    ? legalUnitMoveDestinations(session.cardId)
+    : legalHandCardPlayDestinations(session.cardId);
+}
+
+function legalDropDestinationNode(node, session = draggingCardSession) {
+  const destinationNode = node?.closest?.("[data-play-destination]") || null;
+  if (!destinationNode || !app.contains(destinationNode)) return null;
+  if (String(destinationNode.dataset.dropOwner || "") !== String(viewerPlayerId() || "")) return null;
+  const destination = String(destinationNode.dataset.playDestination || "");
+  return dragSessionDestinations(session).includes(destination) ? destinationNode : null;
+}
+
+function beginCardDragPresentation(session, sourceNode = null) {
+  const normalized = session?.kind && session?.cardId
+    ? { kind: String(session.kind), cardId: String(session.cardId) }
+    : null;
+  if (draggingCardSession && (
+    draggingCardSession.kind !== normalized?.kind
+    || draggingCardSession.cardId !== normalized?.cardId
+  )) clearCardDragPresentation();
+  const destinations = new Set(dragSessionDestinations(normalized));
+  if (!normalized || !destinations.size) return false;
+  draggingCardSession = normalized;
+  app.classList.add("is-dragging-card", `is-dragging-${normalized.kind}`);
   sourceNode?.classList.add("drag-source-active");
   for (const node of app.querySelectorAll("[data-play-destination]")) {
-    node.classList.toggle("is-legal-drop", destinations.has(String(node.dataset.playDestination || "")));
+    const ownDestination = String(node.dataset.dropOwner || "") === String(viewerPlayerId() || "");
+    node.classList.toggle("is-legal-drop", ownDestination && destinations.has(String(node.dataset.playDestination || "")));
   }
   return true;
 }
 
-function updateHandCardDragDestination(node) {
+function updateCardDragDestination(node) {
   for (const current of app.querySelectorAll("[data-play-destination].drag-over, [data-play-destination].drop-target-active")) {
     current.classList.remove("drag-over", "drop-target-active");
   }
@@ -8321,14 +8453,22 @@ function updateHandCardDragDestination(node) {
   return target;
 }
 
-function clearHandCardDragPresentation() {
-  app.classList.remove("is-dragging-card");
+function clearCardDragPresentation() {
+  const pointerSession = pointerCardDrag;
+  pointerCardDrag = null;
+  app.classList.remove("is-dragging-card", "is-dragging-play", "is-dragging-move");
   for (const node of app.querySelectorAll(".drag-source-active, [data-play-destination].is-legal-drop, [data-play-destination].drag-over, [data-play-destination].drop-target-active")) {
     node.classList.remove("drag-source-active", "is-legal-drop", "drag-over", "drop-target-active");
   }
-  pointerHandCardDrag?.ghost?.remove?.();
-  draggingHandCardId = null;
-  pointerHandCardDrag = null;
+  pointerSession?.ghost?.remove?.();
+  try {
+    if (pointerSession?.sourceNode?.hasPointerCapture?.(pointerSession.pointerId)) {
+      pointerSession.sourceNode.releasePointerCapture(pointerSession.pointerId);
+    }
+  } catch {
+    // Pointer capture may already have been released by the browser.
+  }
+  draggingCardSession = null;
 }
 
 function createPointerDragGhost(sourceNode) {
@@ -8338,7 +8478,7 @@ function createPointerDragGhost(sourceNode) {
   ghost.removeAttribute("draggable");
   ghost.removeAttribute("tabindex");
   ghost.removeAttribute("role");
-  ghost.classList.add("hand-card-drag-ghost");
+  ghost.classList.add(sourceNode.dataset.cardDrag === "move" ? "board-card-drag-ghost" : "hand-card-drag-ghost");
   ghost.setAttribute("aria-hidden", "true");
   document.body.appendChild(ghost);
   return ghost;
@@ -8359,9 +8499,10 @@ function visibleCardStatuses(card) {
   });
 }
 
-function cardStatusBadges(card) {
+function cardStatusBadges(card, { excludeKinds = [] } = {}) {
+  const excluded = new Set(excludeKinds);
   const statuses = visibleCardStatuses(card)
-    .filter((status) => !["exhausted", "damage", "attachments"].includes(status.kind))
+    .filter((status) => !["exhausted", "damage", "attachments"].includes(status.kind) && !excluded.has(status.kind))
     .sort((left, right) => Number(right.kind === "empowered") - Number(left.kind === "empowered"));
   if (!statuses.length) return "";
   const visible = statuses.slice(0, 2);
@@ -8494,6 +8635,13 @@ function boardCard(card, location) {
   `;
 }
 
+function boardUnitDragAttributes(card) {
+  if (!card || card.type !== "unit") return `draggable="false"`;
+  const destinations = legalUnitMoveDestinations(card.instanceId);
+  if (!destinations.length) return `data-move-destinations="" draggable="false"`;
+  return `data-card-drag="move" data-move-destinations="${escapeHtml(destinations.join(" "))}" draggable="true"`;
+}
+
 function baseToken(card, location, owner, motion, attachments, flashed) {
   const domain = domainText(card.domains?.[0]) || (card.tags?.[0] ? keywordText([card.tags[0]]) : cardType(card));
   const stats = card.type === "unit" ? boardUnitStats(card, location) : null;
@@ -8504,15 +8652,17 @@ function baseToken(card, location, owner, motion, attachments, flashed) {
     .concat(stats ? [`${t("currentMight", locale())} ${stats.might}`, `${t("remainingHealth", locale())} ${stats.remaining}`] : [])
     .concat(statusSummary ? [statusSummary] : [])
     .join(" · ");
+  const dragAttributes = boardUnitDragAttributes(card);
   return `
-    <article class="unit-token base-token physical-board-card ${card.type}-token owner-${card.ownerId} controller-${card.controllerId} ${attachments.length ? "has-attachments" : ""} ${card.exhausted ? "exhausted" : "ready"} ${cardStatusClassNames(card)} ${unitMightAnimationClass(card)} ${chainTargetClass(card.instanceId)} ${choiceCardStateClasses(card.instanceId)} ${flashed ? "effect-flash" : ""} ${motion}" data-card-id="${card.instanceId}" data-location="${location}" data-current-might="${stats?.might ?? gearMight ?? ""}" data-remaining-health="${stats?.remaining ?? ""}" data-damage="${Number(card.damage) || 0}" data-exhausted="${Boolean(card.exhausted)}" data-stunned="${Boolean(card.stunned)}" role="button" tabindex="0" aria-label="${escapeHtml(accessibleState)}" title="${escapeHtml(accessibleState)}">
+    <article class="unit-token base-token physical-board-card ${card.type}-token owner-${card.ownerId} controller-${card.controllerId} ${attachments.length ? "has-attachments" : ""} ${card.exhausted ? "exhausted" : "ready"} ${cardStatusClassNames(card)} ${unitMightAnimationClass(card)} ${chainTargetClass(card.instanceId)} ${choiceCardStateClasses(card.instanceId)} ${flashed ? "effect-flash" : ""} ${motion}" data-card-id="${card.instanceId}" data-location="${location}" data-current-might="${stats?.might ?? gearMight ?? ""}" data-remaining-health="${stats?.remaining ?? ""}" data-damage="${Number(card.damage) || 0}" data-exhausted="${Boolean(card.exhausted)}" data-stunned="${Boolean(card.stunned)}" ${dragAttributes} role="button" tabindex="0" aria-label="${escapeHtml(accessibleState)}" title="${escapeHtml(accessibleState)}">
       <div class="card-exhaust-layer">
         <div class="card-face-layer">
           <div class="unit-token-art">
             ${card.image ? `<img src="${escapeHtml(card.image)}" alt="${escapeHtml(cardName(card))}" loading="lazy" />` : `<span>${escapeHtml(cardName(card))}</span>`}
           </div>
           ${card.image ? "" : `<div class="unit-token-body"><strong>${escapeHtml(cardName(card))}</strong><span>${escapeHtml(domain)}</span></div>`}
-          ${boardCardCornerOverlay(card, stats, gearMight)}
+          ${empoweredBoardMarker(card)}
+          ${boardCardCornerOverlay(card, stats)}
         </div>
       </div>
       ${ownerChip(owner, card.ownerId)}
@@ -8536,14 +8686,16 @@ function unitToken(card, location, owner, motion, attachments, flashed) {
     `${t("remainingHealth", locale())} ${stats.remaining}`,
     statusSummary
   ].filter(Boolean).join(" · ");
+  const dragAttributes = boardUnitDragAttributes(card);
   return `
-    <article class="unit-token ${zoneClass} physical-board-card owner-${card.ownerId} controller-${card.controllerId} ${attachments.length ? "has-attachments" : ""} ${card.exhausted ? "exhausted" : "ready"} ${cardStatusClassNames(card)} ${unitMightAnimationClass(card)} ${chainTargetClass(card.instanceId)} ${choiceCardStateClasses(card.instanceId)} ${flashed ? "effect-flash" : ""} ${motion}" data-card-id="${card.instanceId}" data-location="${location}" data-current-might="${stats.might}" data-remaining-health="${stats.remaining}" data-damage="${Number(card.damage) || 0}" data-exhausted="${Boolean(card.exhausted)}" data-stunned="${Boolean(card.stunned)}" role="button" tabindex="0" aria-label="${escapeHtml(accessibleState)}" title="${escapeHtml(accessibleState)}">
+    <article class="unit-token ${zoneClass} physical-board-card owner-${card.ownerId} controller-${card.controllerId} ${attachments.length ? "has-attachments" : ""} ${card.exhausted ? "exhausted" : "ready"} ${cardStatusClassNames(card)} ${unitMightAnimationClass(card)} ${chainTargetClass(card.instanceId)} ${choiceCardStateClasses(card.instanceId)} ${flashed ? "effect-flash" : ""} ${motion}" data-card-id="${card.instanceId}" data-location="${location}" data-current-might="${stats.might}" data-remaining-health="${stats.remaining}" data-damage="${Number(card.damage) || 0}" data-exhausted="${Boolean(card.exhausted)}" data-stunned="${Boolean(card.stunned)}" ${dragAttributes} role="button" tabindex="0" aria-label="${escapeHtml(accessibleState)}" title="${escapeHtml(accessibleState)}">
       <div class="card-exhaust-layer">
         <div class="card-face-layer">
           <div class="unit-token-art">
             ${card.image ? `<img src="${escapeHtml(card.image)}" alt="${escapeHtml(cardName(card))}" loading="lazy" />` : `<span>${escapeHtml(cardName(card))}</span>`}
           </div>
           ${card.image ? "" : `<div class="unit-token-body"><strong>${escapeHtml(cardName(card))}</strong><span>${escapeHtml(domain)}</span></div>`}
+          ${empoweredBoardMarker(card)}
           ${boardCardCornerOverlay(card, stats)}
         </div>
       </div>
@@ -8588,7 +8740,6 @@ function attachmentStrip(attachments) {
             ${gear.image ? `<img src="${escapeHtml(gear.image)}" alt="${escapeHtml(cardName(gear))}" loading="lazy" />` : `<span>${escapeHtml(cardName(gear))}</span>`}
             <span class="attached-gear-board-overlay" aria-hidden="true">
               ${cardStatusBadges(gear)}
-              <span class="attached-gear-might" title="${escapeHtml(`${t("might", locale())} ${state.might}`)}">${state.might}</span>
             </span>
           </span>
         </button>
@@ -8604,17 +8755,21 @@ function boardUnitStats(card, location) {
   return { might, remaining };
 }
 
-function boardCardCornerOverlay(card, stats = null, gearMight = null) {
-  const statusMarkup = cardStatusBadges(card);
-  if (!stats && gearMight == null && !statusMarkup) return "";
-  const mightLabel = stats
-    ? `${t("currentMight", locale())} ${stats.might}`
-    : `${t("might", locale())} ${gearMight}`;
+function empoweredBoardMarker(card) {
+  const status = visibleCardStatuses(card).find((candidate) => candidate.kind === "empowered");
+  if (!status) return "";
+  const visibleLabel = locale() === LOCALES.KO ? "강화됨" : "Empowered";
+  return `<span class="empowered-board-marker" data-empowered-count="${Math.max(1, Number(card.empoweredCount) || 1)}" title="${escapeHtml(status.badge)}" aria-label="${escapeHtml(status.badge)}"><span aria-hidden="true">✦</span>${escapeHtml(visibleLabel)}</span>`;
+}
+
+function boardCardCornerOverlay(card, stats = null) {
+  const statusMarkup = cardStatusBadges(card, { excludeKinds: ["empowered"] });
+  if (!stats && !statusMarkup) return "";
   return `
     <span class="unit-board-overlay" aria-hidden="true">
       ${statusMarkup}
       ${stats ? `<span class="unit-corner-value unit-remaining-health ${stats.remaining <= 0 ? "lethal-stat" : "health-stat"}" title="${escapeHtml(`${t("remainingHealth", locale())} ${stats.remaining}`)}">${stats.remaining}</span>` : ""}
-      ${stats || gearMight != null ? `<span class="unit-corner-value unit-current-might" title="${escapeHtml(mightLabel)}">${stats?.might ?? gearMight}</span>` : ""}
+      ${stats ? `<span class="unit-corner-value unit-current-might" title="${escapeHtml(`${t("currentMight", locale())} ${stats.might}`)}">${stats.might}</span>` : ""}
     </span>
   `;
 }
@@ -8813,6 +8968,11 @@ function actionBar(player, card) {
   const rejection = !waiting && !disabled ? actionRejection : null;
   if (!card || disabled || waiting) {
     const quickActions = globalActionButtons(player);
+    const commandMarkup = waiting
+      ? ""
+      : responseInfo
+        ? priorityResponseControls()
+        : quickActions.join("");
     return `
       <section class="action-bar context-action-dock ${chainSummary ? "showdown-action-bar" : ""} ${rejection ? "action-rejected" : ""}">
         <div class="action-context">
@@ -8820,12 +8980,12 @@ function actionBar(player, card) {
           <strong>${waiting ? t("waitingForOpponent", locale()) : rejection?.title || responseInfo?.title || chainSummary?.title || (disabled ? t("resolvingStep", locale()) : t("noAction", locale()))}</strong>
           <span>${waiting ? t("waitingForOpponent", locale()) : rejection?.detail || responseInfo?.detail || chainSummary?.detail || (disabled ? t("finishDialog", locale()) : t("selectCardHint", locale()))}</span>
         </div>
-        <div class="actions inline action-command-list" data-scroll-key="action-${escapeHtml(card?.instanceId || "global")}">
-          ${waiting ? `<button disabled>${t("noAction", locale())}</button>` : responseInfo ? priorityResponseControls() : quickActions.join("") || `<button disabled>${t("noAction", locale())}</button>`}
-        </div>
         <div class="bar-controls table-action-rail">
+          <div class="actions inline action-command-list right-action-command-list" data-scroll-key="action-${escapeHtml(card?.instanceId || "global")}">
+            ${commandMarkup}
+          </div>
           <button data-action="toggle-inspector" ${card ? "" : "disabled"}>${t("cardInfo", locale())}</button>
-          <button class="primary" data-action="toggle-hand">${handOpen ? t("hideHand", locale()) : `${t("hand", locale())} ${cardCount}`}</button>
+          ${responseInfo ? "" : `<button class="primary action-window-toggle" data-action="toggle-hand" title="${escapeHtml(`${t("hand", locale())} ${cardCount}`)}">${handOpen ? t("hideHand", locale()) : playWindowControlLabel()}</button>`}
           ${chainSummary
             ? (responseInfo ? "" : passControlButton({ disabled: waiting || disabled }))
             : `<button data-action="end-turn" ${game.phase !== "action" || waiting || disabled ? "disabled" : ""}>${t("endTurn", locale())}</button>`}
@@ -8835,6 +8995,9 @@ function actionBar(player, card) {
   }
   const context = selectedContext(card.instanceId);
   const actions = mergeActionButtons(selectedActions(card, context), globalActionButtons(player, card));
+  const commandMarkup = responseInfo
+    ? priorityResponseControls(actions.join(""))
+    : actions.join("");
   return `
     <section class="action-bar context-action-dock ${chainSummary ? "showdown-action-bar" : ""} ${rejection ? "action-rejected" : ""}">
       <div class="action-context">
@@ -8842,12 +9005,12 @@ function actionBar(player, card) {
           <strong>${rejection?.title || responseInfo?.title || chainSummary?.title || cardName(card)}</strong>
         <span>${rejection?.detail || (responseInfo ? `${responseInfo.detail} / ${t("selected", locale())}: ${cardName(card)}` : chainSummary ? `${chainSummary.detail} / ${t("selected", locale())}: ${cardName(card)}` : actionHint(card, context, actions))}</span>
       </div>
-      <div class="actions inline action-command-list" data-scroll-key="action-${escapeHtml(card.instanceId || "selected")}">
-        ${responseInfo ? priorityResponseControls(actions.join("")) : actions.join("") || `<button disabled>${t("noAction", locale())}</button>`}
-      </div>
       <div class="bar-controls table-action-rail">
+        <div class="actions inline action-command-list right-action-command-list" data-scroll-key="action-${escapeHtml(card.instanceId || "selected")}">
+          ${commandMarkup}
+        </div>
         <button data-action="toggle-inspector">${t("cardInfo", locale())}</button>
-        <button class="primary" data-action="toggle-hand">${handOpen ? t("hideHand", locale()) : `${t("hand", locale())} ${cardCount}`}</button>
+        ${responseInfo ? "" : `<button class="primary action-window-toggle" data-action="toggle-hand" title="${escapeHtml(`${t("hand", locale())} ${cardCount}`)}">${handOpen ? t("hideHand", locale()) : playWindowControlLabel()}</button>`}
         ${chainSummary
           ? (responseInfo ? "" : passControlButton({ disabled }))
           : `<button data-action="end-turn" ${game.phase !== "action" || !viewerCanAct() ? "disabled" : ""}>${t("endTurn", locale())}</button>`}
@@ -9415,12 +9578,92 @@ function isFlashed(cardId) {
   return game.effectFlash?.sourceId === cardId || game.effectFlash?.targetIds?.includes(cardId);
 }
 
+function clearRuneScrollGesture() {
+  const session = pointerRuneScroll;
+  pointerRuneScroll = null;
+  session?.track?.classList?.remove("is-panning");
+  try {
+    if (session?.track?.hasPointerCapture?.(session.pointerId)) {
+      session.track.releasePointerCapture(session.pointerId);
+    }
+  } catch {
+    // Pointer capture may already have been released by the browser.
+  }
+}
+
+app.addEventListener("pointerdown", (event) => {
+  if (!event.isPrimary || event.button !== 0 || event.pointerType === "touch" || replayMode || appView !== "game") return;
+  const track = event.target.closest?.("[data-rune-scroll-track]");
+  if (!(track instanceof HTMLElement) || track.scrollWidth <= track.clientWidth + 1) return;
+  clearRuneScrollGesture();
+  pointerRuneScroll = {
+    pointerId: event.pointerId,
+    track,
+    startX: event.clientX,
+    startY: event.clientY,
+    startLeft: track.scrollLeft,
+    dragging: false
+  };
+});
+
+app.addEventListener("pointermove", (event) => {
+  const session = pointerRuneScroll;
+  if (!session || session.pointerId !== event.pointerId) return;
+  if ((event.buttons & 1) === 0) {
+    clearRuneScrollGesture();
+    return;
+  }
+  const deltaX = event.clientX - session.startX;
+  const deltaY = event.clientY - session.startY;
+  if (!session.dragging && Math.hypot(deltaX, deltaY) >= 8 && Math.abs(deltaX) >= Math.abs(deltaY) * 0.7) {
+    session.dragging = true;
+    session.track.classList.add("is-panning");
+    try {
+      session.track.setPointerCapture?.(event.pointerId);
+    } catch {
+      clearRuneScrollGesture();
+      return;
+    }
+  }
+  if (!session.dragging) return;
+  event.preventDefault();
+  session.track.scrollLeft = session.startLeft - deltaX;
+}, { passive: false });
+
+app.addEventListener("pointerup", (event) => {
+  const session = pointerRuneScroll;
+  if (!session || session.pointerId !== event.pointerId) return;
+  if (session.dragging) {
+    event.preventDefault();
+    suppressRuneClickUntil = Date.now() + 500;
+  }
+  clearRuneScrollGesture();
+});
+
+app.addEventListener("pointercancel", (event) => {
+  if (pointerRuneScroll?.pointerId === event.pointerId) clearRuneScrollGesture();
+});
+
+app.addEventListener("lostpointercapture", (event) => {
+  if (pointerRuneScroll?.pointerId === event.pointerId) clearRuneScrollGesture();
+  if (pointerCardDrag?.pointerId === event.pointerId) clearCardDragPresentation();
+});
+
+app.addEventListener("wheel", (event) => {
+  const track = event.target.closest?.("[data-rune-scroll-track]");
+  if (!(track instanceof HTMLElement) || track.scrollWidth <= track.clientWidth + 1) return;
+  if (Math.abs(event.deltaX) >= Math.abs(event.deltaY) || !event.deltaY) return;
+  track.scrollLeft += event.deltaY;
+  event.preventDefault();
+}, { passive: false });
+
 app.addEventListener("dragstart", (event) => {
   try {
     if (replayMode || appView !== "game") return;
-    const cardNode = event.target.closest?.("[data-hand-card][draggable='true']");
-    const cardId = String(cardNode?.dataset.cardId || "");
-    if (!cardNode || !cardId || !beginHandCardDragPresentation(cardId, cardNode)) {
+    const cardNode = event.target.closest?.("[data-card-drag][draggable='true']");
+    const interactiveChild = event.target.closest?.("button, a, input, select, textarea");
+    const session = cardDragDescriptor(cardNode);
+    if (!cardNode || (interactiveChild && interactiveChild !== cardNode) || !session || !beginCardDragPresentation(session, cardNode)) {
       event.preventDefault();
       return;
     }
@@ -9428,45 +9671,49 @@ app.addEventListener("dragstart", (event) => {
       event.dataTransfer.effectAllowed = "move";
       // The payload is deliberately opaque. The approved in-memory card id and
       // the current legal action list are the authority at drop time.
-      event.dataTransfer.setData("text/plain", "riftbound-hand-card");
+      event.dataTransfer.setData("text/plain", `riftbound-card-${session.kind}`);
       event.dataTransfer.setDragImage(cardNode, Math.round(cardNode.offsetWidth / 2), Math.round(cardNode.offsetHeight / 2));
     }
   } catch (error) {
-    clearHandCardDragPresentation();
-    reportUiException(error, "hand card drag start");
+    clearCardDragPresentation();
+    reportUiException(error, "card drag start");
   }
 });
 
 app.addEventListener("dragover", (event) => {
-  if (!draggingHandCardId) return;
-  const target = updateHandCardDragDestination(event.target);
+  if (!draggingCardSession) return;
+  const target = updateCardDragDestination(event.target);
   if (!target) return;
   event.preventDefault();
   if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
 });
 
 app.addEventListener("drop", (event) => {
-  if (!draggingHandCardId) return;
-  const cardId = draggingHandCardId;
-  const target = legalDropDestinationNode(event.target, cardId);
+  if (!draggingCardSession) return;
+  const session = { ...draggingCardSession };
+  const target = legalDropDestinationNode(event.target, session);
   event.preventDefault();
   event.stopPropagation();
   const destination = String(target?.dataset.playDestination || "");
-  clearHandCardDragPresentation();
-  if (destination) requestHandCardPlay(cardId, destination);
+  clearCardDragPresentation();
+  if (destination) {
+    if (session.kind === "move") requestUnitMove(session.cardId, destination);
+    else requestHandCardPlay(session.cardId, destination);
+  }
   render();
 });
 
-app.addEventListener("dragend", () => clearHandCardDragPresentation());
+app.addEventListener("dragend", () => clearCardDragPresentation());
 
 app.addEventListener("pointerdown", (event) => {
   if (event.pointerType === "mouse" || !event.isPrimary || event.button !== 0 || replayMode || appView !== "game") return;
-  const cardNode = event.target.closest?.("[data-hand-card]");
-  const cardId = String(cardNode?.dataset.cardId || "");
-  if (!cardNode || !legalHandCardPlayDestinations(cardId).length) return;
-  pointerHandCardDrag = {
+  const cardNode = event.target.closest?.("[data-card-drag]");
+  const interactiveChild = event.target.closest?.("button, a, input, select, textarea");
+  const session = cardDragDescriptor(cardNode);
+  if (!cardNode || (interactiveChild && interactiveChild !== cardNode) || !session) return;
+  pointerCardDrag = {
     pointerId: event.pointerId,
-    cardId,
+    ...session,
     sourceNode: cardNode,
     startX: event.clientX,
     startY: event.clientY,
@@ -9477,12 +9724,12 @@ app.addEventListener("pointerdown", (event) => {
 });
 
 app.addEventListener("pointermove", (event) => {
-  const session = pointerHandCardDrag;
+  const session = pointerCardDrag;
   if (!session || session.pointerId !== event.pointerId) return;
   const distance = Math.hypot(event.clientX - session.startX, event.clientY - session.startY);
   if (!session.dragging && distance >= 10) {
-    if (!beginHandCardDragPresentation(session.cardId, session.sourceNode)) {
-      clearHandCardDragPresentation();
+    if (!beginCardDragPresentation(session, session.sourceNode)) {
+      clearCardDragPresentation();
       return;
     }
     session.dragging = true;
@@ -9491,28 +9738,30 @@ app.addEventListener("pointermove", (event) => {
   if (!session.dragging) return;
   event.preventDefault();
   positionPointerDragGhost(session.ghost, event.clientX, event.clientY);
-  updateHandCardDragDestination(document.elementFromPoint(event.clientX, event.clientY));
+  updateCardDragDestination(document.elementFromPoint(event.clientX, event.clientY));
 }, { passive: false });
 
 app.addEventListener("pointerup", (event) => {
-  const session = pointerHandCardDrag;
+  const session = pointerCardDrag;
   if (!session || session.pointerId !== event.pointerId) return;
   if (!session.dragging) {
-    pointerHandCardDrag = null;
+    pointerCardDrag = null;
     return;
   }
   event.preventDefault();
-  const dropNode = legalDropDestinationNode(document.elementFromPoint(event.clientX, event.clientY), session.cardId);
+  const dropNode = legalDropDestinationNode(document.elementFromPoint(event.clientX, event.clientY), session);
   const destination = String(dropNode?.dataset.playDestination || "");
-  const cardId = session.cardId;
   suppressCardClickUntil = Date.now() + 650;
-  clearHandCardDragPresentation();
-  if (destination) requestHandCardPlay(cardId, destination);
+  clearCardDragPresentation();
+  if (destination) {
+    if (session.kind === "move") requestUnitMove(session.cardId, destination);
+    else requestHandCardPlay(session.cardId, destination);
+  }
   render();
 });
 
 app.addEventListener("pointercancel", (event) => {
-  if (pointerHandCardDrag?.pointerId === event.pointerId) clearHandCardDragPresentation();
+  if (pointerCardDrag?.pointerId === event.pointerId) clearCardDragPresentation();
 });
 
 app.addEventListener("click", (event) => {
@@ -9648,7 +9897,12 @@ app.addEventListener("contextmenu", (event) => {
 
 app.addEventListener("click", (event) => {
   try {
-    if (Date.now() < suppressCardClickUntil && event.target.closest?.("[data-hand-card], .hand-drawer")) {
+    if (Date.now() < suppressRuneClickUntil && event.target.closest?.("[data-rune-scroll-track]")) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    if (Date.now() < suppressCardClickUntil && event.target.closest?.("[data-hand-card], .hand-drawer, [data-card-drag='move']")) {
       event.preventDefault();
       event.stopPropagation();
       return;

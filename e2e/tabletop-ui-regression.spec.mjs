@@ -130,6 +130,8 @@ async function installRichBoardFixture(page) {
         name: `Regression Unit ${index + 1}`,
         might: 5,
         damage: index + 1,
+        empoweredCount: 1,
+        maxEmpowerCount: 2,
         buffs: 2,
         mightModifier: 2,
         temporaryMight: 1,
@@ -196,6 +198,7 @@ async function installRichBoardFixture(page) {
         unitDamage: unit.damage,
         unitExhausted: unit.exhausted,
         unitStunned: unit.stunned,
+        unitEmpoweredCount: unit.empoweredCount,
         gearId: gear.instanceId,
         gearMight: gear.might,
         gearExhausted: gear.exhausted,
@@ -1056,6 +1059,10 @@ async function assertPersistentTable(page, fixture) {
     const secondaryStatuses = overlay.locator(":scope > .unit-state-badges");
     await expect(secondaryStatuses).toHaveCount(1);
     await expect(secondaryStatuses).toHaveAttribute("aria-label", /기절|Stunned/iu);
+    const empoweredMarker = face.locator(":scope > .empowered-board-marker");
+    await expect(empoweredMarker).toBeVisible();
+    await expect(empoweredMarker).toHaveAttribute("data-empowered-count", String(player.unitEmpoweredCount));
+    await expect(empoweredMarker).toContainText(/강화됨|Empowered/iu);
     await expect(unit.locator(".primary-card-state, .card-state-hud.unit-stats")).toHaveCount(0);
     await expect(seat.locator(`[data-card-id="${player.gearId}"]`)).toHaveCount(1);
     const gear = seat.locator(`.attached-gear[data-card-id="${player.gearId}"]`);
@@ -1063,7 +1070,7 @@ async function assertPersistentTable(page, fixture) {
     await expect(gear).toHaveAttribute("data-exhausted", String(player.gearExhausted));
     await expect(gear).toHaveAttribute("title", player.gearExhausted ? /탈진|Exhausted/iu : /준비|Ready/iu);
     await expect(gear.locator(".attachment-orientation-layer")).toHaveCount(1);
-    await expect(gear.locator(".attached-gear-board-overlay .attached-gear-might")).toContainText(String(player.gearMight));
+    await expect(gear.locator(".attached-gear-board-overlay .attached-gear-might")).toHaveCount(0);
     await expect(gear.locator(".attached-gear-board-overlay .unit-state-badges")).toHaveCount(1);
     await expect(gear.locator(".attached-gear-readiness, .attached-gear-state")).toHaveCount(0);
     await expect(gear).not.toContainText(/준비|탈진|Ready|Exhausted/iu);
@@ -1105,7 +1112,15 @@ async function boardCardCornerPresentation(page, cardId) {
     return {
       angle,
       might: relativeCenter(mightRect),
-      health: relativeCenter(healthRect)
+      health: relativeCenter(healthRect),
+      contrast: {
+        layerOpacity: getComputedStyle(layer).opacity,
+        layerFilter: getComputedStyle(layer).filter,
+        artOpacity: getComputedStyle(card.querySelector(".unit-token-art")).opacity,
+        artFilter: getComputedStyle(card.querySelector(".unit-token-art")).filter,
+        overlayOpacity: getComputedStyle(card.querySelector(".unit-board-overlay")).opacity,
+        overlayFilter: getComputedStyle(card.querySelector(".unit-board-overlay")).filter
+      }
     };
   });
 }
@@ -1145,6 +1160,14 @@ test("tabletop board retains every persistent zone, count, card state, and game 
   expect(exhaustedCorners.might.y).toBeGreaterThan(0);
   expect(exhaustedCorners.health.x).toBeLessThan(0);
   expect(exhaustedCorners.health.y).toBeLessThan(0);
+  expect(exhaustedCorners.contrast).toEqual({
+    layerOpacity: "1",
+    layerFilter: "none",
+    artOpacity: "1",
+    artFilter: "none",
+    overlayOpacity: "1",
+    overlayFilter: "none"
+  });
   await expect(page.locator('.table-action-rail [data-action="end-turn"]')).toBeVisible();
 
   const ownSeat = page.locator('.table-seat[data-side="bottom"]');
@@ -1832,15 +1855,12 @@ test("390px tabletop exposes game actions, XP, Rune readiness, pool totals, comb
     await expect.soft(attachedGear, `${player.id} attached gear must remain directly selectable at 390px`).toBeVisible({ timeout: 2_000 });
     await expect.soft(attachedGear).toHaveAttribute("title", /강화|Empowered/iu);
     const compactGearPresentation = await attachedGear.evaluate((element) => {
-      const might = element.querySelector(".attached-gear-board-overlay .attached-gear-might");
       const rect = element.getBoundingClientRect();
       return {
         width: rect.width,
         height: rect.height,
         aspectRatio: rect.width / Math.max(1, rect.height),
-        mightFontSize: might ? Number.parseFloat(getComputedStyle(might).fontSize) : 0,
-        mightClientWidth: might?.clientWidth || 0,
-        mightScrollWidth: might?.scrollWidth || 0,
+        boardMightCount: element.querySelectorAll(".attached-gear-board-overlay .attached-gear-might").length,
         readinessCount: element.querySelectorAll(".attached-gear-readiness, .attached-gear-state").length
       };
     });
@@ -1848,8 +1868,7 @@ test("390px tabletop exposes game actions, XP, Rune readiness, pool totals, comb
     expect.soft(compactGearPresentation.height, `${player.id} attached gear must not collapse inside its strip`).toBeGreaterThanOrEqual(42);
     expect.soft(compactGearPresentation.aspectRatio, `${player.id} attached gear must preserve a portrait card ratio`).toBeGreaterThan(0.66);
     expect.soft(compactGearPresentation.aspectRatio, `${player.id} attached gear must preserve a portrait card ratio`).toBeLessThan(0.76);
-    expect.soft(compactGearPresentation.mightFontSize, `${player.id} attached gear Might corner must remain legible`).toBeGreaterThanOrEqual(7);
-    expect.soft(compactGearPresentation.mightScrollWidth, `${player.id} attached gear Might must not be ellipsized`).toBeLessThanOrEqual(compactGearPresentation.mightClientWidth + 1);
+    expect.soft(compactGearPresentation.boardMightCount, `${player.id} attached Gear must not show a board Might number`).toBe(0);
     expect.soft(compactGearPresentation.readinessCount, `${player.id} attached gear must communicate readiness only by orientation`).toBe(0);
   }
 

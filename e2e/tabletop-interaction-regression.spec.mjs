@@ -69,7 +69,9 @@ async function assertRuntimeHealthy(page, failures) {
 async function installInteractionFixture(page, scenario) {
   return page.evaluate((name) => {
     const game = window.__riftboundGame;
-    const [player, opponent] = game.players;
+    const visiblePlayerId = document.querySelector('.table-seat[data-side="bottom"]')?.getAttribute("data-player-id");
+    const player = game.players.find((candidate) => candidate.id === visiblePlayerId) || game.players[0];
+    const opponent = game.players.find((candidate) => candidate.id !== player.id) || game.players[1] || game.players[0];
     const allCards = (owner) => [
       ...owner.hand,
       ...owner.mainDeck,
@@ -381,6 +383,45 @@ async function installInteractionFixture(page, scenario) {
       };
     }
 
+    if (name === "optional-trigger-choice") {
+      const source = player.base[0]
+        || allCards(player).find((card) => card?.type === "unit")
+        || player.legend;
+      if (!source) throw new Error("optional-trigger-choice fixture requires a source card");
+      const trigger = {
+        id: "e2e-optional-trigger",
+        kind: "effectSpecs",
+        playerId: player.id,
+        sourceCardId: source.instanceId,
+        sourceCardSnapshot: structuredClone(source),
+        optional: true,
+        optionalPlacementComplete: false,
+        data: { specs: [], declarationComplete: true }
+      };
+      game.pendingChoice = {
+        id: "e2e-optional-trigger-choice",
+        playerId: player.id,
+        card: source,
+        effect: "declareOptionalTrigger",
+        prompt: "Choose a target for this optional effect.",
+        options: [
+          {
+            id: "use-optional-trigger",
+            label: "이 효과를 발동한다",
+            cardId: source.instanceId
+          },
+          {
+            id: "decline-optional-trigger",
+            label: "발동하지 않는다",
+            cardId: null
+          }
+        ],
+        optional: false,
+        data: { trigger, triggers: [trigger], mode: "queue", continuation: null }
+      };
+      fixture = { ...fixture, sourceId: source.instanceId };
+    }
+
     if (name === "rune") {
       const rune = player.runes.at(-1) || player.runeDeck.pop();
       if (!rune) throw new Error("rune fixture requires a Rune");
@@ -391,6 +432,51 @@ async function installInteractionFixture(page, scenario) {
         { timing: "activated", kind: "addPower", amount: 1, domain: rune.domain || "Any", exhaust: false }
       ];
       fixture = { ...fixture, runeId: rune.instanceId };
+    }
+
+    if (name === "rune-payment-overflow") {
+      const runeSource = player.runes[0] || player.runeDeck[0];
+      const paymentCard = player.hand[0] || player.mainDeck.shift();
+      if (!runeSource || !paymentCard) throw new Error("rune-payment-overflow fixture requires a Rune and a payment card");
+      if (!player.hand.some((card) => card.instanceId === paymentCard.instanceId)) player.hand.push(paymentCard);
+      const runes = Array.from({ length: 18 }, (_, index) => cloneCard(
+        runeSource,
+        `e2e-overflow-rune-${String(index + 1).padStart(2, "0")}`,
+        player.id,
+        {
+          type: "rune",
+          domain: runeSource.domain || "Body",
+          exhausted: false,
+          effects: []
+        }
+      ));
+      player.runes = runes;
+      player.runePool = { energy: [], power: [] };
+      game.pendingPayment = {
+        id: "e2e-overflow-rune-payment",
+        playerId: player.id,
+        cardId: paymentCard.instanceId,
+        cardName: paymentCard.name,
+        source: "playCard",
+        destination: "base",
+        energyCost: 1,
+        basePowerCost: [],
+        powerCost: [],
+        declaredTargets: [],
+        declaredChoices: [],
+        deflectTargetIds: [],
+        energyRuneIds: [],
+        poolEnergyIds: [],
+        powerRuneIds: [],
+        poolPowerIds: [],
+        xpCost: 0,
+        optionalPowerEffects: []
+      };
+      fixture = {
+        ...fixture,
+        runeIds: runes.map((rune) => rune.instanceId),
+        lastRuneId: runes.at(-1).instanceId
+      };
     }
 
     if (name === "split-damage") {
@@ -522,6 +608,40 @@ async function installInteractionFixture(page, scenario) {
       fixture = {
         ...fixture,
         cardId: card.instanceId,
+        battlefieldIds: game.battlefields.map((battlefield) => battlefield.instanceId)
+      };
+    }
+
+    if (name === "base-unit-drag") {
+      const unitSource = allCards(player).find((card) => card?.type === "unit");
+      if (!unitSource) throw new Error("base-unit-drag fixture requires a Unit template");
+      const unit = cloneCard(unitSource, "e2e-base-drag-unit", player.id, {
+        type: "unit",
+        name: "Base Drag Regression Unit",
+        might: 5,
+        damage: 0,
+        buffs: 0,
+        mightModifier: 0,
+        temporaryMight: 0,
+        energy: 0,
+        power: [],
+        tags: [],
+        keywords: [],
+        effects: [],
+        attachments: [],
+        additionalCost: null,
+        exhausted: false,
+        stunned: false,
+        cantMoveThisTurn: false
+      });
+      player.base = [unit];
+      for (const battlefield of game.battlefields) {
+        battlefield.units = [];
+        battlefield.hidden = [];
+      }
+      fixture = {
+        ...fixture,
+        unitId: unit.instanceId,
         battlefieldIds: game.battlefields.map((battlefield) => battlefield.instanceId)
       };
     }
@@ -859,6 +979,18 @@ test("pile choices use the lower drawer and normal piles stay compact and inspec
     window.__riftboundGame.pendingChoice = null;
     window.__riftboundRender();
   });
+  const expectTableUndimmed = async () => {
+    const visualState = await page.locator(".board-panel, .persistent-hand").evaluateAll((nodes) => nodes.map((node) => ({
+      className: node.className,
+      opacity: getComputedStyle(node).opacity,
+      filter: getComputedStyle(node).filter
+    })));
+    expect(visualState.length).toBeGreaterThanOrEqual(2);
+    for (const state of visualState) {
+      expect(state.opacity, `${state.className} must remain fully opaque while browsing a pile`).toBe("1");
+      expect(state.filter, `${state.className} must not be filtered while browsing a pile`).toBe("none");
+    }
+  };
   const seat = page.locator(`.table-seat[data-player-id="${fixture.playerId}"]`);
   await seat.locator('[data-action="toggle-graveyard"]').click();
   const trashPanel = page.locator(".graveyard-panel:not(.banished-panel)");
@@ -867,6 +999,7 @@ test("pile choices use the lower drawer and normal piles stay compact and inspec
   await expect(trashCard).toHaveAttribute("role", "button");
   await expect(trashCard.locator(".pile-browser-art")).toHaveCount(1);
   await expect(trashCard.locator(".pile-browser-copy > strong")).not.toBeEmpty();
+  await expectTableUndimmed();
   const compactBox = await trashCard.boundingBox();
   expect(compactBox).not.toBeNull();
   expect(compactBox.height).toBeLessThanOrEqual(82);
@@ -877,6 +1010,7 @@ test("pile choices use the lower drawer and normal piles stay compact and inspec
   const banishedPanel = page.locator(".banished-panel");
   await expect(banishedPanel.locator(".pile-browser-entry .pile-browser-card")).toHaveCount(1);
   await expect(banishedPanel.locator(".pile-browser-copy")).toBeVisible();
+  await expectTableUndimmed();
   await page.locator('[data-action="close-banished"]').click();
 
   await seat.locator('[data-action="toggle-graveyard"]').click();
@@ -944,14 +1078,26 @@ test("card selection toggles the inspector and preserves long rules text", async
 test("reaction and pass controls form one priority decision group", async ({ page }) => {
   const runtimeFailures = captureRuntimeFailures(page);
   await openReadyBoard(page);
+
+  await installInteractionFixture(page, "action-command");
+  const actionDock = page.locator(".context-action-dock");
+  const actionRail = actionDock.locator(":scope > .table-action-rail");
+  const openActionWindow = actionRail.locator('[data-action="toggle-hand"]');
+  if (await openActionWindow.getByText(/패 숨기기|Hide hand/iu).count()) await openActionWindow.click();
+  await expect(actionDock.locator(":scope > .action-context button")).toHaveCount(0);
+  await expect(actionRail.locator(".action-command-list")).toHaveCount(1);
+  await expect(actionRail.locator('[data-action="toggle-hand"]')).toContainText(/행동 사용|Play Action/iu);
+
   await installInteractionFixture(page, "reaction");
 
-  const group = page.locator('.action-command-list > .priority-response-controls[role="group"]');
+  const group = page.locator('.context-action-dock > .table-action-rail .action-command-list > .priority-response-controls[role="group"]');
   await expect(group).toBeVisible();
   await expect(group).toHaveAttribute("aria-label", /반응 또는 패스|React or pass/iu);
   await expect(group.locator('[data-action="toggle-hand"]')).toHaveCount(1);
+  await expect(group.locator('[data-action="toggle-hand"]')).toContainText(/반응 사용|Play Reaction/iu);
   await expect(group.locator('[data-action="pass-showdown"]')).toHaveCount(1);
-  await expect(page.locator('.table-action-rail [data-action="pass-showdown"]')).toHaveCount(0);
+  await expect(page.locator('.table-action-rail [data-action="pass-showdown"]')).toHaveCount(1);
+  await expect(page.locator('.action-context [data-action="toggle-hand"], .action-context [data-action="pass-showdown"]')).toHaveCount(0);
   await expect(page.locator('[data-action="pass-showdown"]')).toHaveCount(1);
 
   const hand = page.locator('.persistent-hand[data-side="bottom"], .hand-drawer.persistent-hand');
@@ -961,6 +1107,32 @@ test("reaction and pass controls form one priority decision group", async ({ pag
 
   await page.locator('.priority-response-controls [data-action="pass-showdown"]:enabled').click();
   await expect.poll(() => page.evaluate(() => window.__riftboundGame.actionChain?.consecutivePasses)).toBe(1);
+  await assertRuntimeHealthy(page, runtimeFailures);
+});
+
+test("optional trigger declarations stay a centered binary decision instead of becoming card targets", async ({ page }) => {
+  const runtimeFailures = captureRuntimeFailures(page);
+  await openReadyBoard(page);
+  const fixture = await installInteractionFixture(page, "optional-trigger-choice");
+  const panel = page.locator(".floating-panels.has-blocking-decision > .binary-effect-choice-panel");
+  await expect(panel).toBeVisible();
+  await expect(panel.locator('.binary-effect-actions [data-action="choose-effect"]')).toHaveCount(2);
+  await expect(panel).toContainText(/효과 발동 여부|Use this effect/iu);
+  await expect(page.locator(".choice-stage-bar, .choice-zone-drawer")).toHaveCount(0);
+  await expect(page.locator(`[data-card-id="${fixture.sourceId}"].choice-card-selectable`)).toHaveCount(0);
+
+  const centered = await page.locator(".tabletop-board").evaluate((board, selector) => {
+    const panelNode = document.querySelector(selector);
+    if (!(panelNode instanceof HTMLElement)) return null;
+    const boardRect = board.getBoundingClientRect();
+    const panelRect = panelNode.getBoundingClientRect();
+    return {
+      offset: Math.abs((panelRect.left + panelRect.width / 2) - (boardRect.left + boardRect.width / 2)),
+      allowance: boardRect.width * 0.2
+    };
+  }, ".binary-effect-choice-panel");
+  expect(centered).not.toBeNull();
+  expect(centered.offset).toBeLessThan(centered.allowance);
   await assertRuntimeHealthy(page, runtimeFailures);
 });
 
@@ -981,6 +1153,66 @@ test("exhausted Runes rely on their card pose without duplicate state wording", 
     return Math.atan2(matrix.b, matrix.a) * 180 / Math.PI;
   });
   expect(Math.abs(Math.abs(angle) - 90)).toBeLessThan(1);
+  await assertRuntimeHealthy(page, runtimeFailures);
+});
+
+test("an overflowing Rune track pans to its last card and that Rune remains payable", async ({ page }) => {
+  const runtimeFailures = captureRuntimeFailures(page);
+  await openReadyBoard(page);
+  const fixture = await installInteractionFixture(page, "rune-payment-overflow");
+
+  const track = page.locator(`.table-seat[data-player-id="${fixture.playerId}"] [data-rune-scroll-track]`);
+  const lastRune = page.locator(`[data-direct-payment-rune="true"][data-rune="${fixture.lastRuneId}"]`);
+  await expect(track).toBeVisible();
+  await expect(track.locator("[data-rune-card]")).toHaveCount(fixture.runeIds.length);
+  await expect(lastRune).toHaveCount(1);
+
+  const initial = await track.evaluate((node) => ({
+    clientWidth: node.clientWidth,
+    scrollWidth: node.scrollWidth,
+    scrollLeft: node.scrollLeft,
+    overflowX: getComputedStyle(node).overflowX
+  }));
+  expect(initial.scrollWidth).toBeGreaterThan(initial.clientWidth + 4);
+  expect(["auto", "scroll"]).toContain(initial.overflowX);
+
+  const box = await track.boundingBox();
+  expect(box).not.toBeNull();
+  const y = box.y + box.height / 2;
+  await page.mouse.move(box.x + box.width - 12, y);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 12, y, { steps: 8 });
+  await page.mouse.up();
+  await page.waitForTimeout(160);
+
+  const dragged = await track.evaluate((node) => ({
+    left: node.scrollLeft,
+    max: Math.max(0, node.scrollWidth - node.clientWidth)
+  }));
+  expect(dragged.left).toBeGreaterThan(0);
+
+  // Mouse-wheel users must be able to finish traversing the same horizontal
+  // track without targeting a partly clipped Rune card.
+  await track.hover({ position: { x: Math.max(8, box.width / 2), y: Math.max(8, box.height / 2) } });
+  await page.mouse.wheel(0, Math.max(1_200, dragged.max * 2));
+  await page.waitForTimeout(160);
+
+  const panned = await track.evaluate((node) => ({
+    left: node.scrollLeft,
+    max: Math.max(0, node.scrollWidth - node.clientWidth)
+  }));
+  expect(panned.left).toBeGreaterThanOrEqual(panned.max - 6);
+  await expect(lastRune).toBeInViewport();
+
+  // Horizontal drag intentionally suppresses its trailing click. Once that
+  // guard expires, the revealed last Rune must still be an ordinary payment
+  // control rather than an unreachable visual card.
+  await page.waitForTimeout(550);
+  await lastRune.click();
+  await expect(page.locator(`[data-direct-payment-rune="true"][data-rune="${fixture.lastRuneId}"]`)).toHaveAttribute("aria-pressed", "true");
+  await expect.poll(() => page.evaluate((runeId) =>
+    window.__riftboundGame.pendingPayment?.energyRuneIds?.includes(runeId) || false, fixture.lastRuneId
+  )).toBe(true);
   await assertRuntimeHealthy(page, runtimeFailures);
 });
 
@@ -1127,6 +1359,91 @@ test("hand drag exposes only legal destinations and rejects a forged drop target
   expect(accepted.pendingCardId).toBe(fixture.cardId);
   expect(accepted.destination).toBe("base");
   expect(accepted.chainHasCard).toBe(true);
+  await expect(page.locator("#app")).not.toHaveClass(/is-dragging-card/u);
+  await assertRuntimeHealthy(page, runtimeFailures);
+});
+
+test("a ready Base unit drags only to exact legal battlefields and moves on drop", async ({ page }) => {
+  const runtimeFailures = captureRuntimeFailures(page);
+  await openReadyBoard(page);
+  const fixture = await installInteractionFixture(page, "base-unit-drag");
+
+  let unit = page.locator(
+    `.table-seat[data-player-id="${fixture.playerId}"] [data-zone="base"] [data-card-id="${fixture.unitId}"]`
+  );
+  await expect(unit).toHaveAttribute("data-card-drag", "move");
+  await expect(unit).toHaveAttribute("draggable", "true");
+  const declaredDestinations = String(await unit.getAttribute("data-move-destinations"))
+    .split(/\s+/u)
+    .filter(Boolean)
+    .sort();
+  expect(declaredDestinations).toEqual([...fixture.battlefieldIds].sort());
+  expect(declaredDestinations).not.toContain("base");
+
+  const ownBase = page.locator(
+    `.table-seat[data-player-id="${fixture.playerId}"] [data-zone="base"] [data-play-destination="base"]`
+  );
+  const legalField = page.locator(
+    `[data-drop-owner="${fixture.playerId}"][data-play-destination="${fixture.battlefieldIds[0]}"]`
+  ).first();
+  const forgeCandidate = page.locator(
+    `[data-drop-owner="${fixture.playerId}"][data-play-destination="${fixture.battlefieldIds.at(-1)}"]`
+  ).first();
+  await forgeCandidate.evaluate((node) => {
+    node.setAttribute("data-play-destination", "forged-battlefield");
+    node.setAttribute("data-e2e-forged-drop", "true");
+  });
+  const forgedField = page.locator('[data-e2e-forged-drop="true"]');
+
+  await unit.dispatchEvent("dragstart");
+  await expect(page.locator("#app")).toHaveClass(/is-dragging-card/u);
+  await expect(unit).toHaveClass(/drag-source-active/u);
+  await expect(ownBase).not.toHaveClass(/is-legal-drop/u);
+  await expect(legalField).toHaveClass(/is-legal-drop/u);
+  await expect(forgedField).not.toHaveClass(/is-legal-drop/u);
+  await forgedField.dispatchEvent("dragover");
+  await expect(forgedField).not.toHaveClass(/drag-over|drop-target-active/u);
+  await forgedField.dispatchEvent("drop");
+
+  let location = await page.evaluate(({ playerId, unitId }) => {
+    const game = window.__riftboundGame;
+    const player = game.players.find((candidate) => candidate.id === playerId);
+    return {
+      inBase: player.base.some((card) => card.instanceId === unitId),
+      battlefieldId: game.battlefields.find((field) =>
+        field.units.some((card) => card.instanceId === unitId)
+      )?.instanceId || ""
+    };
+  }, { playerId: fixture.playerId, unitId: fixture.unitId });
+  expect(location).toEqual({ inBase: true, battlefieldId: "" });
+  await expect(page.locator("#app")).not.toHaveClass(/is-dragging-card/u);
+
+  unit = page.locator(
+    `.table-seat[data-player-id="${fixture.playerId}"] [data-zone="base"] [data-card-id="${fixture.unitId}"]`
+  );
+  await unit.dispatchEvent("dragstart");
+  await legalField.dispatchEvent("dragover");
+  await expect(legalField).toHaveClass(/drag-over/u);
+  await legalField.dispatchEvent("drop");
+
+  location = await page.evaluate(({ playerId, unitId }) => {
+    const game = window.__riftboundGame;
+    const player = game.players.find((candidate) => candidate.id === playerId);
+    const battlefield = game.battlefields.find((field) =>
+      field.units.some((card) => card.instanceId === unitId)
+    );
+    const moved = battlefield?.units.find((card) => card.instanceId === unitId);
+    return {
+      inBase: player.base.some((card) => card.instanceId === unitId),
+      battlefieldId: battlefield?.instanceId || "",
+      exhausted: Boolean(moved?.exhausted)
+    };
+  }, { playerId: fixture.playerId, unitId: fixture.unitId });
+  expect(location).toEqual({
+    inBase: false,
+    battlefieldId: fixture.battlefieldIds[0],
+    exhausted: true
+  });
   await expect(page.locator("#app")).not.toHaveClass(/is-dragging-card/u);
   await assertRuntimeHealthy(page, runtimeFailures);
 });

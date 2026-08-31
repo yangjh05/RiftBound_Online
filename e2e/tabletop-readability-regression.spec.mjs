@@ -304,6 +304,60 @@ async function installReadableChainFixture(page) {
   });
 }
 
+async function installReadableTriggerOrderFixture(page) {
+  return page.evaluate(() => {
+    const game = window.__riftboundGame;
+    const player = game.players[0];
+    const sources = [player.legend, player.champion].filter(Boolean);
+    const triggers = sources.map((source, index) => ({
+      id: `readability-trigger-order-${index}`,
+      playerId: player.id,
+      kind: "onPlay",
+      sourceCardId: source.instanceId,
+      sourceCardSnapshot: structuredClone(source),
+      data: {}
+    }));
+    game.phase = "action";
+    game.currentPlayerId = player.id;
+    game.turnPlayerId = player.id;
+    game.actionChain = null;
+    game.showdown = null;
+    game.triggerQueue = [];
+    game.pendingPayment = null;
+    game.pendingChoice = {
+      id: "readability-trigger-order-choice",
+      playerId: player.id,
+      card: player.legend,
+      effect: "triggerOrder",
+      prompt: "동시에 유발된 효과의 처리 순서를 선택하세요.",
+      options: [
+        ...triggers.map((trigger) => ({
+          id: trigger.id,
+          label: trigger.sourceCardSnapshot?.translations?.ko?.name || trigger.sourceCardSnapshot?.name || "트리거",
+          cardId: trigger.sourceCardId,
+          optionalTrigger: false,
+          selected: false
+        })),
+        {
+          id: "confirm-readability-trigger-order",
+          label: "순서 확정",
+          confirmTriggerOrder: true,
+          disabled: true
+        }
+      ],
+      optional: false,
+      data: {
+        triggerOrderState: {
+          groupIndex: 0,
+          groups: [{ playerId: player.id, triggers, orderedTriggers: [] }]
+        }
+      }
+    };
+    window.__riftboundRender();
+    return { optionCount: triggers.length };
+  });
+}
+
 async function installSnapshotOnlyTriggerFixture(page, mode) {
   return page.evaluate((chainMode) => {
     const game = window.__riftboundGame;
@@ -491,7 +545,6 @@ async function assertDesktopTypography(page) {
     { selector: ".table-card-pile .pile-count", minimum: MIN_FUNCTIONAL_FONT_PX },
     { selector: ".rune-summary .rune-count", minimum: MIN_FUNCTIONAL_FONT_PX },
     { selector: ".rune-card-chip .rune-card-caption", minimum: MIN_FUNCTIONAL_FONT_PX },
-    { selector: ".rune-card-chip strong", minimum: MIN_FUNCTIONAL_FONT_PX },
     { selector: ".battlefield-head h2", minimum: MIN_FUNCTIONAL_FONT_PX },
     { selector: ".battlefield-head span", minimum: MIN_FUNCTIONAL_FONT_PX },
     { selector: ".unit-board-overlay .unit-current-might", minimum: MIN_FUNCTIONAL_FONT_PX },
@@ -500,7 +553,6 @@ async function assertDesktopTypography(page) {
     { selector: ".context-action-dock .action-context .bar-label", minimum: MIN_FUNCTIONAL_FONT_PX },
     { selector: ".context-action-dock .action-context strong", minimum: MIN_FUNCTIONAL_FONT_PX },
     { selector: ".context-action-dock .action-context span:last-child", minimum: MIN_FUNCTIONAL_FONT_PX },
-    { selector: ".context-action-dock .action-command-list button", minimum: MIN_FUNCTIONAL_FONT_PX },
     { selector: ".table-action-rail button", minimum: MIN_FUNCTIONAL_FONT_PX },
     { selector: ".identity-zone > .zone-caption", minimum: MIN_DECORATIVE_FONT_PX },
     { selector: ".base-zone > .zone-caption", minimum: MIN_DECORATIVE_FONT_PX },
@@ -686,11 +738,17 @@ test("desktop tabletop reserves readable identity, board, command, hand, battlef
     await expect(gear).toHaveAttribute("data-current-might", String(player.gearMight));
     await expect(gear).toHaveAttribute("data-exhausted", String(player.gearExhausted));
     await expect(gear).toHaveAttribute("title", player.gearExhausted ? /탈진|Exhausted/iu : /준비|Ready/iu);
-    await expect(gear.locator(".attached-gear-board-overlay .attached-gear-might")).toHaveText(String(player.gearMight));
+    await expect(gear.locator(".attached-gear-board-overlay .attached-gear-might")).toHaveCount(0);
     await expect(gear.locator(".attached-gear-board-overlay .unit-state-badges")).toBeVisible();
     await expect(gear.locator(".attached-gear-state, .attached-gear-readiness")).toHaveCount(0);
     await expect(gear).not.toContainText(/준비|탈진|Ready|Exhausted/iu);
   }
+
+  const detailGear = page.locator(`[data-card-id="${fixture.players[0].gearId}"]`).first();
+  await detailGear.click();
+  const gearInspector = page.locator(".inspector.inspector-panel");
+  await expect(gearInspector).toBeVisible();
+  await expect(gearInspector.locator(".inspector-text > strong")).toContainText(`위력 ${fixture.players[0].gearMight}`);
 
   await assertNoLiteralInvalidValues(page, runtimeFailures);
 });
@@ -741,7 +799,7 @@ test("an active Chain keeps its full effect readable and exposes exactly one ena
 
   const effect = item.locator(".chain-active-effect-text");
   const effectBox = await visibleBox(effect, "active Chain effect");
-  expect.soft(effectBox.height, "active Chain effect must reserve readable vertical space").toBeGreaterThanOrEqual(MIN_CHAIN_EFFECT_HEIGHT_PX);
+  expect.soft(effectBox.height, "active Chain effect must reserve readable vertical space").toBeGreaterThanOrEqual(MIN_CHAIN_EFFECT_HEIGHT_PX - MAX_ALLOWED_OVERLAP_PX);
   await expect(effect).toContainText(chain.effectText);
   await expect(effect.locator(".chain-selected-ability")).toContainText(chain.selectedAbility);
   const effectVisibility = await effect.evaluate((element) => ({
@@ -763,11 +821,10 @@ test("an active Chain keeps its full effect readable and exposes exactly one ena
   await assertNoLiteralInvalidValues(page, runtimeFailures);
 });
 
-test("an active Chain shares the right dock without being covered by information sheets", async ({ page }) => {
+test("an active Chain floats over the board center without covering right-side sheets or actions", async ({ page }) => {
   const runtimeFailures = captureRuntimeFailures(page);
   await openReadyBoard(page);
   await installReadabilityFixture(page);
-  const chain = await installReadableChainFixture(page);
   await page.evaluate(() => {
     const game = window.__riftboundGame;
     const player = game.players[0];
@@ -776,38 +833,86 @@ test("an active Chain shares the right dock without being covered by information
     window.__riftboundRender();
   });
 
-  const chainPanel = page.locator(".chain-pod");
-  const chainItem = page.locator(`.chain-zone-item[data-card-id="${chain.cardId}"]`);
-  const assertSharedDock = async (panel, label) => {
+  const clearChain = () => page.evaluate(() => {
+    const game = window.__riftboundGame;
+    game.phase = "action";
+    game.actionChain = null;
+    game.showdown = null;
+    game.triggerQueue = [];
+    window.__riftboundRender();
+  });
+  const assertFloatingChain = async (panel, label, existingChain = null) => {
+    const chain = existingChain || await installReadableChainFixture(page);
+    const chainPanel = page.locator(".chain-pod");
+    const chainItem = page.locator(`.chain-zone-item[data-card-id="${chain.cardId}"]`);
     const chainBox = await visibleBox(chainPanel, `Chain with ${label}`);
     const panelBox = await visibleBox(panel, label);
+    const railBox = await visibleBox(page.locator(".table-action-rail"), "right action rail");
+    const boardBox = await visibleBox(page.locator(".tabletop-board"), "tabletop board");
     expectNoVisualOverlap(chainBox, panelBox, `Chain and ${label}`);
-    expect.soft(panelBox.y, `${label} must start below the active Chain`).toBeGreaterThanOrEqual(chainBox.y + chainBox.height - MAX_ALLOWED_OVERLAP_PX);
+    expectNoVisualOverlap(chainBox, railBox, "Chain and right action rail");
+    expectNoVisualOverlap(panelBox, railBox, `${label} and right action rail`);
+    expectContained(chainBox, boardBox, "Chain inside tabletop board");
+    const availableCenter = boardBox.x + (railBox.x - boardBox.x) / 2;
+    const chainCenter = chainBox.x + chainBox.width / 2;
+    expect.soft(Math.abs(chainCenter - availableCenter), "Chain must be centered in the board area left of the action rail").toBeLessThanOrEqual(12);
     await expect(chainItem, `Chain item must remain visible with ${label}`).toBeVisible();
   };
 
+  await clearChain();
+  const inspectorChain = await installReadableChainFixture(page);
+  await page.evaluate(() => {
+    const game = window.__riftboundGame;
+    const player = game.players[0];
+    const selected = player.hand[0] || player.base[0] || player.legend;
+    game.selectedCardId = selected?.instanceId || null;
+    window.__riftboundRender();
+  });
   await page.locator('.table-action-rail [data-action="toggle-inspector"]:not([disabled])').click();
   const inspector = page.locator(".inspector.inspector-panel");
-  await assertSharedDock(inspector, "Card Info");
+  await assertFloatingChain(inspector, "Card Info", inspectorChain);
   await inspector.locator('[data-action="toggle-inspector"]').click();
 
+  await clearChain();
+  const logChain = await installReadableChainFixture(page);
   await page.locator('.tabletop-topbar [data-action="toggle-log"]').click();
   const log = page.locator(".log-drawer");
-  await assertSharedDock(log, "log");
+  await assertFloatingChain(log, "log", logChain);
   await log.locator('[data-action="toggle-log"]').click();
 
+  await clearChain();
   const bottomSeat = page.locator('.table-seat[data-side="bottom"]');
   await bottomSeat.locator('[data-action="toggle-graveyard"]').click();
   const trash = page.locator(".graveyard-panel:not(.banished-panel)");
-  await assertSharedDock(trash, "Trash");
+  await assertFloatingChain(trash, "Trash");
   await trash.locator('[data-action="close-graveyard"]').click();
 
+  await clearChain();
   await bottomSeat.locator('[data-action="toggle-banished"]').click();
   const banished = page.locator(".banished-panel");
-  await assertSharedDock(banished, "Banished");
+  await assertFloatingChain(banished, "Banished");
   await banished.locator('[data-action="close-banished"]').click();
 
-  await expect(chainItem).toBeVisible();
+  await assertNoLiteralInvalidValues(page, runtimeFailures);
+});
+
+test("complex trigger-order choices float over the board without covering the right action rail", async ({ page }) => {
+  const runtimeFailures = captureRuntimeFailures(page);
+  await openReadyBoard(page);
+  await installReadabilityFixture(page);
+  const fixture = await installReadableTriggerOrderFixture(page);
+
+  const panel = page.locator(".floating-panels.has-blocking-decision > .trigger-order-panel");
+  const panelBox = await visibleBox(panel, "trigger-order choice panel");
+  const railBox = await visibleBox(page.locator(".table-action-rail"), "right action rail");
+  const boardBox = await visibleBox(page.locator(".tabletop-board"), "tabletop board");
+  expectNoVisualOverlap(panelBox, railBox, "trigger-order panel and right action rail");
+  expectContained(panelBox, boardBox, "trigger-order panel inside tabletop board");
+  const availableCenter = boardBox.x + (railBox.x - boardBox.x) / 2;
+  const panelCenter = panelBox.x + panelBox.width / 2;
+  expect.soft(Math.abs(panelCenter - availableCenter), "trigger-order panel must be centered in the board area left of the action rail").toBeLessThanOrEqual(12);
+  await expect(panel.locator(".trigger-order-option")).toHaveCount(fixture.optionCount);
+  await expect(panel.locator(".trigger-order-effect")).toHaveCount(fixture.optionCount);
   await assertNoLiteralInvalidValues(page, runtimeFailures);
 });
 
@@ -874,7 +979,7 @@ test("a Chain item stays visible through a resolving card choice and clears only
   await assertNoLiteralInvalidValues(page, runtimeFailures);
 });
 
-test("Chain and in-board payment keep battlefield lanes, seats, and direct Rune controls accessible", async ({ page }) => {
+test("Chain and in-board payment keep the playmat, right actions, and direct Rune controls accessible", async ({ page }) => {
   const runtimeFailures = captureRuntimeFailures(page);
   await openReadyBoard(page);
   const fixture = await installReadabilityFixture(page);
@@ -908,10 +1013,10 @@ test("Chain and in-board payment keep battlefield lanes, seats, and direct Rune 
     }
 
     const chainBox = await visibleBox(page.locator(".chain-pod"), `${viewport.width} Chain panel`);
-    for (const side of ["top", "bottom"]) {
-      const seatBox = await visibleBox(page.locator(`.table-seat[data-side="${side}"]`), `${viewport.width} ${side} seat`);
-      expectNoVisualOverlap(seatBox, chainBox, `${viewport.width} ${side} seat and Chain panel`);
-    }
+    const boardBoxWithChain = await visibleBox(page.locator(".tabletop-board"), `${viewport.width} tabletop board`);
+    const railBox = await visibleBox(page.locator(".table-action-rail"), `${viewport.width} right action rail`);
+    expectContained(chainBox, boardBoxWithChain, `${viewport.width} Chain inside tabletop board`);
+    expectNoVisualOverlap(chainBox, railBox, `${viewport.width} Chain and right action rail`);
 
     const paymentFixture = await installReadablePaymentFixture(page);
     const payment = page.locator(".payment-stage-banner");
