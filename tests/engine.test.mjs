@@ -34,10 +34,12 @@ import {
   legalCardPlayDestinations,
   legalChampionPlayDestinations,
   legalPaymentPoolEnergyOptions,
+  legalPaymentPoolPowerOptions,
   moveUnit,
   moveUnits,
   passShowdown,
   paymentConfirmationLegality,
+  paymentResumeLegality,
   preventNextDamage,
   predictCards,
   playToken,
@@ -7596,6 +7598,39 @@ test("spell-only generated Power can pay spells but not unit costs", () => {
   assert.equal(player.runePool.power.length, 0);
 });
 
+test("Unit-only generated Power is exposed through the shared payment option contract", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const unit = instance({
+    ...cards.lonelyPoro,
+    energy: 0,
+    power: [{ domain: DOMAINS.ANY, amount: 1 }]
+  }, player.id, "unit-only-power-card");
+  player.hand = [unit];
+  player.runes = [];
+  player.runePool = {
+    energy: [],
+    power: [{
+      id: "unit-only-generated-power",
+      instanceId: "unit-only-generated-power",
+      type: "power",
+      domain: DOMAINS.ANY,
+      sourceName: "Unit Resource Effect",
+      restriction: "unitOrUnitAbility"
+    }]
+  };
+
+  assert.equal(beginPlayCard(game, unit.instanceId, "base").ok, true);
+  const [option] = legalPaymentPoolPowerOptions(game);
+  assert.equal(option.id, "unit-only-generated-power");
+  assert.equal(option.usable, true);
+  assert.equal(option.matchesCost, true);
+  assert.equal(option.canToggle, true);
+  assert.equal(togglePaymentPoolPower(game, option.id).ok, true);
+  assert.equal(confirmPayment(game).ok, true);
+});
+
 test("Chem-Baroness makes Gold add Energy only within three points of victory", () => {
   const game = createGame({ interactive: true });
   finishSetup(game);
@@ -7850,10 +7885,7 @@ test("Butcher of the Sands exposes its Unit-only Energy only to Unit payments", 
   player.runes = [rune(DOMAINS.CALM, player.id, "butcher-payment-rune")];
   player.runePool = {
     energy: [],
-    power: [
-      { id: "butcher-cost-power-1", instanceId: "butcher-cost-power-1", type: "power", domain: DOMAINS.ANY },
-      { id: "butcher-cost-power-2", instanceId: "butcher-cost-power-2", type: "power", domain: DOMAINS.ANY }
-    ]
+    power: []
   };
 
   const spell = instance({
@@ -7875,8 +7907,149 @@ test("Butcher of the Sands exposes its Unit-only Energy only to Unit payments", 
   const unit = instance({ ...cards.lonelyPoro, energy: 1, power: [] }, player.id, "butcher-unit-payment");
   player.hand = [unit];
   assert.equal(beginPlayCard(game, unit.instanceId, "base").ok, true);
+  const unaffordablePayment = game.pendingPayment;
+  assert.deepEqual(legalActivatedAbilityOptions(game, butcher.instanceId), [],
+    "a payment-time resource ability must stay hidden when its own cost cannot be paid");
+  assert.equal(activateCard(game, butcher.instanceId).ok, false);
+  assert.equal(game.pendingPayment, unaffordablePayment,
+    "a rejected payment-time activation must preserve the original payment");
+  assert.equal(butcher.exhausted, false);
+  assert.equal(cancelPayment(game).ok, true);
+
+  player.runePool.power = [
+    { id: "butcher-cost-power-1", instanceId: "butcher-cost-power-1", type: "power", domain: DOMAINS.ANY },
+    { id: "butcher-cost-power-2", instanceId: "butcher-cost-power-2", type: "power", domain: DOMAINS.ANY }
+  ];
+  assert.equal(beginPlayCard(game, unit.instanceId, "base").ok, true);
   assert.equal(legalActivatedAbilityOptions(game, butcher.instanceId).length, 1,
     "the same printed ability must remain available while paying for a Unit");
+  const originalPayment = game.pendingPayment;
+  assert.equal(activateCard(game, butcher.instanceId).ok, true);
+  assert.equal(game.pendingPayment.source, "activatedAbility");
+  assert.equal(game.pendingPayment.resumePayment, originalPayment,
+    "a resource ability with its own cost must suspend, not overwrite, the original payment");
+  assert.equal(legalPaymentPoolPowerOptions(game).filter((option) => option.canToggle).length, 2);
+  assert.equal(togglePaymentPoolPower(game, "butcher-cost-power-1").ok, true);
+  assert.equal(togglePaymentPoolPower(game, "butcher-cost-power-2").ok, true);
+  assert.equal(confirmPayment(game).ok, true);
+  assert.equal(game.pendingPayment, originalPayment,
+    "the original Unit payment must resume after the Add ability's own cost is paid");
+  assert.equal(butcher.exhausted, true);
+  assert.equal(player.runePool.power.length, 0);
+  assert.equal(player.runePool.energy.length, 2);
+  const generated = legalPaymentPoolEnergyOptions(game);
+  assert.equal(generated.every((option) => option.usable), true);
+  assert.equal(togglePaymentPoolEnergy(game, generated[0].id).ok, true);
+  assert.equal(confirmPayment(game).ok, true);
+  assert.equal(game.pendingPayment, null);
+});
+
+test("cancelPayment safely clears a payment whose payer is unavailable", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const unit = instance({ ...cards.lonelyPoro, energy: 1, power: [] }, player.id, "missing-payer-payment-unit");
+  player.hand = [unit];
+  player.runes = [rune(DOMAINS.CALM, player.id, "missing-payer-payment-rune")];
+
+  assert.equal(beginPlayCard(game, unit.instanceId, "base").ok, true);
+  game.pendingPayment.playerId = "missing-payment-player";
+  let result = null;
+  assert.doesNotThrow(() => {
+    result = cancelPayment(game);
+  });
+  assert.equal(result?.ok, true);
+  assert.equal(game.pendingPayment, null);
+  assert.equal(player.hand.some((card) => card.instanceId === unit.instanceId), true);
+});
+
+test("a missing payer on an ADD child payment also rolls back its suspended parent play", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const butcher = instance(cards.ven141butcherOfTheSands, player.id, "missing-payer-child-butcher");
+  const unit = instance({ ...cards.lonelyPoro, energy: 1, power: [] }, player.id, "missing-payer-parent-unit");
+  player.legend = butcher;
+  player.hand = [unit];
+  player.runes = [rune(DOMAINS.CALM, player.id, "missing-payer-child-rune")];
+  player.runePool = {
+    energy: [],
+    power: [
+      { id: "missing-payer-power-a", instanceId: "missing-payer-power-a", type: "power", domain: DOMAINS.ANY },
+      { id: "missing-payer-power-b", instanceId: "missing-payer-power-b", type: "power", domain: DOMAINS.ANY }
+    ]
+  };
+
+  assert.equal(beginPlayCard(game, unit.instanceId, "base").ok, true);
+  assert.equal(activateCard(game, butcher.instanceId).ok, true);
+  assert.ok(game.pendingPayment.resumePayment);
+  game.pendingPayment.playerId = "missing-payment-player";
+  let result = null;
+  assert.doesNotThrow(() => {
+    result = cancelPayment(game);
+  });
+  assert.equal(result?.ok, true);
+  assert.equal(game.pendingPayment, null);
+  assert.equal(game.actionChain, null);
+  assert.equal(player.hand.some((card) => card.instanceId === unit.instanceId), true);
+  assert.equal(butcher.exhausted, false);
+});
+
+test("malformed suspended payments cannot replace the active payment and remain cancelable", () => {
+  const corruptions = [
+    ["payer", (resume, game, player) => {
+      resume.playerId = game.players.find((candidate) => candidate.id !== player.id).id;
+    }],
+    ["selection array", (resume) => {
+      resume.poolEnergyIds = null;
+    }],
+    ["numeric cost", (resume) => {
+      resume.energyCost = Number.NaN;
+    }],
+    ["activated ability payload", (resume) => {
+      resume.source = "activatedAbility";
+      delete resume.activatedAbility;
+    }],
+    ["missing payment card", (resume) => {
+      resume.cardId = "missing-suspended-payment-card";
+    }]
+  ];
+
+  for (const [label, corrupt] of corruptions) {
+    const game = createGame({ interactive: true });
+    finishSetup(game);
+    const player = currentPlayer(game);
+    const butcher = instance(cards.ven141butcherOfTheSands, player.id, `malformed-resume-butcher-${label}`);
+    const unit = instance({ ...cards.lonelyPoro, energy: 1, power: [] }, player.id, `malformed-resume-unit-${label}`);
+    player.legend = butcher;
+    player.hand = [unit];
+    player.runes = [rune(DOMAINS.CALM, player.id, `malformed-resume-rune-${label}`)];
+    player.runePool = {
+      energy: [],
+      power: [
+        { id: `malformed-resume-power-a-${label}`, instanceId: `malformed-resume-power-a-${label}`, type: "power", domain: DOMAINS.ANY },
+        { id: `malformed-resume-power-b-${label}`, instanceId: `malformed-resume-power-b-${label}`, type: "power", domain: DOMAINS.ANY }
+      ]
+    };
+
+    assert.equal(beginPlayCard(game, unit.instanceId, "base").ok, true, label);
+    assert.equal(activateCard(game, butcher.instanceId).ok, true, label);
+    const childPayment = game.pendingPayment;
+    assert.equal(childPayment.source, "activatedAbility", label);
+    corrupt(childPayment.resumePayment, game, player);
+    assert.equal(paymentResumeLegality(game, childPayment).ok, false, label);
+    assert.equal(paymentConfirmationLegality(game).ok, false, label);
+
+    let result = null;
+    assert.doesNotThrow(() => {
+      result = cancelPayment(game);
+    }, label);
+    assert.equal(result?.ok, true, label);
+    assert.equal(game.pendingPayment, null, label);
+    assert.equal(game.actionChain, null, `${label}: the abandoned parent play must be rolled back`);
+    assert.equal(player.hand.some((card) => card.instanceId === unit.instanceId), true, label);
+    assert.equal(butcher.exhausted, false, label);
+  }
 });
 
 test("payment only allows compatible generated energy when multiple pool energies exist", () => {

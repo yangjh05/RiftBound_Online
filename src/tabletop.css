@@ -3073,6 +3073,1215 @@
   }
 }
 
+/* Desktop spatial-density seal ------------------------------------------
+   The action buttons only occupy the lower-right corner. Reserving their
+   width for the full board and every utility sheet left a dead vertical
+   strip. Desktop seats also need different physical column widths after the
+   bottom seat reverses its named areas: Base is elastic, while the three
+   piles stay exactly as wide as their cards. */
+@media (min-width: 1200px) {
+  .tabletop-layout {
+    --tt-hand-height: 196px;
+    --tt-hand-card-width: 112px;
+    --tt-opponent-row: 176px;
+    --tt-player-row: 196px;
+    --tt-pile-dock-width: calc(var(--tt-shelf-card-width) * 3 + 8px);
+    --tt-identity-track: clamp(220px, 18vw, 272px);
+    --tt-resource-track: clamp(220px, 18vw, 280px);
+    --tt-opponent-hand-peek: 64px;
+    --tt-opponent-shelf-card: 56px;
+    --tt-opponent-rune-card: 54px;
+  }
+
+  .tabletop-layout.inspector-open,
+  .tabletop-layout:has(.floating-panels > .graveyard-panel),
+  .tabletop-layout:has(.floating-panels > .banished-panel),
+  .tabletop-layout:has(.floating-panels > .intel-panel),
+  .tabletop-layout:has(.log-drawer) {
+    --tt-sheet-reserve: clamp(288px, 21vw, 320px);
+  }
+
+  .tabletop-layout:has(.chain-pod) {
+    --tt-sheet-reserve: clamp(312px, 22vw, 336px);
+  }
+
+  .tabletop-layout:has(.floating-panels > .choice-panel) {
+    --tt-sheet-reserve: clamp(336px, 24vw, 368px);
+  }
+
+  /* The playmat uses the entire viewport above the lower action rail. */
+  .tabletop-layout .board-panel {
+    right: var(--tt-sheet-reserve);
+  }
+
+  /* A utility sheet ends at the viewport edge. The action rail starts below
+     it, so the two surfaces never overlap despite sharing the right edge. */
+  .tabletop-layout .floating-panels.has-blocking-decision {
+    right: 8px;
+    width: calc(var(--tt-sheet-reserve) - 16px);
+    max-width: calc(var(--tt-sheet-reserve) - 16px);
+  }
+
+  .tabletop-layout .floating-panels :is(
+    .graveyard-panel,
+    .banished-panel,
+    .intel-panel,
+    .payment-panel,
+    .choice-panel
+  ),
+  .tabletop-layout .floating-panels.has-blocking-decision,
+  .tabletop-layout .inspector.inspector-panel,
+  .tabletop-layout .log-drawer,
+  .tabletop-layout .chain-pod {
+    right: 8px;
+    width: calc(var(--tt-sheet-reserve) - 16px);
+    max-width: calc(var(--tt-sheet-reserve) - 16px);
+  }
+
+  .tabletop-layout .chain-pod {
+    top: 8px;
+    left: auto;
+  }
+
+  /* Sheets stop above the command row. The hand and commands therefore only
+     reserve the lower action rail, never an already-ended sheet column. */
+  .tabletop-layout .table-command-layer {
+    right: var(--tt-action-rail);
+  }
+
+  .tabletop-layout .table-seat {
+    grid-template-columns:
+      var(--tt-identity-track)
+      var(--tt-pile-dock-width)
+      minmax(250px, 1fr)
+      var(--tt-resource-track);
+    grid-template-areas: "identity piles base resources";
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .tabletop-layout .table-seat.bottom {
+    grid-template-columns:
+      var(--tt-resource-track)
+      minmax(250px, 1fr)
+      var(--tt-pile-dock-width)
+      var(--tt-identity-track);
+    grid-template-areas: "resources base piles identity";
+  }
+
+  .tabletop-layout .table-pile-dock {
+    grid-template-columns: repeat(3, var(--tt-shelf-card-width));
+    justify-self: center;
+    width: var(--tt-pile-dock-width);
+    max-width: var(--tt-pile-dock-width);
+    gap: 4px;
+  }
+
+  .tabletop-layout .table-pile-dock .table-card-pile {
+    width: var(--tt-shelf-card-width);
+    min-width: var(--tt-shelf-card-width);
+    max-width: var(--tt-shelf-card-width);
+  }
+
+  /* Rune-deck card and ready/exhausted runes share one bottom baseline. The
+     deck owns only its physical-card column; every remaining pixel directly
+     left of Base belongs to the rune fan. */
+  .tabletop-layout .resource-zone,
+  .tabletop-layout .base-zone {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .tabletop-layout .rune-tabletop {
+    align-self: stretch;
+    align-items: stretch;
+    grid-template-columns: calc(var(--tt-shelf-card-width) + 8px) minmax(0, 1fr);
+    width: 100%;
+    height: auto;
+    min-width: 0;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .tabletop-layout .rune-tabletop > .table-card-pile {
+    align-self: stretch;
+    justify-self: start;
+    width: calc(var(--tt-shelf-card-width) + 8px);
+    min-width: 0;
+    height: 100%;
+  }
+
+  .tabletop-layout .rune-tabletop > .table-card-pile .pile-cards {
+    align-self: end;
+  }
+
+  .tabletop-layout .rune-play-area {
+    align-self: stretch;
+    width: 100%;
+    height: auto;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .tabletop-layout .resource-row.rune-card-stack {
+    align-items: flex-end;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    padding-right: 8px;
+  }
+
+  /* Opponent cards are tucked into a dedicated reveal strip. Their lower
+     portion is clipped before the permanent zones begin, so they can never
+     cover the opponent Base or a unit placed there. */
+  .tabletop-layout .opponent-hand {
+    top: 0;
+    height: var(--tt-opponent-hand-peek);
+    overflow: hidden;
+  }
+
+  .tabletop-layout .opponent-hand-card {
+    flex-basis: 64px;
+    width: 64px;
+    margin-right: -39px;
+  }
+
+  .tabletop-layout .table-seat.top {
+    padding-top: calc(var(--tt-opponent-hand-peek) + 4px);
+  }
+
+  .tabletop-layout .table-seat.top :is(
+    .identity-button,
+    .empty-card-slot,
+    .champion-away-reference,
+    .pile-cards,
+    .table-card-pile.compact .pile-cards
+  ) {
+    width: var(--tt-opponent-shelf-card);
+    min-width: var(--tt-opponent-shelf-card);
+    max-width: var(--tt-opponent-shelf-card);
+  }
+
+  .tabletop-layout .table-seat.top .table-pile-dock {
+    grid-template-columns: repeat(3, var(--tt-opponent-shelf-card));
+    width: calc(var(--tt-opponent-shelf-card) * 3 + 8px);
+    max-width: calc(var(--tt-opponent-shelf-card) * 3 + 8px);
+  }
+
+  .tabletop-layout .table-seat.top .table-pile-dock .table-card-pile {
+    width: var(--tt-opponent-shelf-card);
+    min-width: var(--tt-opponent-shelf-card);
+    max-width: var(--tt-opponent-shelf-card);
+  }
+
+  .tabletop-layout .table-seat.top .rune-card-chip {
+    flex-basis: var(--tt-opponent-rune-card);
+    width: var(--tt-opponent-rune-card);
+    min-width: var(--tt-opponent-rune-card);
+  }
+
+  .tabletop-layout .base-row {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+}
+
+@media (min-width: 1200px) and (max-height: 820px) {
+  .tabletop-layout {
+    --tt-hand-height: 156px;
+    --tt-hand-card-width: 86px;
+    --tt-opponent-row: 130px;
+    --tt-player-row: 132px;
+    --tt-opponent-hand-peek: 46px;
+    --tt-opponent-shelf-card: 40px;
+    --tt-opponent-rune-card: 38px;
+  }
+
+  .tabletop-layout .opponent-hand-card {
+    flex-basis: 54px;
+    width: 54px;
+    margin-right: -35px;
+  }
+
+  .tabletop-layout .table-seat.top .identity-zone {
+    grid-template-rows: 11px minmax(0, 1fr);
+  }
+
+  .tabletop-layout .table-seat.top .table-card-pile {
+    grid-template-rows: minmax(0, 1fr) 11px;
+  }
+
+  .tabletop-layout .table-seat.top .pile-label,
+  .tabletop-layout .table-seat.top .identity-zone > .zone-caption {
+    min-height: 10px;
+    font-size: 10px;
+    line-height: 10px;
+  }
+
+  .tabletop-layout .table-seat.top .rune-play-area {
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .tabletop-layout .table-seat.top .rune-summary {
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: 0;
+    min-height: 20px;
+  }
+
+  .tabletop-layout .table-seat.top .resource-row.rune-card-stack {
+    padding-top: 5px;
+  }
+}
+
+/* Direct board payment and final Rune alignment. */
+@media (min-width: 1200px) {
+  .tabletop-layout .resource-zone {
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .tabletop-layout .resource-zone > .zone-caption {
+    position: absolute;
+  }
+
+  .tabletop-layout .rune-tabletop {
+    grid-row: 1;
+    height: 100%;
+  }
+
+  .tabletop-layout .payment-stage-banner.payment-panel {
+    position: absolute;
+    z-index: 72;
+    top: 4px;
+    right: 10px;
+    bottom: auto;
+    left: 10px;
+    display: grid;
+    grid-template-columns: minmax(330px, 1fr) minmax(180px, auto) auto;
+    align-items: center;
+    gap: 8px;
+    width: auto;
+    height: calc(var(--tt-command-height) - 8px);
+    min-height: 0;
+    max-width: none;
+    max-height: calc(var(--tt-command-height) - 8px);
+    overflow: hidden;
+    margin: 0;
+    padding: 5px 8px;
+    border: 1px solid rgba(255, 204, 75, 0.74);
+    border-radius: 9px;
+    background: rgba(4, 20, 34, 0.98);
+    box-shadow: 0 0 24px rgba(255, 190, 40, 0.16);
+    transform: none;
+  }
+
+  .tabletop-layout .payment-stage-copy {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 2px 8px;
+    min-width: 0;
+  }
+
+  .tabletop-layout .payment-stage-kicker {
+    grid-row: 1 / span 2;
+    align-self: stretch;
+    display: grid;
+    place-items: center;
+    border-radius: 6px;
+    padding: 2px 7px;
+    background: #8b6412;
+    color: #fff2b3;
+    font-size: 11px;
+    font-weight: 900;
+    white-space: nowrap;
+  }
+
+  .tabletop-layout .payment-stage-title-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+  }
+
+  .tabletop-layout .payment-stage-title-row h2 {
+    flex: 0 0 auto;
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.1;
+  }
+
+  .tabletop-layout .payment-stage-title-row span,
+  .tabletop-layout .payment-stage-copy p {
+    overflow: hidden;
+    margin: 0;
+    font-size: 11px;
+    line-height: 1.15;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tabletop-layout .payment-stage-resources {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    max-height: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .tabletop-layout .payment-stage-resources :is(button, label) {
+    flex: 0 0 auto;
+    min-height: 28px;
+    padding: 3px 6px;
+    font-size: 11px;
+  }
+
+  .tabletop-layout .payment-stage-controls {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 5px;
+    min-width: max-content;
+  }
+
+  .tabletop-layout .payment-stage-controls button {
+    min-height: 32px;
+    padding: 4px 8px;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .tabletop-layout .table-seat.payment-seat {
+    isolation: isolate;
+    pointer-events: none;
+  }
+
+  .tabletop-layout .table-seat.payment-seat .resource-zone {
+    position: relative;
+    z-index: 40;
+    overflow: visible;
+    border-radius: 9px;
+    outline: 2px solid rgba(255, 206, 74, 0.78);
+    outline-offset: 3px;
+    box-shadow: 0 0 22px rgba(255, 190, 42, 0.34);
+  }
+
+  .tabletop-layout .payment-seat .payment-rune-choice {
+    z-index: calc(48 + var(--rune-index));
+    pointer-events: auto;
+    cursor: pointer;
+    filter: brightness(1.12);
+  }
+
+  .tabletop-layout .payment-seat .payment-rune-choice .rune-orientation-layer {
+    box-shadow: 0 0 0 2px rgba(255, 213, 91, 0.8), 0 8px 18px rgba(0, 0, 0, 0.46);
+  }
+
+  .tabletop-layout .payment-seat .payment-rune-choice.is-energy-selected .rune-orientation-layer {
+    transform: rotate(90deg);
+    filter: brightness(1.22) saturate(1.14);
+    box-shadow: 0 0 0 3px #ffd85f, 0 0 22px rgba(255, 202, 62, 0.7);
+  }
+
+  .tabletop-layout .payment-seat .payment-rune-choice.is-power-selected .rune-orientation-layer {
+    filter: brightness(1.2) saturate(1.2);
+    box-shadow: 0 0 0 3px #bd7cff, 0 0 22px rgba(178, 95, 255, 0.72);
+  }
+
+  .tabletop-layout .payment-seat .payment-rune-choice.payment-unavailable {
+    pointer-events: none;
+    opacity: 0.34;
+    filter: grayscale(0.9) brightness(0.55);
+  }
+
+  .tabletop-layout .payment-rune-mode {
+    top: 3px;
+    right: 3px;
+    left: auto;
+    z-index: 4;
+    background: rgba(2, 14, 24, 0.94);
+  }
+
+  .tabletop-layout .battlefield.location-column {
+    width: calc(100% - 12px) !important;
+    max-width: calc(100% - 12px) !important;
+  }
+
+  .tabletop-layout .field-lane-track > .unit-token.field-token {
+    height: calc(100% - 8px) !important;
+    max-height: calc(100% - 8px);
+  }
+}
+
+/* Chain/utility coexistence ------------------------------------------------
+   Chain is a persistent game-state surface, not another dismissible sheet.
+   When a player opens Card Info, the log, Trash, or Banished while Chain is
+   active, keep both in the same right dock and divide the height explicitly.
+   This prevents the higher-z-index utility sheet from making Chain appear to
+   vanish while preserving access to the game's supporting information. */
+.tabletop-layout:has(.chain-pod):is(
+  .inspector-open,
+  :has(.log-drawer),
+  :has(.floating-panels > .graveyard-panel),
+  :has(.floating-panels > .banished-panel),
+  :has(.floating-panels > .intel-panel)
+) {
+  --tt-chain-utility-height: clamp(168px, 24dvh, 216px);
+}
+
+@media (min-width: 1200px) {
+  .tabletop-layout:has(.chain-pod):is(
+    .inspector-open,
+    :has(.log-drawer),
+    :has(.floating-panels > .graveyard-panel),
+    :has(.floating-panels > .banished-panel),
+    :has(.floating-panels > .intel-panel)
+  ) .chain-pod {
+    position: absolute;
+    top: 8px;
+    right: calc(8px - var(--tt-sheet-reserve));
+    left: auto;
+    width: calc(var(--tt-sheet-reserve) - 16px);
+    height: var(--tt-chain-utility-height) !important;
+    min-height: 0 !important;
+    max-height: var(--tt-chain-utility-height) !important;
+    box-sizing: border-box;
+    transform: none;
+  }
+
+  .tabletop-layout:has(.chain-pod):is(
+    .inspector-open,
+    :has(.log-drawer),
+    :has(.floating-panels > .graveyard-panel),
+    :has(.floating-panels > .banished-panel),
+    :has(.floating-panels > .intel-panel)
+  ) :is(
+    .floating-panels .graveyard-panel,
+    .floating-panels .banished-panel,
+    .floating-panels .intel-panel,
+    .inspector.inspector-panel,
+    .log-drawer
+  ) {
+    top: calc(66px + var(--tt-chain-utility-height) + 8px);
+  }
+}
+
+@media (min-width: 761px) and (max-width: 1199px) {
+  .tabletop-layout:has(.chain-pod):is(
+    .inspector-open,
+    :has(.log-drawer),
+    :has(.floating-panels > .graveyard-panel),
+    :has(.floating-panels > .banished-panel),
+    :has(.floating-panels > .intel-panel)
+  ) .chain-pod {
+    position: fixed;
+    top: 66px;
+    right: calc(var(--tt-action-rail) + 6px);
+    left: auto;
+    width: min(380px, 44vw);
+    height: var(--tt-chain-utility-height) !important;
+    min-height: 0 !important;
+    max-height: var(--tt-chain-utility-height) !important;
+    box-sizing: border-box;
+    transform: none;
+  }
+
+  .tabletop-layout:has(.chain-pod):is(
+    .inspector-open,
+    :has(.log-drawer),
+    :has(.floating-panels > .graveyard-panel),
+    :has(.floating-panels > .banished-panel),
+    :has(.floating-panels > .intel-panel)
+  ) :is(
+    .floating-panels .graveyard-panel,
+    .floating-panels .banished-panel,
+    .floating-panels .intel-panel,
+    .inspector.inspector-panel,
+    .log-drawer
+  ) {
+    top: calc(66px + var(--tt-chain-utility-height) + 8px);
+  }
+}
+
+@media (max-width: 760px) {
+  .tabletop-layout:has(.chain-pod):is(
+    .inspector-open,
+    :has(.log-drawer),
+    :has(.floating-panels > .graveyard-panel),
+    :has(.floating-panels > .banished-panel),
+    :has(.floating-panels > .intel-panel)
+  ) {
+    --tt-chain-utility-height: clamp(120px, 20dvh, 160px);
+  }
+
+  .tabletop-layout:has(.chain-pod):is(
+    .inspector-open,
+    :has(.log-drawer),
+    :has(.floating-panels > .graveyard-panel),
+    :has(.floating-panels > .banished-panel),
+    :has(.floating-panels > .intel-panel)
+  ) .chain-pod {
+    position: fixed;
+    top: calc(64px + env(safe-area-inset-top));
+    right: calc(var(--tt-action-rail) + 3px);
+    left: auto;
+    width: calc(100vw - var(--tt-action-rail) - 6px);
+    height: var(--tt-chain-utility-height) !important;
+    min-height: 0 !important;
+    max-height: var(--tt-chain-utility-height) !important;
+    box-sizing: border-box;
+    transform: none;
+  }
+
+  .tabletop-layout:has(.chain-pod):is(
+    .inspector-open,
+    :has(.log-drawer),
+    :has(.floating-panels > .graveyard-panel),
+    :has(.floating-panels > .banished-panel),
+    :has(.floating-panels > .intel-panel)
+  ) :is(
+    .floating-panels .graveyard-panel,
+    .floating-panels .banished-panel,
+    .floating-panels .intel-panel,
+    .inspector.inspector-panel,
+    .log-drawer
+  ) {
+    top: calc(64px + env(safe-area-inset-top) + var(--tt-chain-utility-height) + 8px);
+  }
+}
+
+/* True EOF interaction and physical-card seal --------------------------
+   Keep this block last: older responsive contracts above still describe
+   the retired side-ledger Unit presentation. */
+.tabletop-layout {
+  --tt-field-physical-width: 50px;
+  --tt-field-physical-height: 70px;
+  --tt-field-physical-footprint: 78px;
+  --tt-base-physical-width: 60px;
+  --tt-base-physical-height: 84px;
+  --tt-base-physical-footprint: 94px;
+}
+
+.tabletop-layout .field-lane-track:has(> .physical-board-card) {
+  overflow: visible !important;
+}
+
+/* A physical card is taller than its low-height lane. Let the card face
+   breathe into the battlefield centre instead of cropping its art, corner
+   values, or status chips at the lane boundary. */
+.tabletop-layout .battlefield.location-column .field-lane:has(.physical-board-card),
+.tabletop-layout .base-row:has(.physical-board-card) {
+  overflow-y: visible !important;
+}
+
+.tabletop-layout .battlefield.location-column .field-lane:has(.physical-board-card) {
+  z-index: 3;
+}
+
+/* During direct Rune payment every card must keep its own hit target. The
+   normal tabletop fan overlaps Runes for density, but overlapping controls
+   makes the covered cards impossible to click. */
+.tabletop-layout .table-seat.payment-seat .resource-row.rune-card-stack {
+  gap: 4px !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  padding-right: 4px !important;
+}
+
+.tabletop-layout .table-seat.payment-seat .resource-row.rune-card-stack > .payment-rune-choice {
+  flex: 0 0 var(--tt-rune-card-width, 48px) !important;
+  margin-right: 0 !important;
+}
+
+.tabletop-layout .field-lane-track > .unit-token.field-token.physical-board-card,
+.tabletop-layout .base-row > .unit-token.base-token.physical-board-card {
+  flex: 0 0 var(--tt-field-physical-footprint) !important;
+  width: var(--tt-field-physical-footprint) !important;
+  min-width: var(--tt-field-physical-footprint) !important;
+  max-width: var(--tt-field-physical-footprint) !important;
+  min-height: 0 !important;
+  height: calc(100% - 2px) !important;
+  max-height: var(--tt-field-physical-footprint) !important;
+  aspect-ratio: auto !important;
+  overflow: visible;
+  padding: 0 !important;
+}
+
+.tabletop-layout .base-row > .unit-token.base-token.physical-board-card {
+  flex-basis: var(--tt-base-physical-footprint) !important;
+  width: var(--tt-base-physical-footprint) !important;
+  min-width: var(--tt-base-physical-footprint) !important;
+  max-width: var(--tt-base-physical-footprint) !important;
+  height: min(calc(100% - 4px), var(--tt-base-physical-footprint)) !important;
+  max-height: var(--tt-base-physical-footprint) !important;
+}
+
+.tabletop-layout .physical-board-card > .card-exhaust-layer {
+  inset: 50% auto auto 50% !important;
+  width: var(--tt-field-physical-width) !important;
+  height: var(--tt-field-physical-height) !important;
+  max-width: none !important;
+  max-height: none !important;
+  aspect-ratio: auto !important;
+  border-radius: 6px;
+  transform: translate(-50%, -50%) rotate(0deg) !important;
+}
+
+.tabletop-layout .base-token.physical-board-card > .card-exhaust-layer {
+  width: var(--tt-base-physical-width) !important;
+  height: var(--tt-base-physical-height) !important;
+}
+
+.tabletop-layout .physical-board-card.exhausted > .card-exhaust-layer {
+  transform: translate(-50%, -50%) rotate(90deg) !important;
+}
+
+.tabletop-layout .physical-board-card .unit-board-overlay > .unit-state-badges,
+.tabletop-layout .physical-board-card .attached-gear-board-overlay > .unit-state-badges {
+  position: absolute !important;
+  top: 3px !important;
+  right: auto !important;
+  left: 3px !important;
+  display: flex !important;
+  grid-template-columns: none !important;
+  flex-direction: column !important;
+  align-items: flex-start !important;
+  gap: 2px;
+  width: auto;
+  max-width: calc(100% - 8px);
+  overflow: visible;
+}
+
+.tabletop-layout .physical-board-card .unit-board-overlay .unit-state-badge {
+  width: auto;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 2px 4px;
+  font-size: 10px;
+  line-height: 1.05;
+  white-space: nowrap;
+}
+
+.tabletop-layout .physical-board-card.field-token > .owner-chip,
+.tabletop-layout .physical-board-card.base-token > .owner-chip {
+  top: 50% !important;
+  right: -1px !important;
+  left: auto !important;
+  max-width: 21px;
+  padding: 2px 4px;
+  transform: translateY(-50%) !important;
+  font-size: 10px;
+}
+
+.tabletop-layout .physical-board-card.exhausted.field-token > .owner-chip,
+.tabletop-layout .physical-board-card.exhausted.base-token > .owner-chip {
+  top: -1px !important;
+  right: auto !important;
+  left: 50% !important;
+  transform: translateX(-50%) !important;
+}
+
+.tabletop-layout .physical-board-card.field-token > .move-select-chip,
+.tabletop-layout .physical-board-card.base-token > .move-select-chip {
+  top: -2px !important;
+  right: -2px !important;
+  left: auto !important;
+}
+
+.tabletop-layout .physical-board-card.field-token > .attachment-strip,
+.tabletop-layout .physical-board-card.base-token > .attachment-strip {
+  top: 50% !important;
+  right: -8px !important;
+  bottom: auto !important;
+  left: auto !important;
+  transform: translateY(-50%) !important;
+}
+
+.tabletop-layout .physical-board-card > .attachment-strip > button.attached-gear {
+  flex: 0 0 45px;
+  width: 32px;
+  min-width: 32px;
+  max-width: 32px;
+  height: 45px;
+  min-height: 45px;
+  max-height: 45px;
+}
+
+.tabletop-layout .physical-board-card .attached-gear-board-overlay > .unit-state-badges {
+  top: 2px !important;
+  left: 2px !important;
+  max-width: calc(100% - 4px);
+}
+
+.tabletop-layout .physical-board-card .attached-gear-board-overlay .unit-state-badge {
+  padding: 1px 2px;
+  border-radius: 3px;
+  font-size: 7px;
+}
+
+.tabletop-layout .physical-board-card .attached-gear-board-overlay > .attached-gear-might {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  min-width: 15px;
+  width: auto;
+  height: 15px;
+  padding: 0 2px;
+  font-size: 9px;
+}
+
+.tabletop-layout .payment-stage-banner.payment-panel {
+  pointer-events: auto !important;
+}
+
+@media (min-width: 761px) and (min-height: 821px) {
+  .tabletop-layout {
+    --tt-field-physical-width: 58px;
+    --tt-field-physical-height: 81px;
+    --tt-field-physical-footprint: 90px;
+    --tt-base-physical-width: 66px;
+    --tt-base-physical-height: 92px;
+    --tt-base-physical-footprint: 102px;
+  }
+}
+
+@media (min-width: 1200px) and (max-height: 820px) {
+  .tabletop-layout {
+    --tt-hand-card-width: 96px !important;
+  }
+}
+
+@media (max-width: 1199px) {
+  .tabletop-layout .payment-stage-banner.payment-panel {
+    position: absolute;
+    z-index: 72;
+    inset: 2px 4px auto;
+    display: grid;
+    grid-template-columns: minmax(170px, 1fr) minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 4px;
+    width: auto;
+    height: calc(var(--tt-command-height) - 4px);
+    min-height: 0;
+    max-width: none;
+    max-height: calc(var(--tt-command-height) - 4px);
+    overflow: hidden;
+    padding: 3px 5px;
+    border-radius: 7px;
+    background: rgba(4, 20, 34, 0.98);
+  }
+
+  .tabletop-layout .payment-stage-copy,
+  .tabletop-layout .payment-stage-resources,
+  .tabletop-layout .payment-stage-controls {
+    min-width: 0;
+    max-height: 100%;
+  }
+
+  .tabletop-layout .payment-stage-resources {
+    display: flex;
+    gap: 3px;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .tabletop-layout .payment-stage-title-row {
+    display: flex;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .tabletop-layout .payment-stage-title-row :is(h2, span) {
+    overflow: hidden;
+    margin: 0;
+    font-size: 11px;
+    line-height: 1.1;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tabletop-layout .payment-stage-copy > p {
+    display: none;
+  }
+
+  .tabletop-layout .payment-stage-controls {
+    display: flex;
+    gap: 3px;
+  }
+
+  .tabletop-layout .payment-stage-controls button {
+    min-height: 30px;
+    padding: 3px 5px;
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 760px) {
+  .tabletop-layout {
+    --tt-field-physical-width: 42px;
+    --tt-field-physical-height: 59px;
+    --tt-field-physical-footprint: 66px;
+    --tt-base-physical-width: 46px;
+    --tt-base-physical-height: 64px;
+    --tt-base-physical-footprint: 72px;
+  }
+
+  .tabletop-layout .payment-stage-banner.payment-panel {
+    grid-template-columns: minmax(90px, 1fr) minmax(0, 0.7fr) auto;
+  }
+
+  .tabletop-layout .payment-stage-kicker {
+    font-size: 10px;
+  }
+
+  .tabletop-layout .payment-stage-title-row span {
+    display: none;
+  }
+}
+
+/* Physical board-card contract -----------------------------------------
+   Board Units and Gear stay as real cards. Readiness is communicated by
+   the card's angle; values and status chips live on the rotating face. */
+.tabletop-layout {
+  --tt-field-physical-width: 50px;
+  --tt-field-physical-height: 70px;
+  --tt-field-physical-footprint: 78px;
+  --tt-base-physical-width: 60px;
+  --tt-base-physical-height: 84px;
+  --tt-base-physical-footprint: 94px;
+}
+
+.tabletop-layout .field-lane-track > .unit-token.field-token.physical-board-card,
+.tabletop-layout .base-row > .unit-token.base-token.physical-board-card {
+  position: relative;
+  flex: 0 0 var(--tt-field-physical-footprint) !important;
+  width: var(--tt-field-physical-footprint) !important;
+  min-width: var(--tt-field-physical-footprint) !important;
+  max-width: var(--tt-field-physical-footprint) !important;
+  height: min(calc(100% - 8px), var(--tt-field-physical-footprint)) !important;
+  max-height: var(--tt-field-physical-footprint) !important;
+  aspect-ratio: auto !important;
+  overflow: visible;
+  padding: 0 !important;
+  box-sizing: border-box;
+}
+
+.tabletop-layout .base-row > .unit-token.base-token.physical-board-card {
+  flex-basis: var(--tt-base-physical-footprint) !important;
+  width: var(--tt-base-physical-footprint) !important;
+  min-width: var(--tt-base-physical-footprint) !important;
+  max-width: var(--tt-base-physical-footprint) !important;
+  height: min(calc(100% - 4px), var(--tt-base-physical-footprint)) !important;
+  max-height: var(--tt-base-physical-footprint) !important;
+}
+
+.tabletop-layout .physical-board-card > .card-exhaust-layer {
+  position: absolute;
+  inset: 50% auto auto 50% !important;
+  width: var(--tt-field-physical-width) !important;
+  height: var(--tt-field-physical-height) !important;
+  max-width: none !important;
+  max-height: none !important;
+  aspect-ratio: auto !important;
+  border-radius: 6px;
+  transform: translate(-50%, -50%) rotate(0deg) !important;
+  transform-origin: center;
+}
+
+.tabletop-layout .base-token.physical-board-card > .card-exhaust-layer {
+  width: var(--tt-base-physical-width) !important;
+  height: var(--tt-base-physical-height) !important;
+}
+
+.tabletop-layout .physical-board-card.exhausted > .card-exhaust-layer {
+  filter: saturate(0.72) brightness(0.78);
+  transform: translate(-50%, -50%) rotate(90deg) !important;
+}
+
+.tabletop-layout .physical-board-card .card-face-layer {
+  isolation: isolate;
+  overflow: hidden;
+  border-radius: 6px;
+}
+
+.tabletop-layout .physical-board-card .unit-token-art {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+}
+
+.tabletop-layout .physical-board-card .unit-token-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 20%;
+}
+
+.tabletop-layout .physical-board-card .unit-token-body {
+  position: absolute;
+  z-index: 1;
+  inset: auto 2px 2px;
+  min-width: 0;
+  padding: 3px;
+  border-radius: 4px;
+  background: rgba(2, 12, 21, 0.88);
+}
+
+.tabletop-layout .physical-board-card > :is(.card-state-hud, .primary-card-state) {
+  display: none !important;
+}
+
+.tabletop-layout .unit-board-overlay {
+  position: absolute;
+  z-index: 8;
+  inset: 0;
+  display: block;
+  pointer-events: none;
+}
+
+.tabletop-layout .unit-board-overlay > .unit-state-badges {
+  position: absolute;
+  z-index: 3;
+  top: 3px;
+  right: auto;
+  left: 3px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: auto;
+  max-width: calc(100% - 8px);
+  overflow: visible;
+}
+
+.tabletop-layout .unit-board-overlay .unit-state-badge {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid rgba(222, 238, 247, 0.34);
+  border-radius: 5px;
+  padding: 2px 4px;
+  background: rgba(4, 18, 29, 0.94);
+  color: #f4fbff;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.54);
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1.05;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tabletop-layout .unit-board-overlay .unit-state-badge.tone-positive {
+  border-color: rgba(116, 223, 150, 0.72);
+  background: rgba(13, 67, 41, 0.94);
+}
+
+.tabletop-layout .unit-board-overlay .unit-state-badge.tone-negative {
+  border-color: rgba(244, 126, 126, 0.75);
+  background: rgba(91, 25, 31, 0.95);
+}
+
+.tabletop-layout .unit-board-overlay .unit-state-badge.tone-warning {
+  border-color: rgba(255, 207, 88, 0.78);
+  background: rgba(91, 61, 12, 0.95);
+}
+
+.tabletop-layout .unit-corner-value {
+  position: absolute;
+  z-index: 4;
+  bottom: 3px;
+  display: grid;
+  place-items: center;
+  min-width: 23px;
+  height: 26px;
+  border: 1px solid rgba(255, 255, 255, 0.46);
+  border-radius: 6px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  box-shadow: 0 2px 7px rgba(0, 0, 0, 0.72);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 950;
+  line-height: 1;
+  text-shadow: 0 1px 2px #000;
+}
+
+.tabletop-layout .unit-remaining-health {
+  left: 3px;
+  border-color: rgba(209, 228, 245, 0.92);
+  background: linear-gradient(180deg, #f6fbff, #b8ccdf);
+  color: #172637;
+  text-shadow: none;
+}
+
+.tabletop-layout .unit-remaining-health.lethal-stat {
+  border-color: #ff8b8b;
+  background: #892a32;
+  color: #fff;
+  text-shadow: 0 1px 2px #000;
+}
+
+.tabletop-layout .unit-current-might {
+  right: 3px;
+  border-color: rgba(255, 145, 120, 0.9);
+  background: linear-gradient(180deg, #a83b34, #6c1d25);
+}
+
+.tabletop-layout .field-token.physical-board-card .unit-corner-value {
+  min-width: 21px;
+  height: 23px;
+  padding-inline: 3px;
+  font-size: 13px;
+}
+
+.tabletop-layout .physical-board-card > .owner-chip {
+  z-index: 11;
+  top: 50%;
+  right: -1px;
+  left: auto;
+  max-width: 21px;
+  padding: 2px 4px;
+  transform: translateY(-50%);
+  font-size: 10px;
+}
+
+.tabletop-layout .physical-board-card.exhausted > .owner-chip {
+  top: -1px;
+  right: auto;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.tabletop-layout .physical-board-card > .owner-chip .owner-chip-full {
+  display: none;
+}
+
+.tabletop-layout .physical-board-card > .owner-chip .owner-chip-short {
+  display: inline;
+}
+
+.tabletop-layout .physical-board-card > .move-select-chip {
+  top: -2px;
+  right: -2px;
+  left: auto;
+}
+
+.tabletop-layout .physical-board-card > .attachment-strip {
+  z-index: 12;
+  top: 50%;
+  right: -8px;
+  bottom: auto;
+  left: auto;
+  transform: translateY(-50%);
+}
+
+.tabletop-layout .physical-board-card > .attachment-strip > button.attached-gear {
+  flex: 0 0 45px;
+  width: 32px;
+  min-width: 32px;
+  max-width: 32px;
+  height: 45px;
+  min-height: 45px;
+  max-height: 45px;
+  overflow: hidden;
+}
+
+.tabletop-layout .attached-gear-board-overlay {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  display: block;
+  pointer-events: none;
+}
+
+.tabletop-layout .attached-gear-board-overlay > .unit-state-badges {
+  top: 2px;
+  right: auto;
+  left: 2px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  max-width: calc(100% - 4px);
+}
+
+.tabletop-layout .attached-gear-board-overlay .unit-state-badge {
+  max-width: 100%;
+  padding: 1px 2px;
+  border-radius: 3px;
+  font-size: 7px;
+}
+
+.tabletop-layout .attached-gear-board-overlay > .attached-gear-might {
+  position: absolute;
+  z-index: 4;
+  right: 2px;
+  bottom: 2px;
+  display: grid;
+  place-items: center;
+  min-width: 15px;
+  width: auto;
+  height: 15px;
+  border-radius: 5px;
+  padding: 0 2px;
+  color: #fff1a7;
+  font-size: 9px;
+}
+
+.tabletop-layout .payment-stage-banner.payment-panel {
+  pointer-events: auto;
+}
+
+@media (min-width: 761px) and (min-height: 821px) {
+  .tabletop-layout {
+    --tt-field-physical-width: 58px;
+    --tt-field-physical-height: 81px;
+    --tt-field-physical-footprint: 90px;
+    --tt-base-physical-width: 66px;
+    --tt-base-physical-height: 92px;
+    --tt-base-physical-footprint: 102px;
+  }
+}
+
+@media (max-width: 760px) {
+  .tabletop-layout {
+    --tt-field-physical-width: 42px;
+    --tt-field-physical-height: 59px;
+    --tt-field-physical-footprint: 66px;
+    --tt-base-physical-width: 46px;
+    --tt-base-physical-height: 64px;
+    --tt-base-physical-footprint: 72px;
+  }
+
+  .tabletop-layout .unit-board-overlay .unit-state-badge {
+    max-width: 38px;
+    padding: 1px 2px;
+    font-size: 8px;
+  }
+
+  .tabletop-layout .unit-corner-value,
+  .tabletop-layout .field-token.physical-board-card .unit-corner-value {
+    min-width: 18px;
+    height: 20px;
+    font-size: 11px;
+  }
+}
+
+@media (min-width: 1200px) and (max-height: 820px) {
+  .tabletop-layout {
+    --tt-hand-card-width: 96px;
+  }
+}
+
 /* Mid-size desktop tables still keep both battlefields in view while a
    utility sheet is open. A 404px sheet is comfortable at 1440px+, but at
    1200-1399px it needlessly forces the playmat into a horizontal carousel. */
@@ -6030,7 +7239,7 @@
   justify-self: center;
   width: calc(100% - 10px) !important;
   max-width: calc(100% - 10px) !important;
-  height: calc(100% - 4px) !important;
+  height: calc(100% - 6px) !important;
   transform: none !important;
 }
 
@@ -6303,5 +7512,339 @@
       minmax(180px, 0.9fr)
       minmax(160px, 1fr)
       minmax(180px, 1fr);
+  }
+}
+
+/* Activate the desktop density contract after every historical seal. */
+@media (min-width: 1200px) {
+  .tabletop-layout {
+    --tt-hand-height: 196px;
+    --tt-hand-card-width: 112px;
+    --tt-opponent-row: 176px;
+    --tt-player-row: 196px;
+  }
+
+  .tabletop-layout.inspector-open,
+  .tabletop-layout:has(.floating-panels > .graveyard-panel),
+  .tabletop-layout:has(.floating-panels > .banished-panel),
+  .tabletop-layout:has(.floating-panels > .intel-panel),
+  .tabletop-layout:has(.log-drawer) {
+    --tt-sheet-reserve: clamp(288px, 21vw, 320px);
+  }
+
+  .tabletop-layout:has(.chain-pod) {
+    --tt-sheet-reserve: clamp(312px, 22vw, 336px);
+  }
+
+  .tabletop-layout:has(.floating-panels > .choice-panel) {
+    --tt-sheet-reserve: clamp(336px, 24vw, 368px);
+  }
+
+  .tabletop-layout .board-panel {
+    right: var(--tt-sheet-reserve);
+  }
+
+  .tabletop-layout .table-command-layer {
+    right: var(--tt-action-rail);
+  }
+
+  .tabletop-layout .table-seat {
+    grid-template-columns:
+      var(--tt-identity-track)
+      var(--tt-pile-dock-width)
+      minmax(250px, 1fr)
+      var(--tt-resource-track);
+  }
+
+  .tabletop-layout .table-seat.bottom {
+    grid-template-columns:
+      var(--tt-resource-track)
+      minmax(250px, 1fr)
+      var(--tt-pile-dock-width)
+      var(--tt-identity-track);
+  }
+
+  .tabletop-layout .floating-panels.has-blocking-decision,
+  .tabletop-layout .floating-panels :is(
+    .graveyard-panel,
+    .banished-panel,
+    .intel-panel,
+    .payment-panel,
+    .choice-panel
+  ),
+  .tabletop-layout .inspector.inspector-panel,
+  .tabletop-layout .log-drawer,
+  .tabletop-layout .chain-pod {
+    right: 8px;
+    left: auto;
+    width: calc(var(--tt-sheet-reserve) - 16px);
+    max-width: calc(var(--tt-sheet-reserve) - 16px);
+  }
+
+  .tabletop-layout .chain-pod {
+    position: absolute;
+    top: 8px;
+    right: calc(8px - var(--tt-sheet-reserve));
+  }
+
+  /* Payment lives in the command strip. Resource sources therefore become
+     compact, horizontally scrollable chips instead of inheriting the old
+     modal's tall cards, which used to crop generated resources entirely. */
+  .tabletop-layout .payment-stage-resources .payment-resource-group {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    border: 0;
+    padding: 0;
+    background: transparent;
+  }
+
+  .tabletop-layout .payment-stage-resources .payment-resource-heading {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .tabletop-layout .payment-stage-resources :is(
+    .pool-energy-list,
+    .payment-add-actions,
+    .optional-costs
+  ) {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin: 0;
+    overflow: visible;
+    padding: 0;
+  }
+
+  .tabletop-layout .payment-stage-resources :is(.pool-energy, .pool-power),
+  .tabletop-layout .payment-stage-resources .payment-add-actions > button {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+      "orb title"
+      "orb source";
+    align-items: center;
+    column-gap: 4px;
+    width: auto;
+    min-width: 104px !important;
+    max-width: 164px;
+    height: 30px;
+    min-height: 30px;
+    border-radius: 6px;
+    padding: 2px 6px;
+    text-align: left;
+  }
+
+  .tabletop-layout .payment-stage-resources .pool-power.selected {
+    border-color: var(--blue);
+    background: rgba(47, 120, 255, 0.16);
+    box-shadow: 0 0 0 2px rgba(47, 120, 255, 0.35);
+  }
+
+  .tabletop-layout .payment-stage-resources .pool-energy-orb {
+    grid-area: orb;
+    width: 18px;
+    height: 18px;
+  }
+
+  .tabletop-layout .payment-stage-resources :is(.pool-energy, .pool-power, .payment-add-actions > button) > strong {
+    grid-area: title;
+    overflow: hidden;
+    font-size: 10px;
+    line-height: 1.05;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tabletop-layout .payment-stage-resources :is(.pool-energy, .pool-power, .payment-add-actions > button) > span {
+    grid-area: source;
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 9px;
+    line-height: 1.05;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tabletop-layout:has(.payment-stage-banner) .table-command-layer {
+    right: 0;
+  }
+}
+
+@media (min-width: 1200px) and (max-height: 820px) {
+  .tabletop-layout {
+    --tt-hand-height: 156px;
+    --tt-hand-card-width: 86px;
+    --tt-opponent-row: 130px;
+    --tt-player-row: 132px;
+  }
+}
+
+@media (min-width: 1200px) {
+  .tabletop-layout .resource-zone {
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .tabletop-layout .resource-zone > .zone-caption {
+    position: absolute;
+  }
+
+  .tabletop-layout .rune-tabletop {
+    grid-row: 1;
+    height: 100%;
+  }
+
+  .tabletop-layout .payment-stage-banner.payment-panel {
+    position: absolute;
+    z-index: 72;
+    inset: 4px 10px auto;
+    display: grid;
+    grid-template-columns: minmax(330px, 1fr) minmax(180px, auto) auto;
+    align-items: center;
+    gap: 8px;
+    width: auto;
+    height: calc(var(--tt-command-height) - 8px);
+    min-height: 0;
+    max-width: none;
+    max-height: calc(var(--tt-command-height) - 8px);
+    overflow: hidden;
+    margin: 0;
+    padding: 5px 8px;
+    border: 1px solid rgba(255, 204, 75, 0.74);
+    border-radius: 9px;
+    background: rgba(4, 20, 34, 0.98);
+    box-shadow: 0 0 24px rgba(255, 190, 40, 0.16);
+    transform: none;
+  }
+
+  .tabletop-layout .payment-stage-copy {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 2px 8px;
+    min-width: 0;
+  }
+
+  .tabletop-layout .payment-stage-kicker {
+    grid-row: 1 / span 2;
+    align-self: stretch;
+    display: grid;
+    place-items: center;
+    border-radius: 6px;
+    padding: 2px 7px;
+    background: #8b6412;
+    color: #fff2b3;
+    font-size: 11px;
+    font-weight: 900;
+    white-space: nowrap;
+  }
+
+  .tabletop-layout .payment-stage-title-row,
+  .tabletop-layout .payment-stage-controls,
+  .tabletop-layout .payment-stage-resources {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+  }
+
+  .tabletop-layout .payment-stage-title-row h2 {
+    flex: 0 0 auto;
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.1;
+  }
+
+  .tabletop-layout .payment-stage-title-row span,
+  .tabletop-layout .payment-stage-copy p {
+    overflow: hidden;
+    margin: 0;
+    font-size: 11px;
+    line-height: 1.15;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tabletop-layout .payment-stage-resources {
+    max-height: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .tabletop-layout .payment-stage-resources :is(button, label),
+  .tabletop-layout .payment-stage-controls button {
+    flex: 0 0 auto;
+    min-height: 28px;
+    padding: 3px 6px;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .tabletop-layout .table-seat.payment-seat {
+    isolation: isolate;
+    pointer-events: none;
+  }
+
+  .tabletop-layout .table-seat.payment-seat .resource-zone {
+    position: relative;
+    z-index: 40;
+    overflow: visible;
+    border-radius: 9px;
+    outline: 2px solid rgba(255, 206, 74, 0.78);
+    outline-offset: 3px;
+    box-shadow: 0 0 22px rgba(255, 190, 42, 0.34);
+  }
+
+  .tabletop-layout .payment-seat .payment-rune-choice {
+    z-index: calc(48 + var(--rune-index));
+    pointer-events: auto;
+    cursor: pointer;
+    filter: brightness(1.12);
+  }
+
+  .tabletop-layout .payment-seat .payment-rune-choice .rune-orientation-layer {
+    box-shadow: 0 0 0 2px rgba(255, 213, 91, 0.8), 0 8px 18px rgba(0, 0, 0, 0.46);
+  }
+
+  .tabletop-layout .payment-seat .payment-rune-choice.is-energy-selected .rune-orientation-layer {
+    transform: rotate(90deg);
+    filter: brightness(1.22) saturate(1.14);
+    box-shadow: 0 0 0 3px #ffd85f, 0 0 22px rgba(255, 202, 62, 0.7);
+  }
+
+  .tabletop-layout .payment-seat .payment-rune-choice.is-power-selected .rune-orientation-layer {
+    filter: brightness(1.2) saturate(1.2);
+    box-shadow: 0 0 0 3px #bd7cff, 0 0 22px rgba(178, 95, 255, 0.72);
+  }
+
+  .tabletop-layout .payment-seat .payment-rune-choice.payment-unavailable {
+    pointer-events: none;
+    opacity: 0.34;
+    filter: grayscale(0.9) brightness(0.55);
+  }
+
+  .tabletop-layout .payment-rune-mode {
+    top: 3px;
+    right: 3px;
+    left: auto;
+    z-index: 4;
+    background: rgba(2, 14, 24, 0.94);
+  }
+
+  .tabletop-layout .battlefield.location-column {
+    width: calc(100% - 12px) !important;
+    max-width: calc(100% - 12px) !important;
+  }
+
+  .tabletop-layout .field-lane-track > .unit-token.field-token {
+    height: calc(100% - 8px) !important;
+    max-height: calc(100% - 8px);
   }
 }

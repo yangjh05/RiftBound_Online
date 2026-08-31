@@ -52,3 +52,18 @@ test("processing queue can collapse so the battlefield remains visible", () => {
   assert.match(styles, /\.chain-zone\.is-collapsed\s*\{[\s\S]*right:\s*auto/);
   assert.match(styles, /\.chain-zone\.is-collapsed\s*\{[\s\S]*width:\s*min\(360px, calc\(100% - 24px\)\)/);
 });
+
+test("a resolving Chain item remains visible while its choice or payment continuation is open", () => {
+  assert.match(appSource, /let chainTreePresentationItems = \[\]/);
+  assert.match(appSource, /function pendingResolutionChainItem\(\)/);
+  assert.match(appSource, /pending\.gameEffectResolution\?\.context\?\.chainKind/);
+  assert.match(appSource, /chainTreePresentationItems = liveItems\.map\(snapshotChainPresentationItem\)/);
+  assert.match(appSource, /resolutionStillOpen && chainTreePresentationItems\.length/);
+  assert.match(appSource, /chainTreePresentationItems = \[\];\s*return \[\];/);
+});
+
+test("large resolving card choices expose a stable card-grid contract and filter their wrappers", () => {
+  assert.match(appSource, /choice-card-selection-panel has-card-options/);
+  assert.match(appSource, /data-choice-layout="\$\{choiceLayout\}"/);
+  assert.match(appSource, /\.choice-grid > \.choice-option, \.choice-grid > \.choice-option-wrap/);
+});

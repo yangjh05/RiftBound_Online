@@ -131,6 +131,8 @@ async function installReadabilityFixture(page) {
         name: `Readability Gear ${index + 1}`,
         localizedName: `가독성 장비 ${index + 1}`,
         might: 2,
+        empoweredCount: 1,
+        maxEmpowerCount: 2,
         exhausted: index === 1,
         attachments: []
       });
@@ -400,6 +402,10 @@ async function installReadablePaymentFixture(page) {
     const card = player.hand[0] || player.mainDeck[0] || player.legend;
     const readyRune = player.runes.find((rune) => !rune.exhausted) || player.runes[0];
     if (readyRune) readyRune.exhausted = false;
+    if (player.runePool?.power?.[0]) player.runePool.power[0].domain = readyRune?.domain || "Any";
+    if (player.runePool?.energy && !player.runePool.energy.some((resource) => resource?.id === "readability-legacy-energy")) {
+      player.runePool.energy.push({ id: "readability-legacy-energy", domains: null });
+    }
     game.pendingChoice = null;
     game.pendingPayment = {
       id: "readability-payment",
@@ -450,8 +456,11 @@ function expectContained(inner, outer, label) {
 
 async function visibleBox(locator, label) {
   await expect(locator, `${label} must be visible`).toBeVisible();
-  const box = await locator.boundingBox();
-  expect(box, `${label} must have measurable geometry`).not.toBeNull();
+  let box = null;
+  await expect.poll(async () => {
+    box = await locator.boundingBox();
+    return Boolean(box);
+  }, { message: `${label} must have stable measurable geometry` }).toBe(true);
   return box;
 }
 
@@ -485,10 +494,8 @@ async function assertDesktopTypography(page) {
     { selector: ".rune-card-chip strong", minimum: MIN_FUNCTIONAL_FONT_PX },
     { selector: ".battlefield-head h2", minimum: MIN_FUNCTIONAL_FONT_PX },
     { selector: ".battlefield-head span", minimum: MIN_FUNCTIONAL_FONT_PX },
-    { selector: ".unit-token-body strong", minimum: MIN_FUNCTIONAL_FONT_PX },
-    { selector: ".unit-token-body > span", minimum: MIN_FUNCTIONAL_FONT_PX },
-    { selector: ".card-state-hud.unit-stats > b", minimum: MIN_FUNCTIONAL_FONT_PX },
-    { selector: ".card-state-hud.unit-stats > em", minimum: MIN_FUNCTIONAL_FONT_PX },
+    { selector: ".unit-board-overlay .unit-current-might", minimum: MIN_FUNCTIONAL_FONT_PX },
+    { selector: ".unit-board-overlay .unit-remaining-health", minimum: MIN_FUNCTIONAL_FONT_PX },
     { selector: ".unit-state-badge", minimum: MIN_FUNCTIONAL_FONT_PX },
     { selector: ".context-action-dock .action-context .bar-label", minimum: MIN_FUNCTIONAL_FONT_PX },
     { selector: ".context-action-dock .action-context strong", minimum: MIN_FUNCTIONAL_FONT_PX },
@@ -582,34 +589,39 @@ async function assertIdentityGeometry(page) {
 async function assertCardStateContract(page, card) {
   const locator = page.locator(`[data-card-id="${card.id}"]`).first();
   await expect(locator).toBeVisible();
+  await expect(locator).toHaveClass(/physical-board-card/u);
   await expect(locator).toHaveAttribute("data-current-might", /^-?\d+$/u);
+  await expect(locator).toHaveAttribute("data-remaining-health", /^\d+$/u);
   await expect(locator).toHaveAttribute("data-damage", String(card.damage));
   await expect(locator).toHaveAttribute("data-exhausted", String(card.exhausted));
   await expect(locator).toHaveAttribute("data-stunned", String(card.stunned));
-  await expect(locator.locator(".unit-token-body strong")).toContainText(card.name);
-  await expect(locator.locator(".unit-token-body > span")).not.toHaveText(/^\s*$/u);
-  const stateHud = locator.locator(".card-state-hud.unit-stats");
-  await expect(stateHud).toBeVisible();
-  await expect(stateHud).toContainText(/위력|Might/iu);
+  await expect(locator).toHaveAttribute("aria-label", new RegExp(card.name, "iu"));
+  await expect(locator).toHaveAttribute("aria-label", card.exhausted ? /탈진|Exhausted/iu : /준비|Ready/iu);
+  await expect(locator).toHaveAttribute("title", card.exhausted ? /탈진|Exhausted/iu : /준비|Ready/iu);
+  const face = locator.locator(":scope > .card-exhaust-layer > .card-face-layer");
+  await expect(face).toBeVisible();
+  const overlay = face.locator(":scope > .unit-board-overlay");
+  await expect(overlay).toBeVisible();
   const currentMight = await locator.getAttribute("data-current-might");
-  await expect(stateHud).toContainText(currentMight);
-  if (card.exhausted) await expect(stateHud).toContainText(/탈진|Exhausted/iu);
-  else if (!card.stunned) await expect(stateHud).toContainText(/준비|Ready/iu);
-  if (card.damage > 0) await expect(stateHud).toContainText(String(card.damage));
-  if (card.stunned) await expect(stateHud).toContainText(/기절|Stunned/iu);
-  const secondaryStatuses = locator.locator(".unit-state-badges");
+  const remainingHealth = await locator.getAttribute("data-remaining-health");
+  await expect(overlay.locator(":scope > .unit-current-might")).toHaveText(String(currentMight));
+  await expect(overlay.locator(":scope > .unit-remaining-health")).toHaveText(String(remainingHealth));
+  await expect(face).not.toContainText(/준비|탈진|Ready|Exhausted/iu);
+  await expect(locator.locator(".primary-card-state, .card-state-hud.unit-stats")).toHaveCount(0);
+  const secondaryStatuses = overlay.locator(":scope > .unit-state-badges");
   await expect(secondaryStatuses).toBeVisible();
   await expect(secondaryStatuses).toHaveAttribute("aria-label", /\S/u);
+  if (card.stunned) await expect(secondaryStatuses).toHaveAttribute("aria-label", /기절|Stunned/iu);
   await expect(locator.locator(".owner-chip")).toBeVisible();
 
-  const clipping = await stateHud.evaluate((hud) => ({
-    clientWidth: hud.clientWidth,
-    scrollWidth: hud.scrollWidth,
-    clientHeight: hud.clientHeight,
-    scrollHeight: hud.scrollHeight
+  const clipping = await face.evaluate((cardFace) => ({
+    clientWidth: cardFace.clientWidth,
+    scrollWidth: cardFace.scrollWidth,
+    clientHeight: cardFace.clientHeight,
+    scrollHeight: cardFace.scrollHeight
   }));
-  expect(clipping.scrollWidth, `${card.id} state HUD must not clip horizontally`).toBeLessThanOrEqual(clipping.clientWidth + 1);
-  expect(clipping.scrollHeight, `${card.id} state HUD must not clip vertically`).toBeLessThanOrEqual(clipping.clientHeight + 1);
+  expect(clipping.scrollWidth, `${card.id} card-face overlay must not clip horizontally`).toBeLessThanOrEqual(clipping.clientWidth + 1);
+  expect(clipping.scrollHeight, `${card.id} card-face overlay must not clip vertically`).toBeLessThanOrEqual(clipping.clientHeight + 1);
 }
 
 test("desktop tabletop reserves readable identity, board, command, hand, battlefield, and state regions", async ({ page }) => {
@@ -673,9 +685,11 @@ test("desktop tabletop reserves readable identity, board, command, hand, battlef
     await expect(gear, `${player.gearId} attachment must remain visible`).toBeVisible();
     await expect(gear).toHaveAttribute("data-current-might", String(player.gearMight));
     await expect(gear).toHaveAttribute("data-exhausted", String(player.gearExhausted));
-    await expect(gear.locator(".attached-gear-state")).toBeVisible();
-    await expect(gear.locator(".attached-gear-state")).toContainText(String(player.gearMight));
-    await expect(gear.locator(".attached-gear-state")).toContainText(player.gearExhausted ? /탈진|EXH|Exhausted/iu : /준비|RDY|Ready/iu);
+    await expect(gear).toHaveAttribute("title", player.gearExhausted ? /탈진|Exhausted/iu : /준비|Ready/iu);
+    await expect(gear.locator(".attached-gear-board-overlay .attached-gear-might")).toHaveText(String(player.gearMight));
+    await expect(gear.locator(".attached-gear-board-overlay .unit-state-badges")).toBeVisible();
+    await expect(gear.locator(".attached-gear-state, .attached-gear-readiness")).toHaveCount(0);
+    await expect(gear).not.toContainText(/준비|탈진|Ready|Exhausted/iu);
   }
 
   await assertNoLiteralInvalidValues(page, runtimeFailures);
@@ -749,6 +763,54 @@ test("an active Chain keeps its full effect readable and exposes exactly one ena
   await assertNoLiteralInvalidValues(page, runtimeFailures);
 });
 
+test("an active Chain shares the right dock without being covered by information sheets", async ({ page }) => {
+  const runtimeFailures = captureRuntimeFailures(page);
+  await openReadyBoard(page);
+  await installReadabilityFixture(page);
+  const chain = await installReadableChainFixture(page);
+  await page.evaluate(() => {
+    const game = window.__riftboundGame;
+    const player = game.players[0];
+    const selected = player.hand[0] || player.base[0] || player.legend;
+    game.selectedCardId = selected?.instanceId || null;
+    window.__riftboundRender();
+  });
+
+  const chainPanel = page.locator(".chain-pod");
+  const chainItem = page.locator(`.chain-zone-item[data-card-id="${chain.cardId}"]`);
+  const assertSharedDock = async (panel, label) => {
+    const chainBox = await visibleBox(chainPanel, `Chain with ${label}`);
+    const panelBox = await visibleBox(panel, label);
+    expectNoVisualOverlap(chainBox, panelBox, `Chain and ${label}`);
+    expect.soft(panelBox.y, `${label} must start below the active Chain`).toBeGreaterThanOrEqual(chainBox.y + chainBox.height - MAX_ALLOWED_OVERLAP_PX);
+    await expect(chainItem, `Chain item must remain visible with ${label}`).toBeVisible();
+  };
+
+  await page.locator('.table-action-rail [data-action="toggle-inspector"]:not([disabled])').click();
+  const inspector = page.locator(".inspector.inspector-panel");
+  await assertSharedDock(inspector, "Card Info");
+  await inspector.locator('[data-action="toggle-inspector"]').click();
+
+  await page.locator('.tabletop-topbar [data-action="toggle-log"]').click();
+  const log = page.locator(".log-drawer");
+  await assertSharedDock(log, "log");
+  await log.locator('[data-action="toggle-log"]').click();
+
+  const bottomSeat = page.locator('.table-seat[data-side="bottom"]');
+  await bottomSeat.locator('[data-action="toggle-graveyard"]').click();
+  const trash = page.locator(".graveyard-panel:not(.banished-panel)");
+  await assertSharedDock(trash, "Trash");
+  await trash.locator('[data-action="close-graveyard"]').click();
+
+  await bottomSeat.locator('[data-action="toggle-banished"]').click();
+  const banished = page.locator(".banished-panel");
+  await assertSharedDock(banished, "Banished");
+  await banished.locator('[data-action="close-banished"]').click();
+
+  await expect(chainItem).toBeVisible();
+  await assertNoLiteralInvalidValues(page, runtimeFailures);
+});
+
 test("snapshot-only triggers retain their source, full text, and target in every Chain path", async ({ page }) => {
   const runtimeFailures = captureRuntimeFailures(page);
   await openReadyBoard(page);
@@ -766,7 +828,53 @@ test("snapshot-only triggers retain their source, full text, and target in every
   }
 });
 
-test("right-docked Chain and payment keep both battlefield lanes, seats, and Rune controls accessible", async ({ page }) => {
+test("a Chain item stays visible through a resolving card choice and clears only after resolution", async ({ page }) => {
+  const runtimeFailures = captureRuntimeFailures(page);
+  await openReadyBoard(page);
+  await installReadabilityFixture(page);
+  const chain = await installReadableChainFixture(page);
+  await expect(page.locator(`.chain-zone-item[data-card-id="${chain.cardId}"]`)).toBeVisible();
+
+  await page.evaluate(() => {
+    const game = window.__riftboundGame;
+    const item = game.showdown.chain[0];
+    game.showdown.chain = [];
+    game.pendingChoice = {
+      id: "readability-resolving-choice",
+      playerId: item.playerId,
+      card: structuredClone(item.card),
+      effect: "genericChoice",
+      prompt: "Choose while this Chain item resolves.",
+      options: [{ id: "continue", label: "Continue" }],
+      optional: false,
+      data: {},
+      fromShowdownChain: true,
+      gameEffectResolution: {
+        context: { chainKind: "showdown", pendingTriggerBatches: [], finalized: false }
+      }
+    };
+    window.__riftboundRender();
+  });
+
+  const resolving = page.locator(`.chain-zone-item.status-resolving[data-card-id="${chain.cardId}"]`);
+  await expect(resolving).toBeVisible();
+  await expect(resolving.locator(".chain-zone-copy > strong")).toContainText("체인 효과 가독성 검증 카드");
+
+  await page.evaluate(() => {
+    const game = window.__riftboundGame;
+    game.pendingChoice = null;
+    game.triggerQueue = [];
+    game.triggerQueueContinuation = null;
+    delete game.resolvingChainContext;
+    delete game.resolvingGameEffect;
+    window.__riftboundRender();
+  });
+  await expect(page.locator(`.chain-zone-item[data-card-id="${chain.cardId}"]`)).toHaveCount(0);
+  await expect(page.locator(".chain-zone .response-prompt")).toBeVisible();
+  await assertNoLiteralInvalidValues(page, runtimeFailures);
+});
+
+test("Chain and in-board payment keep battlefield lanes, seats, and direct Rune controls accessible", async ({ page }) => {
   const runtimeFailures = captureRuntimeFailures(page);
   await openReadyBoard(page);
   const fixture = await installReadabilityFixture(page);
@@ -805,27 +913,152 @@ test("right-docked Chain and payment keep both battlefield lanes, seats, and Run
       expectNoVisualOverlap(seatBox, chainBox, `${viewport.width} ${side} seat and Chain panel`);
     }
 
-    await installReadablePaymentFixture(page);
-    const payment = page.locator(".payment-panel");
-    const paymentBox = await visibleBox(payment, `${viewport.width} payment panel`);
-    for (const side of ["top", "bottom"]) {
-      const seatBox = await visibleBox(page.locator(`.table-seat[data-side="${side}"]`), `${viewport.width} ${side} seat with payment`);
-      expectNoVisualOverlap(seatBox, paymentBox, `${viewport.width} ${side} seat and payment panel`);
-    }
-    const costArea = payment.locator(".payment-cost-area");
-    const costBox = await visibleBox(costArea, `${viewport.width} payment cost area`);
-    expect.soft(costBox.height, `${viewport.width} payment controls need a usable vertical work area`).toBeGreaterThanOrEqual(96);
-    const firstRune = payment.locator(".pay-rune").first();
-    const runeBox = await visibleBox(firstRune, `${viewport.width} payment Rune`);
-    expectContained(runeBox, paymentBox, `${viewport.width} payment Rune inside panel`);
-    expectContained(runeBox, costBox, `${viewport.width} payment Rune inside scroll area`);
+    const paymentFixture = await installReadablePaymentFixture(page);
+    const payment = page.locator(".payment-stage-banner");
+    const paymentBox = await visibleBox(payment, `${viewport.width} payment stage`);
+    const boardBox = await visibleBox(page.locator(".tabletop-board"), `${viewport.width} board with payment`);
+    expectContained(paymentBox, boardBox, `${viewport.width} payment stage inside board`);
+    await expect(payment).toContainText(/비용 지불 단계|PAYMENT STEP/u);
+    await expect(page.locator(".floating-panels > .payment-panel")).toHaveCount(0);
+    await expect(page.locator(".pay-rune")).toHaveCount(0);
 
-    await page.evaluate(() => {
-      window.__riftboundGame.pendingPayment = null;
-      window.__riftboundRender();
-    });
+    const directRune = page.locator(`[data-direct-payment-rune="true"][data-rune="${paymentFixture.runeId}"]`);
+    const generatedEnergy = page.locator('[data-action="pay-pool-energy"]').first();
+    const generatedPower = page.locator('[data-action="pay-pool-power"]').first();
+    await expect(directRune).toBeVisible();
+    await expect(directRune).toHaveClass(/can-pay-energy/u);
+    await expect(directRune).toHaveClass(/can-pay-power/u);
+    await expect(generatedEnergy).toBeVisible();
+    await expect(generatedPower).toBeVisible();
+    await generatedEnergy.click();
+    await expect.poll(() => page.evaluate(() => window.__riftboundGame.pendingPayment.poolEnergyIds.length)).toBe(1);
+    await directRune.click();
+    await expect.poll(() => page.evaluate(() => window.__riftboundGame.pendingPayment.energyRuneIds.length)).toBe(1);
+    await generatedPower.click();
+    await expect.poll(() => page.evaluate(() => window.__riftboundGame.pendingPayment.poolPowerIds.length)).toBe(1);
+    await expect(page.locator('[data-action="confirm-payment"]')).toBeEnabled();
+    await generatedPower.click();
+    await expect.poll(() => page.evaluate(() => window.__riftboundGame.pendingPayment.poolPowerIds.length)).toBe(0);
+    const rerenderedRune = page.locator(`[data-direct-payment-rune="true"][data-rune="${paymentFixture.runeId}"]`);
+    await rerenderedRune.click({ button: "right" });
+    await expect.poll(() => page.evaluate(() => window.__riftboundGame.pendingPayment.powerRuneIds.length)).toBe(1);
+    await page.locator('[data-action="cancel-payment"]').click();
+    await expect.poll(() => page.evaluate(() => window.__riftboundGame.pendingPayment)).toBeNull();
   }
 
+  await assertNoLiteralInvalidValues(page, runtimeFailures);
+});
+
+test("Legend and Seal resource abilities remain usable inside the in-board payment step", async ({ page }) => {
+  const runtimeFailures = captureRuntimeFailures(page);
+  await openReadyBoard(page);
+  await installReadabilityFixture(page);
+  const fixture = await page.evaluate(() => {
+    const game = window.__riftboundGame;
+    const player = game.players[0];
+    const paidCard = player.hand[0] || player.mainDeck[0];
+    const legend = player.legend;
+    legend.controllerId = player.id;
+    legend.ownerId = player.id;
+    legend.exhausted = false;
+    legend.effects = [{
+      timing: "activated",
+      exhaust: true,
+      kind: "addEnergy",
+      amount: 1,
+      domains: ["Any"],
+      restriction: null,
+      nonReactive: true,
+      abilityKeywords: ["Reaction"]
+    }];
+
+    const sealSeed = player.base[0] || player.hand[1] || paidCard;
+    const seal = {
+      ...structuredClone(sealSeed),
+      instanceId: "readability-payment-seal",
+      cardNumber: "READABILITY-PAYMENT-SEAL",
+      collectorNumber: "READABILITY-PAYMENT-SEAL",
+      ownerId: player.id,
+      controllerId: player.id,
+      type: "gear",
+      name: "Seal of Strength",
+      exhausted: false,
+      attachedToId: null,
+      attachments: [],
+      effects: [{
+        timing: "activated",
+        exhaust: true,
+        kind: "addPower",
+        amount: 1,
+        domain: "Body",
+        restriction: null,
+        nonReactive: true,
+        abilityKeywords: ["Reaction"]
+      }],
+      translations: {
+        ...(structuredClone(sealSeed?.translations || {})),
+        ko: { name: "힘의 문장", text: "탈진: 신체 힘 1을 추가합니다." }
+      }
+    };
+    player.base.push(seal);
+    player.runePool = { energy: [], power: [] };
+    player.cardsPlayedThisTurn = Math.max(1, player.cardsPlayedThisTurn || 0);
+    game.phase = "action";
+    game.currentPlayerId = player.id;
+    game.turnPlayerId = player.id;
+    game.actionChain = null;
+    game.showdown = null;
+    game.pendingChoice = null;
+    game.pendingPayment = {
+      id: "readability-source-payment",
+      playerId: player.id,
+      cardId: paidCard.instanceId,
+      cardName: paidCard.name,
+      source: "playCard",
+      destination: "base",
+      energyCost: 1,
+      basePowerCost: [{ domain: "Body", amount: 1 }],
+      powerCost: [{ domain: "Body", amount: 1 }],
+      declaredTargets: [],
+      declaredChoices: [],
+      deflectTargetIds: [],
+      energyRuneIds: [],
+      poolEnergyIds: [],
+      powerRuneIds: [],
+      poolPowerIds: [],
+      xpCost: 0,
+      optionalPowerEffects: []
+    };
+    window.__riftboundRender();
+    return { legendId: legend.instanceId, sealId: seal.instanceId };
+  });
+
+  const legendResource = page.locator(`[data-action="activate-card"][data-card="${fixture.legendId}"]`);
+  const sealResource = page.locator(`[data-action="activate-card"][data-card="${fixture.sealId}"]`);
+  await expect(legendResource).toBeVisible();
+  await expect(sealResource).toBeVisible();
+
+  await legendResource.click();
+  await expect.poll(() => page.evaluate(() => ({
+    pending: Boolean(window.__riftboundGame.pendingPayment),
+    energy: window.__riftboundGame.players[0].runePool.energy.length
+  }))).toEqual({ pending: true, energy: 1 });
+  const generatedEnergy = page.locator('[data-action="pay-pool-energy"]').first();
+  await expect(generatedEnergy).toContainText(/에너지|Energy/u);
+  await generatedEnergy.click();
+  await expect.poll(() => page.evaluate(() => window.__riftboundGame.pendingPayment.poolEnergyIds.length)).toBe(1);
+
+  await sealResource.click();
+  await expect.poll(() => page.evaluate(() => ({
+    pending: Boolean(window.__riftboundGame.pendingPayment),
+    power: window.__riftboundGame.players[0].runePool.power.length
+  }))).toEqual({ pending: true, power: 1 });
+  const generatedPower = page.locator('[data-action="pay-pool-power"]').first();
+  await expect(generatedPower).toContainText(/힘|Power/u);
+  await expect(generatedPower).toContainText(/문장|Seal/u);
+  await generatedPower.click();
+  await expect.poll(() => page.evaluate(() => window.__riftboundGame.pendingPayment.poolPowerIds.length)).toBe(1);
+  await expect(page.locator('[data-action="confirm-payment"]')).toBeEnabled();
   await assertNoLiteralInvalidValues(page, runtimeFailures);
 });
 

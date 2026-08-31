@@ -65,6 +65,48 @@ test("card selection keeps the board visible until Card Info is explicitly opene
   assert.match(source, /\$\{cardStatusPanel\(card\)\}/u);
 });
 
+test("board cards keep state accessible while rendering only corner stats and status badges", async () => {
+  const source = await readFile(new URL("../src/app.mjs", import.meta.url), "utf8");
+  const baseTokenSource = source.slice(source.indexOf("function baseToken("), source.indexOf("function unitToken("));
+  const unitTokenSource = source.slice(source.indexOf("function unitToken("), source.indexOf("function showdownUnitStats("));
+  const cornerOverlaySource = source.slice(source.indexOf("function boardCardCornerOverlay("), source.indexOf("function compactBoardStatusLabel("));
+
+  assert.ok(baseTokenSource.length > 0);
+  assert.ok(unitTokenSource.length > 0);
+  assert.ok(cornerOverlaySource.length > 0);
+  assert.doesNotMatch(source, /function primaryCardStateBadges\(/u);
+  assert.doesNotMatch(baseTokenSource, /primary-card-state|card-state-hud unit-stats/u);
+  assert.doesNotMatch(unitTokenSource, /primary-card-state|card-state-hud unit-stats/u);
+
+  for (const boardTokenSource of [baseTokenSource, unitTokenSource]) {
+    assert.match(boardTokenSource, /data-exhausted="\$\{Boolean\(card\.exhausted\)\}"/u);
+    assert.match(boardTokenSource, /aria-label="\$\{escapeHtml\(accessibleState\)\}" title="\$\{escapeHtml\(accessibleState\)\}"/u);
+    assert.match(boardTokenSource, /<div class="card-face-layer">[\s\S]*?\$\{boardCardCornerOverlay\(card,/u);
+  }
+
+  assert.match(cornerOverlaySource, /class="unit-board-overlay" aria-hidden="true">\s*\$\{statusMarkup\}/u);
+  assert.match(cornerOverlaySource, /class="unit-corner-value unit-remaining-health/u);
+  assert.match(cornerOverlaySource, /class="unit-corner-value unit-current-might/u);
+});
+
+test("attached gear uses rotation and accessible metadata on the board but keeps readiness text in the inspector", async () => {
+  const source = await readFile(new URL("../src/app.mjs", import.meta.url), "utf8");
+  const stripSource = source.slice(source.indexOf("function attachmentStrip("), source.indexOf("function boardUnitStats("));
+  const panelSource = source.slice(source.indexOf("function attachedGearPanel("), source.indexOf("function shortCardText("));
+
+  assert.ok(stripSource.length > 0);
+  assert.ok(panelSource.length > 0);
+  assert.match(stripSource, /data-exhausted="\$\{Boolean\(gear\.exhausted\)\}"/u);
+  assert.match(stripSource, /title="\$\{escapeHtml\(`\$\{cardName\(gear\)\} · \$\{state\.summary\}`\)\}"/u);
+  assert.match(stripSource, /class="attachment-orientation-layer"/u);
+  assert.match(stripSource, /class="attached-gear-board-overlay" aria-hidden="true"/u);
+  assert.doesNotMatch(stripSource, /attachedGearStateMarkup|attached-gear-readiness/u);
+
+  assert.match(panelSource, /data-exhausted="\$\{Boolean\(gear\.exhausted\)\}"/u);
+  assert.match(panelSource, /title="\$\{escapeHtml\(`\$\{cardName\(gear\)\} · \$\{state\.summary\}`\)\}"/u);
+  assert.match(panelSource, /\$\{attachedGearStateMarkup\(state\)\}/u);
+});
+
 test("player identity UI tolerates a champion returned from play to hand", async () => {
   const source = await readFile(new URL("../src/app.mjs", import.meta.url), "utf8");
   assert.match(source, /function miniIdentity\(card, player = null\) \{\s+if \(!card\) return "";/u);

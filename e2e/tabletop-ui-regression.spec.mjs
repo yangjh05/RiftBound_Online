@@ -1038,30 +1038,35 @@ async function assertPersistentTable(page, fixture) {
     await expect(seat.locator(".pile-main-deck .pile-label")).toBeVisible();
     await expect(seat.locator(".pile-trash .pile-label")).toBeVisible();
     await expect(seat.locator(".pile-banished .pile-label")).toBeVisible();
-    await expect(seat.locator(`[data-card-id="${player.unitId}"] .card-state-hud`)).toHaveCount(1);
-    await expect(seat.locator(`[data-card-id="${player.unitId}"] .unit-stats`)).toContainText(String(player === fixture.players[0] ? 1 : 2));
-    await expect(seat.locator(`[data-card-id="${player.unitId}"] .unit-state-badges`)).toHaveCount(1);
-    await expect(seat.locator(`[data-card-id="${player.unitId}"]`)).toHaveAttribute("data-current-might", /^-?\d+$/u);
-    await expect(seat.locator(`[data-card-id="${player.unitId}"]`)).toHaveAttribute("data-damage", String(player.unitDamage));
-    await expect(seat.locator(`[data-card-id="${player.unitId}"]`)).toHaveAttribute("data-exhausted", String(player.unitExhausted));
-    await expect(seat.locator(`[data-card-id="${player.unitId}"]`)).toHaveAttribute("data-stunned", String(player.unitStunned));
-    const primaryStates = seat.locator(`[data-card-id="${player.unitId}"] .primary-card-state`);
-    await expect(primaryStates).toHaveCount(1 + Number(player.unitStunned));
-    await expect(primaryStates.filter({
-      hasText: player.unitExhausted ? /탈진|Exhausted/iu : /준비|Ready/iu
-    })).toHaveCount(1);
-    if (player.unitStunned) {
-      await expect(primaryStates.filter({ hasText: /기절|Stunned/iu })).toHaveCount(1);
-    }
+    const unit = seat.locator(`[data-card-id="${player.unitId}"]`);
+    await expect(unit).toHaveClass(/physical-board-card/u);
+    await expect(unit).toHaveAttribute("data-current-might", /^-?\d+$/u);
+    await expect(unit).toHaveAttribute("data-remaining-health", /^\d+$/u);
+    await expect(unit).toHaveAttribute("data-damage", String(player.unitDamage));
+    await expect(unit).toHaveAttribute("data-exhausted", String(player.unitExhausted));
+    await expect(unit).toHaveAttribute("data-stunned", String(player.unitStunned));
+    await expect(unit).toHaveAttribute("aria-label", player.unitExhausted ? /탈진|Exhausted/iu : /준비|Ready/iu);
+    await expect(unit).toHaveAttribute("title", player.unitExhausted ? /탈진|Exhausted/iu : /준비|Ready/iu);
+    const face = unit.locator(".card-face-layer");
+    const overlay = face.locator(":scope > .unit-board-overlay");
+    await expect(overlay).toHaveCount(1);
+    await expect(overlay.locator(":scope > .unit-current-might")).toHaveText(String(await unit.getAttribute("data-current-might")));
+    await expect(overlay.locator(":scope > .unit-remaining-health")).toHaveText(String(await unit.getAttribute("data-remaining-health")));
+    await expect(face).not.toContainText(/준비|탈진|Ready|Exhausted/iu);
+    const secondaryStatuses = overlay.locator(":scope > .unit-state-badges");
+    await expect(secondaryStatuses).toHaveCount(1);
+    await expect(secondaryStatuses).toHaveAttribute("aria-label", /기절|Stunned/iu);
+    await expect(unit.locator(".primary-card-state, .card-state-hud.unit-stats")).toHaveCount(0);
     await expect(seat.locator(`[data-card-id="${player.gearId}"]`)).toHaveCount(1);
     const gear = seat.locator(`.attached-gear[data-card-id="${player.gearId}"]`);
     await expect(gear).toHaveAttribute("data-current-might", String(player.gearMight));
     await expect(gear).toHaveAttribute("data-exhausted", String(player.gearExhausted));
+    await expect(gear).toHaveAttribute("title", player.gearExhausted ? /탈진|Exhausted/iu : /준비|Ready/iu);
     await expect(gear.locator(".attachment-orientation-layer")).toHaveCount(1);
-    await expect(gear.locator(".attached-gear-might")).toContainText(String(player.gearMight));
-    const gearReadiness = gear.locator(".attached-gear-readiness");
-    await expect(gearReadiness).toContainText(player.gearExhausted ? /탈진|Exhausted|EXH/iu : /준비|Ready|RDY/iu);
-    await expect(gearReadiness).toHaveAttribute("title", player.gearExhausted ? /탈진|Exhausted/iu : /준비|Ready/iu);
+    await expect(gear.locator(".attached-gear-board-overlay .attached-gear-might")).toContainText(String(player.gearMight));
+    await expect(gear.locator(".attached-gear-board-overlay .unit-state-badges")).toHaveCount(1);
+    await expect(gear.locator(".attached-gear-readiness, .attached-gear-state")).toHaveCount(0);
+    await expect(gear).not.toContainText(/준비|탈진|Ready|Exhausted/iu);
     await expect(seat.locator(`[data-rune-card][data-card="${player.readyRuneId}"]`)).not.toHaveClass(/exhausted|spent/u);
     await expect(seat.locator(`[data-rune-card][data-card="${player.spentRuneId}"]`)).toHaveClass(/exhausted|spent/u);
   }
@@ -1080,12 +1085,66 @@ async function assertPersistentTable(page, fixture) {
   }
 }
 
+async function boardCardCornerPresentation(page, cardId) {
+  return page.locator(`[data-card-id="${cardId}"]`).first().evaluate((card) => {
+    const layer = card.querySelector(":scope > .card-exhaust-layer");
+    const might = layer?.querySelector(".unit-current-might");
+    const health = layer?.querySelector(".unit-remaining-health");
+    if (!layer || !might || !health) return null;
+    const layerRect = layer.getBoundingClientRect();
+    const mightRect = might.getBoundingClientRect();
+    const healthRect = health.getBoundingClientRect();
+    const matrix = getComputedStyle(layer).transform;
+    const angle = matrix === "none"
+      ? 0
+      : Math.atan2(new DOMMatrixReadOnly(matrix).b, new DOMMatrixReadOnly(matrix).a) * 180 / Math.PI;
+    const relativeCenter = (rect) => ({
+      x: rect.left + rect.width / 2 - (layerRect.left + layerRect.width / 2),
+      y: rect.top + rect.height / 2 - (layerRect.top + layerRect.height / 2)
+    });
+    return {
+      angle,
+      might: relativeCenter(mightRect),
+      health: relativeCenter(healthRect)
+    };
+  });
+}
+
 test("tabletop board retains every persistent zone, count, card state, and game action", async ({ page }) => {
   const runtimeFailures = captureRuntimeFailures(page);
   await openReadyBoard(page);
   const fixture = await installRichBoardFixture(page);
 
   await assertPersistentTable(page, fixture);
+  const readyUnit = fixture.players.find((player) => !player.unitExhausted);
+  expect(readyUnit).toBeTruthy();
+  await page.waitForTimeout(250);
+  const readyCorners = await boardCardCornerPresentation(page, readyUnit.unitId);
+  expect(readyCorners).not.toBeNull();
+  expect(Math.abs(readyCorners.angle)).toBeLessThan(1);
+  expect(readyCorners.might.x).toBeGreaterThan(0);
+  expect(readyCorners.might.y).toBeGreaterThan(0);
+  expect(readyCorners.health.x).toBeLessThan(0);
+  expect(readyCorners.health.y).toBeGreaterThan(0);
+
+  await page.evaluate(({ playerId, cardId }) => {
+    const game = window.__riftboundGame;
+    const player = game.players.find((candidate) => candidate.id === playerId);
+    const card = player?.base?.find((candidate) => candidate.instanceId === cardId);
+    if (!card) throw new Error(`Missing board card ${cardId}`);
+    card.exhausted = true;
+    window.__riftboundRender();
+  }, { playerId: readyUnit.id, cardId: readyUnit.unitId });
+  const exhaustedUnit = page.locator(`[data-card-id="${readyUnit.unitId}"]`).first();
+  await expect(exhaustedUnit).toHaveAttribute("data-exhausted", "true");
+  await page.waitForTimeout(250);
+  const exhaustedCorners = await boardCardCornerPresentation(page, readyUnit.unitId);
+  expect(exhaustedCorners).not.toBeNull();
+  expect(Math.abs(Math.abs(exhaustedCorners.angle) - 90)).toBeLessThan(1);
+  expect(exhaustedCorners.might.x).toBeLessThan(0);
+  expect(exhaustedCorners.might.y).toBeGreaterThan(0);
+  expect(exhaustedCorners.health.x).toBeLessThan(0);
+  expect(exhaustedCorners.health.y).toBeLessThan(0);
   await expect(page.locator('.table-action-rail [data-action="end-turn"]')).toBeVisible();
 
   const ownSeat = page.locator('.table-seat[data-side="bottom"]');
@@ -1145,7 +1204,7 @@ test("tabletop board retains every persistent zone, count, card state, and game 
   const ownAttachedGear = ownSeat.locator(`.attached-gear[data-card-id="${ownFixture.gearId}"]`);
   await ownAttachedGear.click({ position: { x: 24, y: 18 } });
   await expect.poll(() => page.evaluate(() => window.__riftboundGame.selectedCardId)).toBe(ownFixture.gearId);
-  await ownUnit.click({ timeout: 5_000 });
+  await ownUnit.click({ position: { x: 8, y: 8 }, timeout: 5_000 });
   await expect.poll(() => page.evaluate(() => window.__riftboundGame.selectedCardId)).toBe(ownFixture.unitId);
   await expect(page.locator(".context-action-dock .action-context")).toContainText("Regression Unit");
   await page.locator('.table-action-rail [data-action="toggle-inspector"]:not([disabled])').click();
@@ -1156,6 +1215,9 @@ test("tabletop board retains every persistent zone, count, card state, and game 
   const expandedGear = inspector.locator(`.attached-gear-card[data-card-id="${ownFixture.gearId}"]`);
   await expect(expandedGear.locator(".attachment-orientation-layer")).toHaveCount(1);
   await expect(expandedGear.locator(".attached-gear-might")).toContainText(String(ownFixture.gearMight));
+  await expect(expandedGear.locator(".attached-gear-readiness")).toContainText(
+    ownFixture.gearExhausted ? /탈진|Exhausted|EXH/iu : /준비|Ready|RDY/iu
+  );
   await expect(expandedGear.locator(".attached-gear-readiness")).toContainText(/강화|Empowered/iu);
 
   const ownRuneSummary = ownSeat.locator(".rune-summary");
@@ -1629,8 +1691,8 @@ test("low-height replay uses a readable side rail without covering the battlefie
     ".tabletop-layout .pile-label",
     ".tabletop-layout .pile-count",
     ".tabletop-layout .rune-count",
-    ".tabletop-layout .card-state-hud.unit-stats > b",
-    ".tabletop-layout .card-state-hud.unit-stats > em",
+    ".tabletop-layout .unit-board-overlay .unit-current-might",
+    ".tabletop-layout .unit-board-overlay .unit-remaining-health",
     ".tabletop-layout .owner-chip"
   ].join(", ")).evaluateAll((nodes) => nodes
     .filter((node) => {
@@ -1768,20 +1830,25 @@ test("390px tabletop exposes game actions, XP, Rune readiness, pool totals, comb
     await expect.soft(attachedGear, `${player.id} attached gear must remain directly selectable at 390px`).toBeVisible({ timeout: 2_000 });
     await expect.soft(attachedGear).toHaveAttribute("title", /강화|Empowered/iu);
     const compactGearPresentation = await attachedGear.evaluate((element) => {
-      const readiness = element.querySelector(".attached-gear-readiness");
+      const might = element.querySelector(".attached-gear-board-overlay .attached-gear-might");
       const rect = element.getBoundingClientRect();
       return {
         width: rect.width,
         height: rect.height,
-        readinessFontSize: readiness ? Number.parseFloat(getComputedStyle(readiness).fontSize) : 0,
-        readinessClientWidth: readiness?.clientWidth || 0,
-        readinessScrollWidth: readiness?.scrollWidth || 0
+        aspectRatio: rect.width / Math.max(1, rect.height),
+        mightFontSize: might ? Number.parseFloat(getComputedStyle(might).fontSize) : 0,
+        mightClientWidth: might?.clientWidth || 0,
+        mightScrollWidth: might?.scrollWidth || 0,
+        readinessCount: element.querySelectorAll(".attached-gear-readiness, .attached-gear-state").length
       };
     });
-    expect.soft(compactGearPresentation.width, `${player.id} attached gear must keep a physical card-sized hit target`).toBeGreaterThanOrEqual(37);
-    expect.soft(compactGearPresentation.height, `${player.id} attached gear must not collapse inside its strip`).toBeGreaterThanOrEqual(51);
-    expect.soft(compactGearPresentation.readinessFontSize, `${player.id} attached gear state text must remain legible`).toBeGreaterThanOrEqual(7);
-    expect.soft(compactGearPresentation.readinessScrollWidth, `${player.id} compact readiness/status count must not be ellipsized`).toBeLessThanOrEqual(compactGearPresentation.readinessClientWidth + 1);
+    expect.soft(compactGearPresentation.width, `${player.id} attached gear must keep a usable compact hit target`).toBeGreaterThanOrEqual(30);
+    expect.soft(compactGearPresentation.height, `${player.id} attached gear must not collapse inside its strip`).toBeGreaterThanOrEqual(42);
+    expect.soft(compactGearPresentation.aspectRatio, `${player.id} attached gear must preserve a portrait card ratio`).toBeGreaterThan(0.66);
+    expect.soft(compactGearPresentation.aspectRatio, `${player.id} attached gear must preserve a portrait card ratio`).toBeLessThan(0.76);
+    expect.soft(compactGearPresentation.mightFontSize, `${player.id} attached gear Might corner must remain legible`).toBeGreaterThanOrEqual(7);
+    expect.soft(compactGearPresentation.mightScrollWidth, `${player.id} attached gear Might must not be ellipsized`).toBeLessThanOrEqual(compactGearPresentation.mightClientWidth + 1);
+    expect.soft(compactGearPresentation.readinessCount, `${player.id} attached gear must communicate readiness only by orientation`).toBe(0);
   }
 
   const mobileTextSizes = await page.locator("body").evaluate((root) => {
@@ -1799,12 +1866,12 @@ test("390px tabletop exposes game actions, XP, Rune readiness, pool totals, comb
 
   const damagedUnit = page.locator(`[data-card-id="${fixture.players[0].unitId}"][data-damage="${fixture.players[0].unitDamage}"]`);
   await expect.soft(
-    damagedUnit.locator(".unit-stats em").filter({ hasText: /피해|damage|DMG/iu }).first(),
-    "current damage must stay visible at 390px"
+    damagedUnit.locator(".card-face-layer .unit-remaining-health").first(),
+    "remaining health must stay visible in the card corner at 390px"
   ).toBeVisible({ timeout: 2_000 });
   await expect.soft(
-    page.locator('[data-card-id^="e2e-field-unit-"] .health-stat').first(),
-    "remaining health must stay visible during showdown at 390px"
+    page.locator('[data-card-id^="e2e-field-unit-"] .card-face-layer .unit-current-might').first(),
+    "current Might must stay visible during showdown at 390px"
   ).toBeVisible({ timeout: 2_000 });
 
   await assertNoRuntimeOrUndefinedErrors(page, runtimeFailures);
@@ -1929,6 +1996,110 @@ test("valid Divine Judgment and repeat-spell pending states remain renderable", 
   await assertNoRuntimeOrUndefinedErrors(page, runtimeFailures);
 });
 
+test("a suspended activated payment without its source payload renders cancel-only recovery", async ({ page }) => {
+  const runtimeFailures = captureRuntimeFailures(page);
+  await openReadyBoard(page);
+  await page.evaluate(() => {
+    const game = window.__riftboundGame;
+    const player = game.players[0];
+    const source = player.legend;
+    const paymentFields = {
+      destination: "base",
+      energyCost: 1,
+      xpCost: 0,
+      recycleTrashCost: 0,
+      discardCost: 0,
+      basePowerCost: [],
+      powerCost: [],
+      declaredTargets: [],
+      declaredChoices: [],
+      deflectTargetIds: [],
+      energyRuneIds: [],
+      poolEnergyIds: [],
+      powerRuneIds: [],
+      poolPowerIds: [],
+      optionalPowerEffects: []
+    };
+    game.phase = "action";
+    game.currentPlayerId = player.id;
+    game.pendingChoice = null;
+    game.actionChain = null;
+    game.showdown = null;
+    game.pendingPayment = {
+      id: "e2e-invalid-resume-child",
+      playerId: player.id,
+      cardId: source.instanceId,
+      cardName: source.name,
+      source: "activatedAbility",
+      ...paymentFields,
+      activatedAbility: {
+        sourceCard: source,
+        specs: [{ timing: "activated", kind: "addEnergy", amount: 1 }]
+      },
+      resumePayment: {
+        id: "e2e-invalid-resume-parent",
+        playerId: player.id,
+        cardId: source.instanceId,
+        cardName: source.name,
+        source: "activatedAbility",
+        ...paymentFields
+      }
+    };
+    window.__riftboundRender();
+  });
+
+  const recovery = page.locator("[data-invalid-resume-payment]");
+  await expect(page.locator(".tabletop-board")).toBeVisible();
+  await expect(page.locator(".tabletop-state-unavailable")).toHaveCount(0);
+  await expect(recovery).toBeVisible();
+  await expect(recovery.locator('[data-action="cancel-payment"]')).toBeVisible();
+  await expect(recovery.locator('[data-action="confirm-payment"]')).toHaveCount(0);
+  await recovery.locator('[data-action="cancel-payment"]').click();
+  await expect.poll(() => page.evaluate(() => window.__riftboundGame.pendingPayment)).toBeNull();
+  await assertNoRuntimeOrUndefinedErrors(page, runtimeFailures);
+});
+
+test("a payment with a missing payer remains cancelable from its recovery banner", async ({ page }) => {
+  const runtimeFailures = captureRuntimeFailures(page);
+  await openReadyBoard(page);
+  await page.evaluate(() => {
+    const game = window.__riftboundGame;
+    const card = game.players[0].hand[0] || game.players[0].mainDeck[0];
+    game.phase = "action";
+    game.pendingChoice = null;
+    game.actionChain = null;
+    game.showdown = null;
+    game.pendingPayment = {
+      id: "e2e-missing-payment-player",
+      playerId: "missing-player",
+      cardId: card.instanceId,
+      cardName: card.name,
+      source: "playCard",
+      destination: "base",
+      energyCost: 1,
+      basePowerCost: [],
+      powerCost: [],
+      declaredTargets: [],
+      declaredChoices: [],
+      deflectTargetIds: [],
+      energyRuneIds: [],
+      poolEnergyIds: [],
+      powerRuneIds: [],
+      poolPowerIds: [],
+      optionalPowerEffects: []
+    };
+    window.__riftboundRender();
+  });
+
+  const recovery = page.locator(".payment-stage-error");
+  await expect(page.locator(".tabletop-board")).toBeVisible();
+  await expect(page.locator(".tabletop-state-unavailable")).toHaveCount(0);
+  await expect(recovery).toBeVisible();
+  await recovery.locator('[data-action="cancel-payment"]').click();
+  await expect.poll(() => page.evaluate(() => window.__riftboundGame.pendingPayment)).toBeNull();
+  await assertNoRuntimeOrUndefinedErrors(page, runtimeFailures);
+});
+
 for (const scenario of [
   "champion-select-player",
   "champion-select-legend",
@@ -1995,7 +2166,6 @@ for (const scenario of [
   "missing-champion-pool",
   "missing-battlefield-pool",
   "card-power-entry",
-  "payment-player",
   "payment-power-cost",
   "payment-power-entry",
   "payment-rune-pool-power",

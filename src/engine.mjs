@@ -1616,6 +1616,7 @@ export function activateCard(game, cardId, abilityId = null) {
     ? card.activationProcess.specs
     : selectedAbility?.specs || selectableGroups[0]?.specs || [];
   const paymentAddAbility = canActivateAddDuringPayment(game, player, card, specs);
+  const suspendedPayment = paymentAddAbility ? game.pendingPayment : null;
   if ((game.pendingPayment || game.pendingChoice) && !paymentAddAbility) return fail(game, "Finish the current choice first.");
   const actionChainAddAbility = canActivateAddDuringActionChain(game, player, card, specs);
   const usingForgeAbility = specs.some((spec) => spec.kind === "forgeAttachEquipment");
@@ -1940,7 +1941,8 @@ export function activateCard(game, cardId, abilityId = null) {
   if (activatedCost && game.interactive) {
     game.pendingPayment = createActivatedPayment(player, card, specs, activatedCost, {
       recycleTrashCardIds: card.activationProcess?.recycleTrashCardIds || [],
-      discardCardIds: card.activationProcess?.discardCardIds || []
+      discardCardIds: card.activationProcess?.discardCardIds || [],
+      resumePayment: suspendedPayment
     });
     game.selectedCardId = card.instanceId;
     log(game, `${player.name} is paying to activate ${card.name}.`);
@@ -2691,11 +2693,12 @@ function canActivateAddDuringPayment(game, player, card, specs) {
   if (card.exhausted && activatedAbilityExhausts(specs)) return false;
   if (!isReactionAbility(specs)) return false;
   const paidCard = paymentCard(player, game.pendingPayment);
-  return specs.length > 0 && specs.every((spec) =>
+  const resourceAbilityIsLegal = specs.length > 0 && specs.every((spec) =>
     ["addEnergy", "addPower"].includes(spec.kind)
     && resourceRestrictionAllowsPayment(game, spec.restriction, paidCard)
     && (!spec.requiresLegion || player.cardsPlayedThisTurn > 0)
   );
+  return resourceAbilityIsLegal && activatedAbilityCostsArePayable(game, player, card, specs);
 }
 
 function canActivateAddDuringActionChain(game, player, card, specs) {
@@ -2983,27 +2986,42 @@ export function legalPaymentPoolEnergyOptions(game) {
 export function togglePaymentPoolPower(game, powerId) {
   const payment = game.pendingPayment;
   if (!payment) return fail(game, "No payment is pending.");
-  const player = game.players.find((candidate) => candidate.id === payment.playerId);
-  const resource = runePoolPower(player).find((candidate) => candidate.id === powerId);
-  if (!resource) return fail(game, "Unknown generated Power.");
-  const card = paymentCard(player, payment);
-  if (!card) return fail(game, "Card to pay for is no longer available.");
-  if (!poolPowerCanPay(game, resource, card)) return fail(game, "That Power cannot be spent now.");
-
+  const option = legalPaymentPoolPowerOptions(game).find((candidate) => candidate.id === powerId);
+  if (!option) return fail(game, "Unknown generated Power.");
   const selected = new Set(payment.poolPowerIds || []);
   if (selected.has(powerId)) selected.delete(powerId);
-  else {
-    const powerCost = payment.powerCost || card.power || [];
-    if (!powerCost.some((requirement) => powerMatches(resource, requirement))) {
-      return fail(game, `${resource.domain} cannot pay that Power cost.`);
-    }
-    if (selected.size + (payment.powerRuneIds?.length || 0) >= totalPowerAmount(powerCost)) {
-      return fail(game, "That Power cost is already fully selected.");
-    }
-    selected.add(powerId);
-  }
+  else if (!option.usable) return fail(game, "That Power cannot be spent now.");
+  else if (!option.matchesCost) return fail(game, `${option.domain} cannot pay that Power cost.`);
+  else if (!option.canToggle) return fail(game, "That Power cost is already fully selected.");
+  else selected.add(powerId);
   payment.poolPowerIds = [...selected];
   return { ok: true };
+}
+
+export function legalPaymentPoolPowerOptions(game) {
+  const payment = game.pendingPayment;
+  if (!payment) return [];
+  const player = game.players.find((candidate) => candidate.id === payment.playerId);
+  if (!player) return [];
+  const card = paymentCard(player, payment);
+  const powerCost = Array.isArray(payment.powerCost)
+    ? payment.powerCost
+    : Array.isArray(card?.power) ? card.power : [];
+  const selected = new Set(payment.poolPowerIds || []);
+  const selectedRuneCount = payment.powerRuneIds?.length || 0;
+  const totalRequired = totalPowerAmount(powerCost);
+  return runePoolPower(player).map((resource) => {
+    const isSelected = selected.has(resource.id);
+    const usable = poolPowerCanPay(game, resource, card);
+    const matchesCost = powerCost.some((requirement) => powerMatches(resource, requirement));
+    return {
+      ...resource,
+      selected: isSelected,
+      usable,
+      matchesCost,
+      canToggle: isSelected || (usable && matchesCost && selected.size + selectedRuneCount < totalRequired)
+    };
+  });
 }
 
 export function toggleOptionalPaymentEffect(game, effectId) {
@@ -3030,8 +3048,9 @@ export function toggleOptionalPaymentEffect(game, effectId) {
 export function cancelPayment(game) {
   if (!game.pendingPayment) return fail(game, "No payment is pending.");
   const payment = game.pendingPayment;
+  const player = game.players.find((candidate) => candidate.id === payment.playerId);
   const declinesInstructedResourcePayment = payment.source === "effectPlay";
-  if (declinesInstructedResourcePayment) {
+  if (player && declinesInstructedResourcePayment) {
     const hasResourcePayment = (payment.energyCost || 0) > 0
       || totalPowerAmount(payment.powerCost || []) > 0;
     if (!hasResourcePayment) {
@@ -3039,14 +3058,24 @@ export function cancelPayment(game) {
     }
   }
   game.pendingPayment = null;
+  if (!player) {
+    if (payment.playProcess) rollbackPendingCardPlay(game, payment);
+    if (payment.source === "activatedAbility") {
+      const sourceCard = payment.activatedAbility?.sourceCard || findCard(game, payment.cardId);
+      rollbackPendingActivatedAbility(game, sourceCard);
+    }
+    rollbackUnsafeSuspendedPayments(game, payment.resumePayment);
+    game.selectedCardId = null;
+    return { ok: true };
+  }
   if (declinesInstructedResourcePayment) return declineEffectPlayedCardResourcePayment(game, payment);
   const asyncScope = enterAsyncResolutionContext(game, payment);
-  const player = game.players.find((candidate) => candidate.id === payment.playerId);
   try {
     log(game, `${player.name} cancels payment.`);
     if (payment.playProcess) rollbackPendingCardPlay(game, payment);
     if (payment.source === "activatedAbility") {
       rollbackPendingActivatedAbility(game, paymentCard(player, payment));
+      restoreSuspendedPayment(game, payment);
       checkState(game);
       return { ok: true };
     }
@@ -3072,6 +3101,7 @@ export function confirmPayment(game) {
     if (confirmation.invalidatePayment === "activatedAbility" && payment) {
       game.pendingPayment = null;
       rollbackPendingActivatedAbility(game, confirmation.card);
+      restoreSuspendedPayment(game, payment);
     } else if (confirmation.invalidatePayment === "cardPlay" && payment) {
       game.pendingPayment = null;
       rollbackPendingCardPlay(game, payment);
@@ -3151,6 +3181,230 @@ export function confirmPayment(game) {
   }
 }
 
+const RESUMABLE_PAYMENT_REQUIRED_ARRAY_FIELDS = [
+  "basePowerCost", "powerCost", "energyRuneIds", "powerRuneIds", "poolEnergyIds", "poolPowerIds",
+  "optionalPowerEffects", "declaredTargets", "declaredChoices", "deflectTargetIds"
+];
+
+const RESUMABLE_PAYMENT_STRING_ARRAY_FIELDS = [
+  "energyRuneIds", "powerRuneIds", "poolEnergyIds", "poolPowerIds", "deflectTargetIds",
+  "recycleTrashCardIds", "discardCardIds"
+];
+
+const RESUMABLE_PAYMENT_OBJECT_ARRAY_FIELDS = [
+  "optionalPowerEffects", "declaredTargets", "declaredChoices", "declaredTargetIdentities"
+];
+
+function resumablePowerCostIssue(power, label) {
+  if (!Array.isArray(power)) return `${label} is unavailable.`;
+  for (const [index, requirement] of power.entries()) {
+    if (!requirement || typeof requirement !== "object" || Array.isArray(requirement)) {
+      return `${label}[${index}] is invalid.`;
+    }
+    if (typeof requirement.domain !== "string" || !requirement.domain
+      || !Number.isInteger(requirement.amount) || requirement.amount < 0) {
+      return `${label}[${index}] is invalid.`;
+    }
+    if (requirement.allowedDomains != null
+      && (!Array.isArray(requirement.allowedDomains)
+        || requirement.allowedDomains.some((domain) => typeof domain !== "string" || !domain))) {
+      return `${label}[${index}] allowed domains are invalid.`;
+    }
+  }
+  return "";
+}
+
+function resumableObjectIssue(value, label) {
+  return !value || typeof value !== "object" || Array.isArray(value)
+    ? `${label} is unavailable.`
+    : "";
+}
+
+function resumableCardReferenceIssue(reference, card, label) {
+  const objectIssue = resumableObjectIssue(reference, label);
+  if (objectIssue) return objectIssue;
+  if (typeof reference.instanceId !== "string" || !reference.instanceId
+    || reference.instanceId !== card?.instanceId) {
+    return `${label} is invalid.`;
+  }
+  return "";
+}
+
+function resumableChainPaymentIssue(game, payment, card, payloadKey) {
+  const payload = payment[payloadKey];
+  const objectIssue = resumableObjectIssue(payload, `Suspended payment ${payloadKey}`);
+  if (objectIssue) return objectIssue;
+  if (typeof payload.chainItemId !== "string" || !payload.chainItemId) {
+    return `Suspended payment ${payloadKey}.chainItemId is invalid.`;
+  }
+  const cardIssue = resumableCardReferenceIssue(
+    payload.card,
+    card,
+    `Suspended payment ${payloadKey}.card`
+  );
+  if (cardIssue) return cardIssue;
+  const item = findChainItemById(game, payload.chainItemId);
+  if (!item || item.status !== "pending" || item.playerId !== payment.playerId
+    || item.card?.instanceId !== card.instanceId) {
+    return "Suspended payment Chain item is no longer available.";
+  }
+  return "";
+}
+
+function resumablePaymentSourceIssue(game, payment, player, card) {
+  if (!card || typeof card !== "object" || Array.isArray(card)
+    || typeof card.instanceId !== "string" || card.instanceId !== payment.cardId) {
+    return "Suspended payment card is no longer available.";
+  }
+
+  if (["hand", "trash", "champion", "hidden"].includes(payment.source)) {
+    return resumableChainPaymentIssue(game, payment, card, "playProcess");
+  }
+  if (payment.source === "effectPlay") {
+    return resumableChainPaymentIssue(game, payment, card, "effectPlay");
+  }
+  if (payment.source === "activatedAbility") {
+    const state = payment.activatedAbility;
+    const objectIssue = resumableObjectIssue(state, "Suspended payment activatedAbility");
+    if (objectIssue) return objectIssue;
+    const sourceCard = findCard(game, payment.cardId);
+    if (!sourceCard || sourceCard.instanceId !== card.instanceId) {
+      return "Suspended activated ability source is no longer available.";
+    }
+    const cardIssue = resumableCardReferenceIssue(
+      state.sourceCard,
+      sourceCard,
+      "Suspended payment activatedAbility.sourceCard"
+    );
+    if (cardIssue) return cardIssue;
+    if (!Array.isArray(state.specs)
+      || state.specs.some((spec) => !spec || typeof spec !== "object" || Array.isArray(spec))) {
+      return "Suspended payment activatedAbility.specs is invalid.";
+    }
+    return "";
+  }
+  if (payment.source === "triggeredAbility") {
+    const state = payment.triggeredAbility;
+    const objectIssue = resumableObjectIssue(state, "Suspended payment triggeredAbility");
+    if (objectIssue) return objectIssue;
+    const cardIssue = resumableCardReferenceIssue(
+      state.sourceCard,
+      card,
+      "Suspended payment triggeredAbility.sourceCard"
+    );
+    if (cardIssue) return cardIssue;
+    for (const key of ["trigger", "descriptor"]) {
+      const issue = resumableObjectIssue(state[key], `Suspended payment triggeredAbility.${key}`);
+      if (issue) return issue;
+    }
+    if (!Array.isArray(state.triggers)) return "Suspended payment triggeredAbility.triggers is unavailable.";
+    if (typeof state.mode !== "string" || !state.mode) return "Suspended payment triggeredAbility.mode is invalid.";
+    return "";
+  }
+  if (payment.source === "effectEnergy") {
+    const state = payment.effectPayment;
+    const objectIssue = resumableObjectIssue(state, "Suspended payment effectPayment");
+    if (objectIssue) return objectIssue;
+    const cardIssue = resumableCardReferenceIssue(
+      state.sourceCard,
+      card,
+      "Suspended payment effectPayment.sourceCard"
+    );
+    if (cardIssue) return cardIssue;
+    if (typeof state.kind !== "string" || !state.kind) return "Suspended payment effectPayment.kind is invalid.";
+    return "";
+  }
+  if (payment.source === "weaponmaster") {
+    const state = payment.weaponmaster;
+    const objectIssue = resumableObjectIssue(state, "Suspended payment weaponmaster");
+    if (objectIssue) return objectIssue;
+    if (typeof state.gearId !== "string" || !state.gearId || !findCard(game, state.gearId)) {
+      return "Suspended payment Weaponmaster gear is no longer available.";
+    }
+    return "";
+  }
+  if (payment.source === "hideCard") {
+    if (!["hand", "champion"].includes(payment.hideSource)) {
+      return "Suspended payment hideSource is invalid.";
+    }
+    if (!game.battlefields.some((battlefield) => battlefield.instanceId === payment.destination)) {
+      return "Suspended payment hide destination is no longer available.";
+    }
+    return "";
+  }
+  return "Suspended payment source is unsupported.";
+}
+
+function resumablePaymentShapeIssue(game, payment, expectedPlayerId, seen, depth) {
+  if (depth > 8) return "Suspended payment nesting exceeds the safety limit.";
+  if (!payment || typeof payment !== "object" || Array.isArray(payment)) return "Suspended payment state is invalid.";
+  if (seen.has(payment)) return "Suspended payment state is cyclic.";
+  seen.add(payment);
+
+  if (typeof payment.playerId !== "string" || !payment.playerId
+    || payment.playerId !== expectedPlayerId
+    || !Array.isArray(game?.players)
+    || !game.players.some((player) => player?.id === payment.playerId)) {
+    return "Suspended payment player is invalid.";
+  }
+  for (const key of ["cardId", "cardName", "source"]) {
+    if (typeof payment[key] !== "string" || !payment[key]) return `Suspended payment ${key} is invalid.`;
+  }
+  for (const key of ["energyCost", "xpCost", "recycleTrashCost", "discardCost"]) {
+    if (payment[key] != null && (!Number.isFinite(payment[key]) || payment[key] < 0)) {
+      return `Suspended payment ${key} is invalid.`;
+    }
+  }
+  for (const key of RESUMABLE_PAYMENT_REQUIRED_ARRAY_FIELDS) {
+    if (!Array.isArray(payment[key])) return `Suspended payment ${key} is unavailable.`;
+  }
+  for (const key of ["declaredTargetIdentities", "recycleTrashCardIds", "discardCardIds"]) {
+    if (payment[key] != null && !Array.isArray(payment[key])) return `Suspended payment ${key} is invalid.`;
+  }
+  for (const key of RESUMABLE_PAYMENT_STRING_ARRAY_FIELDS) {
+    if (payment[key] != null
+      && payment[key].some((value) => typeof value !== "string" || !value)) {
+      return `Suspended payment ${key} is invalid.`;
+    }
+  }
+  for (const key of RESUMABLE_PAYMENT_OBJECT_ARRAY_FIELDS) {
+    if (payment[key] != null
+      && payment[key].some((value) => !value || typeof value !== "object" || Array.isArray(value))) {
+      return `Suspended payment ${key} is invalid.`;
+    }
+  }
+  for (const key of ["basePowerCost", "powerCost"]) {
+    const issue = resumablePowerCostIssue(payment[key], `Suspended payment ${key}`);
+    if (issue) return issue;
+  }
+  for (const [index, effect] of payment.optionalPowerEffects.entries()) {
+    if (effect.requirements != null) {
+      const issue = resumablePowerCostIssue(effect.requirements, `Suspended payment optionalPowerEffects[${index}] requirements`);
+      if (issue) return issue;
+    }
+  }
+  const player = game.players.find((candidate) => candidate.id === payment.playerId);
+  const sourceIssue = resumablePaymentSourceIssue(game, payment, player, paymentCard(player, payment));
+  if (sourceIssue) return sourceIssue;
+  if (payment.resumePayment == null) return "";
+  return resumablePaymentShapeIssue(game, payment.resumePayment, payment.playerId, seen, depth + 1);
+}
+
+export function paymentResumeLegality(game, completedPayment) {
+  const suspended = completedPayment?.resumePayment;
+  if (suspended == null) return { ok: true, resumePayment: null };
+  const issue = resumablePaymentShapeIssue(
+    game,
+    suspended,
+    completedPayment?.playerId,
+    new Set(),
+    0
+  );
+  return issue
+    ? { ok: false, message: issue, resumePayment: null }
+    : { ok: true, resumePayment: suspended };
+}
+
 export function paymentConfirmationLegality(game) {
   const payment = game.pendingPayment;
   if (!payment) return { ok: false, message: "No payment is pending." };
@@ -3158,6 +3412,8 @@ export function paymentConfirmationLegality(game) {
   if (!player) return { ok: false, message: "The paying player is no longer available.", payment };
   const card = paymentCard(player, payment);
   if (!card) return { ok: false, message: "Card to pay for is no longer available.", payment, player };
+  const resumeLegality = paymentResumeLegality(game, payment);
+  if (!resumeLegality.ok) return { ...resumeLegality, payment, player, card };
   if (payment.source === "activatedAbility") {
     const legality = activatedAbilityFinalizationLegality(game, player, card, payment.activatedAbility?.specs || []);
     if (!legality.ok) {
@@ -3328,6 +3584,7 @@ function finishConfirmedPayment(game, payment) {
     return { ok: true };
   }
   if (payment.source === "activatedAbility") {
+    restoreSuspendedPayment(game, payment);
     return completeActivatedAbility(game, player, card, payment.activatedAbility?.specs || []);
   }
   if (payment.source === "triggeredAbility") {
@@ -4747,6 +5004,7 @@ function createActivatedPayment(player, card, specs, cost, options = {}) {
     poolEnergyIds: [],
     powerRuneIds: [],
     poolPowerIds: [],
+    resumePayment: options.resumePayment || null,
     activatedAbility: {
       sourceCard: card,
       specs: structuredClone(specs || [])
@@ -12247,6 +12505,34 @@ function takeDeclaredTargetRecord(card, effect) {
     targetId: declaration?.targetId || null,
     chosenObjectEventAlreadyRecorded: consumeChosenObjectDeclarationReceipt(card, declaration)
   };
+}
+
+function rollbackUnsafeSuspendedPayments(game, payment, seen = new Set(), depth = 0) {
+  if (depth > 8 || !payment || typeof payment !== "object" || Array.isArray(payment) || seen.has(payment)) return;
+  seen.add(payment);
+  if (payment.playProcess) rollbackPendingCardPlay(game, payment);
+  if (payment.source === "activatedAbility") {
+    const sourceCard = payment.activatedAbility?.sourceCard || findCard(game, payment.cardId);
+    rollbackPendingActivatedAbility(game, sourceCard);
+  }
+  rollbackUnsafeSuspendedPayments(game, payment.resumePayment, seen, depth + 1);
+}
+
+function restoreSuspendedPayment(game, completedPayment) {
+  const legality = paymentResumeLegality(game, completedPayment);
+  const suspended = legality.resumePayment;
+  if (!legality.ok) {
+    rollbackUnsafeSuspendedPayments(game, completedPayment?.resumePayment);
+    game.selectedCardId = null;
+    return false;
+  }
+  if (!suspended || game.pendingPayment) return false;
+  game.pendingPayment = suspended;
+  game.currentPlayerId = suspended.playerId;
+  game.selectedCardId = suspended.cardId || null;
+  const player = game.players.find((candidate) => candidate.id === suspended.playerId);
+  reconcilePendingPaymentSelections(game, player);
+  return true;
 }
 
 function takeDeclaredTarget(card, effect) {
