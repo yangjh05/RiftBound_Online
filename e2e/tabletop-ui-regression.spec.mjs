@@ -1207,7 +1207,9 @@ test("tabletop board retains every persistent zone, count, card state, and game 
   await ownUnit.click({ position: { x: 8, y: 8 }, timeout: 5_000 });
   await expect.poll(() => page.evaluate(() => window.__riftboundGame.selectedCardId)).toBe(ownFixture.unitId);
   await expect(page.locator(".context-action-dock .action-context")).toContainText("Regression Unit");
-  await page.locator('.table-action-rail [data-action="toggle-inspector"]:not([disabled])').click();
+  // Selecting a physical card now opens its inspector directly. The toolbar
+  // button remains the explicit close/reopen control rather than a required
+  // second step after every card click.
   await expect(inspector).toBeVisible();
   await expect(inspector.locator('[data-action="toggle-attachments"]')).toBeVisible();
   await inspector.locator('[data-action="toggle-attachments"]').click();
@@ -1466,7 +1468,7 @@ test("tabletop board remains complete and safe through showdown, Chain, payment,
   await assertPersistentTable(page, fixture);
   await expect(page.locator(".chain-zone")).toBeVisible();
   await expect(page.locator(".chain-zone-item")).toHaveCount(2);
-  await expect(page.locator('.table-action-rail [data-action="pass-showdown"]')).toBeVisible();
+  await expect(page.locator('.context-action-dock [data-action="pass-showdown"]')).toBeVisible();
   await assertNoRuntimeOrUndefinedErrors(page, runtimeFailures);
 
   await page.evaluate(() => {
@@ -1551,7 +1553,7 @@ test("primary turn and showdown controls dispatch through the rebuilt action rai
   for (let passCount = 0; passCount < 6; passCount += 1) {
     const endTurn = page.locator('.table-action-rail [data-action="end-turn"]:enabled');
     if (await endTurn.count()) break;
-    const pass = page.locator('.table-action-rail [data-action="pass-showdown"]:enabled');
+    const pass = page.locator('.context-action-dock [data-action="pass-showdown"]:enabled');
     await expect(pass).toHaveCount(1);
     await pass.click();
   }
@@ -1570,15 +1572,15 @@ test("primary turn and showdown controls dispatch through the rebuilt action rai
   })).not.toBe(turnBefore);
 
   await installShowdownFixture(page);
-  const passControl = page.locator('.table-action-rail [data-action="pass-showdown"]:enabled');
+  const passControl = page.locator('.priority-response-controls [data-action="pass-showdown"]:enabled');
   await expect(passControl).toHaveCount(1);
   const priorityBeforePass = await page.evaluate(() => window.__riftboundGame.showdown?.priorityPlayerId);
   await passControl.click();
   await expect.poll(() => page.evaluate(() => window.__riftboundGame.showdown?.consecutivePasses)).toBe(1);
   await expect.poll(() => page.evaluate(() => window.__riftboundGame.showdown?.priorityPlayerId)).not.toBe(priorityBeforePass);
-  await expect(page.locator('.table-action-rail [data-action="pass-showdown"]:enabled')).toHaveCount(1);
-  await expect(page.locator('.table-action-rail [data-action="pass-showdown"]')).toContainText(/1\/2/u);
-  await page.locator('.table-action-rail [data-action="pass-showdown"]:enabled').click();
+  await expect(page.locator('.priority-response-controls [data-action="pass-showdown"]:enabled')).toHaveCount(1);
+  await expect(page.locator('.priority-response-controls [data-action="pass-showdown"]')).toContainText(/1\/2/u);
+  await page.locator('.priority-response-controls [data-action="pass-showdown"]:enabled').click();
   await expect.poll(() => page.evaluate(() => window.__riftboundGame.showdown)).toBeNull();
   await assertNoRuntimeOrUndefinedErrors(page, runtimeFailures);
 });
@@ -1650,7 +1652,7 @@ test("mobile tabletop keeps the permanent hand and primary action reachable", as
   await expect(hand.locator("[data-hand-card]")).toHaveCount(Number(await hand.getAttribute("data-count")));
   await expect(actionRail).toBeVisible();
   await expect(actionRail).toBeInViewport();
-  await expect(actionRail.locator('[data-action="end-turn"], [data-action="pass-showdown"]')).toBeVisible();
+  await expect(page.locator('.context-action-dock').locator('[data-action="end-turn"], [data-action="pass-showdown"]')).toBeVisible();
 
   const horizontalOverflow = await page.evaluate(() => ({
     clientWidth: document.documentElement.clientWidth,

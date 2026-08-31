@@ -222,6 +222,12 @@ let fullCardOpen = false;
 let fullCardPreviewCard = null;
 let attachmentsOpenCardId = null;
 let inspectorOpen = false;
+let stagedChoiceKey = null;
+let stagedChoiceOptionId = null;
+let choiceDrawerCollapsed = false;
+let draggingHandCardId = null;
+let pointerHandCardDrag = null;
+let suppressCardClickUntil = 0;
 let pendingGameExit = null;
 let paymentRunesScrollLeft = 0;
 let handScrollLeft = 0;
@@ -432,6 +438,7 @@ function localizedCommandFailure(message) {
 }
 
 function render() {
+  if (draggingHandCardId || pointerHandCardDrag) clearHandCardDragPresentation();
   const previousGeometry = captureTabletopGeometry();
   const previousFocus = captureFocusState();
   const previousModalKey = topUiModalKey();
@@ -1958,11 +1965,16 @@ function renderApp() {
   }
   lastViewerPlayerId = nextViewerPlayerId;
   sanitizeViewerUiState();
+  const pendingChoiceVisible = !replayMode && decisionVisibleToViewer(game.pendingChoice, nextViewerPlayerId);
+  syncStagedChoiceUi(pendingChoiceVisible ? game.pendingChoice : null);
   const blockingDecisionVisible = !replayMode && (
     decisionVisibleToViewer(game.pendingPayment, nextViewerPlayerId)
-    || decisionVisibleToViewer(game.pendingChoice, nextViewerPlayerId)
+    || pendingChoiceVisible
   );
-  if (blockingDecisionVisible) closeTabletopSheets();
+  // Decisions temporarily occupy the interaction surface, but they must not
+  // erase the user's inspector preference. Once the decision closes, the last
+  // inspected card returns automatically unless the user explicitly closed it.
+  if (blockingDecisionVisible) closeTabletopSheets("inspector");
   const player = viewerPlayer();
   if (viewerCanAct()) uiLegalActions = enumerateLegalActions(game, nextViewerPlayerId);
   pruneMoveSelection();
@@ -1970,6 +1982,8 @@ function renderApp() {
   if (uiMotion.feedback) rememberRealtimeFeedback(uiMotion.feedback);
   const presentationUpdate = updateGamePresentation();
   const interaction = interactionStatus();
+  const utilitySheetOpen = Boolean(graveyardOpenPlayerId || banishedOpenPlayerId || intelOpenPlayerId || logOpen);
+  const inspectorVisible = Boolean(inspectorOpen && uiSelectedCard() && !blockingDecisionVisible && !utilitySheetOpen);
   window.__riftboundGame = game;
   window.__riftboundRender = render;
   app.innerHTML = `
@@ -1991,13 +2005,13 @@ function renderApp() {
              <button class="secondary" data-action="new-game" title="${t("newGame", locale())}">${t("newGame", locale())}</button>`}
       </div>
     </header>
-    <main class="layout tabletop-layout phase-${game.phase} ${isTutorialGame() ? "tutorial-active" : ""} ${inspectorOpen ? "inspector-open" : ""} ${decisionVisibleToViewer(game.pendingPayment, nextViewerPlayerId) ? "payment-active" : ""} ${activeImpact ? `impact-active impact-${activeImpact.kind}` : ""} ${staticImpactPreview ? "preview-impact" : ""}">
+    <main class="layout tabletop-layout phase-${game.phase} ${isTutorialGame() ? "tutorial-active" : ""} ${inspectorVisible ? "inspector-open" : ""} ${decisionVisibleToViewer(game.pendingPayment, nextViewerPlayerId) ? "payment-active" : ""} ${activeImpact ? `impact-active impact-${activeImpact.kind}` : ""} ${staticImpactPreview ? "preview-impact" : ""}">
       ${game.phase === "first-player" ? firstPlayerPanel() : game.phase === "champion-select" ? championSelectPanel() : game.phase === "battlefield-select" ? setupPanel() : game.phase === "mulligan" ? mulliganPanel() : gamePanel(player)}
       <div class="tabletop-overlay-root">
         ${["first-player", "champion-select", "battlefield-select", "mulligan"].includes(game.phase) ? "" : gameFloatingPanels()}
         ${tutorialPanel()}
         ${cinematicImpactOverlay()}
-        ${blockingDecisionVisible || ["first-player", "champion-select", "mulligan"].includes(game.phase) ? "" : inspector(uiSelectedCard())}
+        ${inspectorVisible && !["first-player", "champion-select", "mulligan"].includes(game.phase) ? inspector(uiSelectedCard()) : ""}
         ${pendingGameExit ? gameExitConfirmModal() : ""}
         ${isTutorialGame() ? "" : gameResultModal()}
         ${fullCardOpen ? fullCardModal(fullCardPreviewCard || uiSelectedCard()) : ""}
@@ -3851,13 +3865,30 @@ function restoreOnlineSelection(preferredCardId) {
   }
 }
 
-function setUiSelectedCard(cardId) {
+function setUiSelectedCard(cardId, { openInspector = true } = {}) {
   actionRejection = null;
   const before = game.selectedCardId;
   selectCard(game, cardId);
   if (game.selectedCardId !== before || game.selectedCardId === cardId) {
     if (isOnlineGame()) onlineSelectedCardId = game.selectedCardId;
+    if (openInspector && game.selectedCardId === cardId) {
+      inspectorOpen = true;
+      closeTabletopSheets("inspector");
+    }
   }
+}
+
+function toggleUiSelectedCard(cardId) {
+  const utilityOpen = Boolean(graveyardOpenPlayerId || banishedOpenPlayerId || intelOpenPlayerId || logOpen);
+  if (cardId && game.selectedCardId === cardId && inspectorOpen && !utilityOpen) {
+    game.selectedCardId = null;
+    onlineSelectedCardId = null;
+    inspectorOpen = false;
+    attachmentsOpenCardId = null;
+    actionRejection = null;
+    return;
+  }
+  setUiSelectedCard(cardId, { openInspector: true });
 }
 
 function isStaleRoomError(message) {
@@ -4206,6 +4237,12 @@ function resetGameUiState() {
   fullCardPreviewCard = null;
   attachmentsOpenCardId = null;
   inspectorOpen = false;
+  stagedChoiceKey = null;
+  stagedChoiceOptionId = null;
+  choiceDrawerCollapsed = false;
+  draggingHandCardId = null;
+  pointerHandCardDrag = null;
+  suppressCardClickUntil = 0;
   pendingGameExit = null;
   lastViewerPlayerId = null;
   lastInteractionPhase = null;
@@ -5384,6 +5421,9 @@ function gamePanel(player) {
   const bottomPlayer = viewerPlayer();
   const topPlayer = opponentPlayer();
   const showPaymentStage = decisionVisibleToViewer(game.pendingPayment);
+  const showChoiceStage = decisionVisibleToViewer(game.pendingChoice);
+  const choiceSurface = showChoiceStage && !replayMode ? choiceCardSurface(game.pendingChoice) : "none";
+  const commandChoice = ["hand", "pile", "board", "damage"].includes(choiceSurface);
   return `
     <div class="play-area tabletop-board ${actingPlayerClass()} ${showPaymentStage ? "payment-active" : ""} ${isOnlineGame() && !viewerCanAct() ? "waiting-for-opponent" : ""} ${online.commandPending ? "command-pending" : ""}" data-phase="${escapeHtml(game.phase || "unknown")}" aria-busy="${online.commandPending ? "true" : "false"}">
       <section class="board-panel" aria-label="${t("gameBoard", locale())}">
@@ -5408,7 +5448,7 @@ function gamePanel(player) {
       <div class="table-command-layer">
         ${moveBatchBar(player)}
         ${showPaymentStage ? paymentPanel() : ""}
-        ${showPaymentStage ? "" : actionBar(player, selected)}
+        ${showPaymentStage ? "" : commandChoice ? commandChoiceSurface(game.pendingChoice) : actionBar(player, selected)}
         ${handDrawer(player)}
       </div>
     </div>
@@ -5417,14 +5457,16 @@ function gamePanel(player) {
 
 function gameFloatingPanels() {
   const showPendingChoice = decisionVisibleToViewer(game.pendingChoice);
-  const blocking = showPendingChoice;
+  const choiceSurface = showPendingChoice ? (replayMode ? "panel" : choiceCardSurface(game.pendingChoice)) : "none";
+  const sidePanelChoice = showPendingChoice && choiceSurface === "panel";
+  const blocking = sidePanelChoice;
   const liveBlocking = blocking && !replayMode;
   return `
     <div class="floating-panels ${game.phase === "showdown" ? "showdown-dock" : ""} ${liveBlocking ? "has-modal has-blocking-decision" : ""} ${blocking && replayMode ? "replay-readonly-decision" : ""}">
-      ${showPendingChoice ? choicePanel() : ""}
-      ${blocking ? "" : graveyardOpenPlayerId ? graveyardPanel(graveyardOpenPlayerId) : ""}
-      ${blocking ? "" : banishedOpenPlayerId ? banishedPanel(banishedOpenPlayerId) : ""}
-      ${blocking ? "" : intelOpenPlayerId ? intelPanel(intelOpenPlayerId) : ""}
+      ${sidePanelChoice ? choicePanel() : ""}
+      ${showPendingChoice ? "" : graveyardOpenPlayerId ? graveyardPanel(graveyardOpenPlayerId) : ""}
+      ${showPendingChoice ? "" : banishedOpenPlayerId ? banishedPanel(banishedOpenPlayerId) : ""}
+      ${showPendingChoice ? "" : intelOpenPlayerId ? intelPanel(intelOpenPlayerId) : ""}
     </div>
   `;
 }
@@ -6017,11 +6059,12 @@ function graveyardPanel(playerId) {
       </div>
       <div class="cards graveyard-cards" data-scroll-key="graveyard-${player.id}">
         ${player.trash.map((card) => `
-          <div class="graveyard-card-entry">
-            <article class="${imageCardClass(card, "graveyard-card")}" data-card-id="${card.instanceId}">
-              ${cardImage(card)}
+          <div class="graveyard-card-entry pile-browser-entry">
+            <article class="${imageCardClass(card, "graveyard-card pile-browser-card")}" data-card-id="${escapeHtml(card.instanceId || "")}" role="button" tabindex="0" aria-label="${escapeHtml(cardName(card))}">
+              <span class="pile-browser-art">${cardImage(card)}</span>
+              <span class="pile-browser-copy"><strong>${escapeHtml(cardName(card))}</strong><small>${escapeHtml(cardTags(card).join(" · "))}</small></span>
             </article>
-            ${player.id === viewerPlayerId() ? trashActions(card, player).join("") : ""}
+            ${player.id === viewerPlayerId() ? `<div class="pile-browser-actions">${trashActions(card, player).join("")}</div>` : ""}
           </div>
         `).join("") || `<p class="empty">${t("trashEmpty", locale())}</p>`}
       </div>
@@ -6040,7 +6083,14 @@ function banishedPanel(playerId) {
         <button data-action="close-banished">${t("close", locale())}</button>
       </div>
       <div class="cards graveyard-cards" data-scroll-key="banished-${player.id}">
-        ${cards.map((card) => `<article class="${imageCardClass(card, "graveyard-card")}" data-card-id="${card.instanceId}">${cardImage(card)}</article>`).join("") || `<p class="empty">${t("banishedEmpty", locale())}</p>`}
+        ${cards.map((card) => `
+          <div class="pile-browser-entry">
+            <article class="${imageCardClass(card, "graveyard-card pile-browser-card")}" data-card-id="${escapeHtml(card.instanceId || "")}" role="button" tabindex="0" aria-label="${escapeHtml(cardName(card))}">
+              <span class="pile-browser-art">${cardImage(card)}</span>
+              <span class="pile-browser-copy"><strong>${escapeHtml(cardName(card))}</strong><small>${escapeHtml(cardTags(card).join(" · "))}</small></span>
+            </article>
+          </div>
+        `).join("") || `<p class="empty">${t("banishedEmpty", locale())}</p>`}
       </div>
     </section>`;
 }
@@ -6088,11 +6138,294 @@ function intelPanel(playerId) {
   `;
 }
 
-function choiceModalAttributes(choice) {
+function choiceModalAttributes(choice, { inline = false } = {}) {
   const key = `choice-${choice?.id || choice?.effect || "pending"}`;
   const label = localizedChoicePrompt(choice) || (locale() === LOCALES.KO ? "효과 선택" : "Effect choice");
   if (replayMode) return `role="region" aria-label="${escapeHtml(label)}" aria-readonly="true" data-replay-readonly-decision inert`;
+  if (inline) return `role="region" aria-label="${escapeHtml(label)}" aria-live="polite" data-choice-stage="${escapeHtml(key)}"`;
   return `role="dialog" aria-modal="true" aria-label="${escapeHtml(label)}" data-ui-modal data-modal-key="${escapeHtml(key)}" tabindex="-1"`;
+}
+
+function choiceUiKey(choice) {
+  if (!choice || typeof choice !== "object") return null;
+  return String(choice.id || `${choice.playerId || "player"}:${choice.effect || "choice"}`);
+}
+
+function validChoiceOptions(choice) {
+  return Array.isArray(choice?.options)
+    ? choice.options.filter((option) => option && typeof option === "object" && !Array.isArray(option))
+    : [];
+}
+
+function choiceOptionCardId(option) {
+  return String(option?.cardId || option?.card?.instanceId || "");
+}
+
+function choiceOptionHasPhysicalCard(option) {
+  const cardId = choiceOptionCardId(option);
+  if (!cardId) return false;
+  const preview = choicePreviewCard(option);
+  const context = choiceCardContext(cardId, preview);
+  return Boolean(preview && context && context.zone !== "unknown");
+}
+
+function choiceOptionIsViewerHandCard(option) {
+  const cardId = choiceOptionCardId(option);
+  const viewer = viewerPlayer();
+  return Boolean(cardId && viewer?.hand?.some((card) => card?.instanceId === cardId));
+}
+
+function choiceOptionCanUseInlineBoard(option) {
+  const cardId = choiceOptionCardId(option);
+  const preview = choicePreviewCard(option);
+  const context = choiceCardContext(cardId, preview);
+  if (!cardId || !context) return false;
+  if (["base", "battlefield", "attachment", "battlefield-card", "rune", "legend", "champion"].includes(context.zone)) return true;
+  if (context.zone !== "hidden") return false;
+  const controllerId = context.playerId || preview?.controllerId || preview?.ownerId || null;
+  return Boolean(controllerId && (controllerId === viewerPlayerId() || canViewPrivateInfo(viewerPlayerId(), controllerId)));
+}
+
+function syncStagedChoiceUi(choice) {
+  const key = choiceUiKey(choice);
+  if (key !== stagedChoiceKey) {
+    stagedChoiceKey = key;
+    stagedChoiceOptionId = null;
+    choiceDrawerCollapsed = false;
+  }
+  if (!choice || !stagedChoiceOptionId) return;
+  const stillAvailable = validChoiceOptions(choice).some((option) =>
+    option.id === stagedChoiceOptionId && choiceOptionCardId(option) && !option.disabled
+  );
+  if (!stillAvailable) stagedChoiceOptionId = null;
+}
+
+function choiceCardSurface(choice) {
+  if (!choice || !decisionVisibleToViewer(choice)) return "none";
+  if (["combatDamage", "alphaStrikeDamage", "splitDamageAllocation"].includes(choice.effect)) return "damage";
+  if ([
+    "triggerOrder", "payDeflect", "predictChoice", "observedTopDeckSelfAbility",
+    "acknowledgeReveal"
+  ].includes(choice.effect)) return "panel";
+  const cardOptions = validChoiceOptions(choice).filter(choiceOptionHasPhysicalCard);
+  if (!cardOptions.length) return "panel";
+  const zones = cardOptions.map((option) => choiceCardContext(choiceOptionCardId(option), choicePreviewCard(option))?.zone || "unknown");
+  if (zones.every((zone) => zone === "hand") && cardOptions.every(choiceOptionIsViewerHandCard)) return "hand";
+  if (zones.every((zone) => ["main-deck", "rune-deck", "trash", "banished"].includes(zone))) return "pile";
+  if (cardOptions.every(choiceOptionCanUseInlineBoard)) return "board";
+  // Revealed opponent-hand cards and mixed/off-screen zones have no reliable
+  // tabletop hit target. Keep those choices in the wide, rules-safe drawer.
+  return "pile";
+}
+
+function choiceOptionForCard(cardId) {
+  if (!cardId || !game?.pendingChoice || !decisionVisibleToViewer(game.pendingChoice)) return null;
+  const options = choiceOptionsForCard(cardId);
+  return options.find((option) => !option.disabled) || options[0] || null;
+}
+
+function choiceOptionsForCard(cardId, choice = game?.pendingChoice) {
+  if (!cardId || !choice || !decisionVisibleToViewer(choice)) return [];
+  return validChoiceOptions(choice).filter((option) =>
+    choiceOptionHasPhysicalCard(option) && choiceOptionCardId(option) === String(cardId)
+  );
+}
+
+function stageChoiceOption(optionId) {
+  const choice = game?.pendingChoice;
+  if (!choice || !decisionVisibleToViewer(choice)) return false;
+  syncStagedChoiceUi(choice);
+  const option = validChoiceOptions(choice).find((candidate) => candidate.id === optionId);
+  if (!option || option.disabled || !choiceOptionCardId(option)) return false;
+  stagedChoiceOptionId = stagedChoiceOptionId === option.id ? null : option.id;
+  return true;
+}
+
+function setStagedChoiceOption(optionId) {
+  const choice = game?.pendingChoice;
+  if (!choice || !decisionVisibleToViewer(choice)) return false;
+  syncStagedChoiceUi(choice);
+  const option = validChoiceOptions(choice).find((candidate) => candidate.id === optionId);
+  if (!option || option.disabled || !choiceOptionHasPhysicalCard(option)) return false;
+  stagedChoiceOptionId = option.id;
+  return true;
+}
+
+function stageChoiceCard(cardId) {
+  const options = choiceOptionsForCard(cardId).filter((option) => !option.disabled);
+  if (!options.length) return false;
+  const current = stagedChoiceOption();
+  if (current && choiceOptionCardId(current) === String(cardId)) {
+    stagedChoiceOptionId = null;
+    return true;
+  }
+  stagedChoiceOptionId = options[0].id;
+  return true;
+}
+
+function stagedChoiceOption(choice = game?.pendingChoice) {
+  syncStagedChoiceUi(choice);
+  return validChoiceOptions(choice).find((option) => option.id === stagedChoiceOptionId && !option.disabled) || null;
+}
+
+function choiceCardStateClasses(cardId) {
+  const surface = game?.pendingChoice ? choiceCardSurface(game.pendingChoice) : "none";
+  if (!["hand", "board"].includes(surface)) return "";
+  const options = choiceOptionsForCard(cardId);
+  if (!options.length) return "";
+  const enabled = options.some((option) => !option.disabled);
+  const staged = stagedChoiceOption();
+  return [
+    enabled ? "choice-card-selectable" : "choice-card-disabled",
+    staged && choiceOptionCardId(staged) === String(cardId) ? "choice-card-staged" : "",
+    options.some((option) => option.selected) ? "choice-card-committed" : ""
+  ].filter(Boolean).join(" ");
+}
+
+function choiceStageTitle(choice) {
+  const source = choice?.card ? cardName(choice.card) : t("effect", locale());
+  return choice?.data?.declareTrigger
+    ? `${t("declaring", locale())} · ${source}`
+    : `${t("resolving", locale())} · ${source}`;
+}
+
+function choiceTextActions(choice) {
+  return validChoiceOptions(choice)
+    .filter((option) => !choiceOptionHasPhysicalCard(option))
+    .map((option) => `
+      <button type="button" class="${option.confirmControlledChoices ? "primary" : "secondary"}" data-action="choose-effect" data-choice="${escapeHtml(option.id || "")}" ${option.disabled ? "disabled aria-disabled=\"true\"" : ""}>
+        ${escapeHtml(localizedChoiceOptionLabel(option))}
+      </button>
+    `).join("");
+}
+
+function choiceOptionVariantLabel(option, siblings = []) {
+  if (option?.placement === "top") return locale() === LOCALES.KO ? "덱 위" : "Top of deck";
+  if (option?.placement === "bottom") return locale() === LOCALES.KO ? "덱 아래" : "Bottom of deck";
+  if (option?.destination === "base") return locale() === LOCALES.KO ? "기지" : "Base";
+  if (option?.destination) {
+    const field = game.battlefields.find((candidate) => candidate?.instanceId === option.destination);
+    if (field) return battlefieldName(field);
+  }
+  if (Number.isFinite(Number(option?.amount)) && Number(option.amount) > 0) {
+    return locale() === LOCALES.KO ? `피해 ${Number(option.amount)}` : `${Number(option.amount)} damage`;
+  }
+  const label = localizedChoiceOptionLabel(option);
+  const duplicateCount = siblings.filter((candidate) => localizedChoiceOptionLabel(candidate) === label).length;
+  if (duplicateCount <= 1) return label;
+  const index = Math.max(0, siblings.findIndex((candidate) => candidate.id === option.id));
+  return `${label} ${index + 1}`;
+}
+
+function choiceStageVariants(choice) {
+  const selected = stagedChoiceOption(choice);
+  if (!selected) return "";
+  const siblings = choiceOptionsForCard(choiceOptionCardId(selected), choice).filter((option) => !option.disabled);
+  if (siblings.length <= 1) return "";
+  const groupLabel = locale() === LOCALES.KO ? "선택 방식" : "Choice variant";
+  return `
+    <div class="choice-stage-variants" role="group" aria-label="${escapeHtml(groupLabel)}">
+      ${siblings.map((option) => `
+        <button type="button" class="choice-stage-variant ${option.id === selected.id ? "is-active" : ""}" data-action="stage-choice-option" data-choice="${escapeHtml(option.id || "")}" aria-pressed="${option.id === selected.id}">
+          ${escapeHtml(choiceOptionVariantLabel(option, siblings))}
+        </button>
+      `).join("")}
+    </div>
+  `;
+}
+
+function choiceStageActionGroup(choice, { drawer = false } = {}) {
+  const selected = stagedChoiceOption(choice);
+  const selectedCard = selected ? choicePreviewCard(selected) : null;
+  let selectedLabel = selectedCard && !selectedCard.redacted
+    ? cardName(selectedCard)
+    : selected ? localizedChoiceOptionLabel(selected) : "";
+  if (selected) {
+    const siblings = choiceOptionsForCard(choiceOptionCardId(selected), choice).filter((option) => !option.disabled);
+    if (siblings.length > 1) selectedLabel = `${selectedLabel} · ${choiceOptionVariantLabel(selected, siblings)}`;
+  }
+  return `
+    <div class="choice-stage-actions">
+      ${choiceTextActions(choice)}
+      ${choice.optional ? `<button type="button" class="secondary" data-action="decline-effect">${t("decline", locale())}</button>` : ""}
+      ${drawer ? `<button type="button" class="secondary choice-drawer-toggle" data-action="toggle-choice-drawer" aria-expanded="${!choiceDrawerCollapsed}">${choiceDrawerCollapsed ? (locale() === LOCALES.KO ? "선택 카드 펼치기" : "Show cards") : (locale() === LOCALES.KO ? "선택 카드 숨기기" : "Hide cards")}</button>` : ""}
+      ${choiceStageVariants(choice)}
+      <button type="button" class="primary confirm-staged-choice" data-action="confirm-staged-choice" ${selected ? "" : "disabled aria-disabled=\"true\""}>
+        ${selected ? `${t("confirm", locale())} · ${escapeHtml(selectedLabel)}` : (locale() === LOCALES.KO ? "카드를 선택해 주세요" : "Choose a card")}
+      </button>
+    </div>
+  `;
+}
+
+function compactChoiceCard(option) {
+  const preview = choicePreviewCard(option);
+  const cardId = choiceOptionCardId(option);
+  const context = choiceCardContext(cardId, preview);
+  const selected = stagedChoiceOptionId === option.id;
+  const committed = Boolean(option.selected);
+  const label = preview && !preview.redacted ? cardName(preview) : localizedChoiceOptionLabel(option);
+  return `
+    <div class="choice-drawer-card-wrap ${selected ? "is-staged" : ""} ${committed ? "is-committed" : ""}">
+      <button type="button" class="choice-drawer-card" data-action="stage-choice-card" data-stage-mode="option" data-choice="${escapeHtml(option.id || "")}" data-card-id="${escapeHtml(cardId)}" aria-pressed="${selected}" ${option.disabled ? "disabled aria-disabled=\"true\"" : ""}>
+        ${choiceOptionImage(option)}
+        <span class="choice-card-name">${escapeHtml(label)}</span>
+        <small>${escapeHtml(choiceLocationLabel(context))}</small>
+        <b class="choice-check" aria-hidden="true">${selected ? "✓" : committed ? "●" : ""}</b>
+      </button>
+      ${preview && !preview.redacted ? `<button type="button" class="choice-card-view" data-action="view-choice-card" data-card-id="${escapeHtml(cardId)}">${t("cardInfo", locale())}</button>` : ""}
+    </div>
+  `;
+}
+
+function inlineCardChoiceBar(choice, surface) {
+  const surfaceLabel = surface === "hand"
+    ? (locale() === LOCALES.KO ? "손패에서 선택" : "Choose from hand")
+    : (locale() === LOCALES.KO ? "보드에서 선택" : "Choose on the board");
+  const prompt = localizedChoicePrompt(choice);
+  const repeatProgress = repeatedDamageProgressInfo(choice);
+  const progressTitle = repeatProgress ? `${repeatProgress.label} · ${repeatProgress.detail} · ${prompt}` : prompt;
+  return `
+    <section class="choice-stage-bar ${surface}-choice-stage" ${choiceModalAttributes(choice, { inline: true })}>
+      <div class="choice-stage-copy">
+        <span>${surfaceLabel}</span>
+        <strong>${escapeHtml(choiceStageTitle(choice))}</strong>
+        <p class="${repeatProgress ? "choice-repeat-progress has-repeat-progress" : ""}" title="${escapeHtml(progressTitle)}">
+          ${repeatProgress ? `<strong>${escapeHtml(repeatProgress.label)}</strong><span>${escapeHtml(repeatProgress.detail)}</span>` : ""}
+          <span class="choice-stage-prompt">${escapeHtml(prompt)}</span>
+        </p>
+      </div>
+      ${choiceStageActionGroup(choice)}
+    </section>
+  `;
+}
+
+function pileChoiceDrawer(choice) {
+  const options = validChoiceOptions(choice).filter(choiceOptionHasPhysicalCard);
+  return `
+    <section class="choice-zone-drawer ${choiceDrawerCollapsed ? "is-collapsed" : ""}" ${choiceModalAttributes(choice)}>
+      <div class="choice-drawer-head">
+        <div>
+          <span>${locale() === LOCALES.KO ? "카드 선택" : "Card selection"}</span>
+          <strong>${escapeHtml(choiceStageTitle(choice))}</strong>
+          <p>${escapeHtml(localizedChoicePrompt(choice))}</p>
+        </div>
+        ${choiceStageActionGroup(choice, { drawer: true })}
+      </div>
+      ${choiceDrawerCollapsed ? "" : `
+        <div class="choice-drawer-track" data-scroll-key="choice-${escapeHtml(choiceUiKey(choice) || "pending")}-drawer">
+          ${options.map(compactChoiceCard).join("")}
+        </div>
+      `}
+    </section>
+  `;
+}
+
+function commandChoiceSurface(choice) {
+  const surface = choiceCardSurface(choice);
+  if (surface === "hand" || surface === "board") return inlineCardChoiceBar(choice, surface);
+  if (surface === "pile") return pileChoiceDrawer(choice);
+  if (surface === "damage") return choice.effect === "combatDamage" ? combatDamagePanel(choice) : alphaStrikeDamagePanel(choice);
+  return "";
 }
 
 function choicePanel() {
@@ -6100,7 +6433,7 @@ function choicePanel() {
   if (!choice || !Array.isArray(choice.options)) return "";
   if (choice.effect === "triggerOrder") return triggerOrderPanel(choice);
   if (choice.effect === "combatDamage") return combatDamagePanel(choice);
-  if (choice.effect === "alphaStrikeDamage") return alphaStrikeDamagePanel(choice);
+  if (["alphaStrikeDamage", "splitDamageAllocation"].includes(choice.effect)) return alphaStrikeDamagePanel(choice);
   if (choice.effect === "payDeflect") return deflectPaymentPanel(choice);
   if (choice.effect === "predictChoice") return predictChoicePanel(choice);
   if (choice.effect === "observedTopDeckSelfAbility") return observedTopDeckSelfAbilityPanel(choice);
@@ -6109,16 +6442,16 @@ function choicePanel() {
   const instruction = choiceEffectInstruction(choice);
   const repeatProgress = repeatedDamageProgress(choice);
   const searchable = options.length > 12;
-  const hasCardOptions = options.some((option) => Boolean(option.cardId || option.card?.instanceId));
-  const hasTextOptions = options.some((option) => !option.cardId && !option.card?.instanceId);
+  const hasCardOptions = options.some(choiceOptionHasPhysicalCard);
+  const hasTextOptions = options.some((option) => !choiceOptionHasPhysicalCard(option));
   const choiceLayout = hasCardOptions && hasTextOptions ? "mixed" : hasCardOptions ? "cards" : "text";
   return `
     <section class="choice-panel modal-panel choice-resolution-panel ${hasCardOptions ? "choice-card-selection-panel has-card-options" : ""} ${hasTextOptions ? "has-text-options" : ""} ${choice.effect === "sabotage" ? "reveal-panel" : ""}" data-choice-layout="${choiceLayout}" data-choice-count="${options.length}" ${choiceModalAttributes(choice)}>
       <div class="section-head">
         <div>
-          <h2>${choice.effect === "sabotage" ? `${cardName(choice.card)}: ${t("revealedHand", locale())}` : `${choice.data?.declareTrigger ? t("declaring", locale()) : t("resolving", locale())} ${cardName(choice.card)}`}</h2>
-          <span>${localizedChoicePrompt(choice)}</span>
-          ${instruction ? `<p class="choice-instruction">${instruction}</p>` : ""}
+          <h2>${escapeHtml(choice.effect === "sabotage" ? `${choice?.card ? cardName(choice.card) : t("effect", locale())}: ${t("revealedHand", locale())}` : `${choice.data?.declareTrigger ? t("declaring", locale()) : t("resolving", locale())} ${choice?.card ? cardName(choice.card) : t("effect", locale())}`)}</h2>
+          <span>${escapeHtml(localizedChoicePrompt(choice))}</span>
+          ${instruction ? `<p class="choice-instruction">${escapeHtml(instruction)}</p>` : ""}
           ${repeatProgress}
         </div>
         ${choice.optional ? `<button data-action="decline-effect">${t("decline", locale())}</button>` : ""}
@@ -6351,10 +6684,11 @@ function revealConfirmationPanel(choice) {
 
 function choiceOptionButton(option) {
   const preview = choicePreviewCard(option);
+  const physical = choiceOptionHasPhysicalCard(option);
   const label = preview && !preview.redacted
     ? (preview.type === "battlefield" ? battlefieldName(preview) : cardName(preview))
     : localizedChoiceOptionLabel(option);
-  const context = option.cardId ? choiceCardContext(option.cardId, preview) : null;
+  const context = physical ? choiceCardContext(choiceOptionCardId(option), preview) : null;
   const ownership = choiceOwnership(context, preview);
   const location = context ? choiceLocationLabel(context) : "";
   const selectionState = option.selected
@@ -6362,13 +6696,13 @@ function choiceOptionButton(option) {
     : "";
   return `
     <div class="choice-option-wrap">
-      <button type="button" class="choice-option ${option.cardId ? `card-choice-option choice-owner-${ownership.tone}` : "text-choice-option"} ${option.selected ? "is-selected" : ""} ${option.confirmControlledChoices ? "confirm-choice-option" : ""} ${option.disabled ? "disabled-choice" : ""}" data-action="choose-effect" data-choice="${option.id}" data-card-id="${option.cardId || ""}" ${option.confirmControlledChoices ? "" : `aria-pressed="${Boolean(option.selected)}"`} ${option.disabled ? "disabled aria-disabled=\"true\"" : ""}>
-        ${option.cardId ? choiceOptionImage(option) : ""}
-        <span class="choice-card-name">${label}</span>
+      <button type="button" class="choice-option ${physical ? `card-choice-option choice-owner-${ownership.tone}` : "text-choice-option"} ${option.selected ? "is-selected" : ""} ${option.confirmControlledChoices ? "confirm-choice-option" : ""} ${option.disabled ? "disabled-choice" : ""}" data-action="choose-effect" data-choice="${escapeHtml(option.id || "")}" data-card-id="${physical ? escapeHtml(choiceOptionCardId(option)) : ""}" ${option.confirmControlledChoices ? "" : `aria-pressed="${Boolean(option.selected)}"`} ${option.disabled ? "disabled aria-disabled=\"true\"" : ""}>
+        ${physical ? choiceOptionImage(option) : ""}
+        <span class="choice-card-name">${escapeHtml(label)}</span>
         ${selectionState ? `<small class="choice-selection-state">${selectionState}</small>` : ""}
-        ${option.cardId ? `<span class="choice-card-context"><b>${ownership.label}</b>${location ? `<small>${location}</small>` : ""}</span>` : ""}
+        ${physical ? `<span class="choice-card-context"><b>${escapeHtml(ownership.label)}</b>${location ? `<small>${escapeHtml(location)}</small>` : ""}</span>` : ""}
       </button>
-      ${preview && !preview.redacted ? `<button type="button" class="choice-card-view" data-action="view-choice-card" data-card-id="${preview.instanceId}">${t("viewFullCard", locale())}</button>` : ""}
+      ${physical && preview && !preview.redacted ? `<button type="button" class="choice-card-view" data-action="view-choice-card" data-card-id="${escapeHtml(preview.instanceId || "")}">${t("viewFullCard", locale())}</button>` : ""}
     </div>
   `;
 }
@@ -6443,17 +6777,17 @@ function choicePreviewCard(option) {
   return option?.card && !option.card.redacted ? option.card : findChoicePreviewCard(option?.cardId);
 }
 
-function repeatedDamageProgress(choice) {
+function repeatedDamageProgressInfo(choice) {
   const declarationSpec = choice.effect === "declarePlayTarget"
     ? choice.data?.currentDeclaration?.spec
     : null;
   const declaredRepeatedDamage = declarationSpec?.kind === "dealDamageUnit"
     && declarationSpec?.selectRepeatedTargetsOnPlay;
-  if (choice.effect !== "damageUnit" && !declaredRepeatedDamage) return "";
+  if (choice.effect !== "damageUnit" && !declaredRepeatedDamage) return null;
   const total = declaredRepeatedDamage
     ? choice.data?.max || declarationSpec.repeat || 1
     : choice.data?.repeatTotal || 1;
-  if (total < 2) return "";
+  if (total < 2) return null;
   const step = declaredRepeatedDamage
     ? Math.min(total, (choice.data?.selectedForCurrentStep?.length || 0) + 1)
     : Math.max(1, total - (choice.data?.remaining || total) + 1);
@@ -6467,7 +6801,14 @@ function repeatedDamageProgress(choice) {
   const detail = locale() === LOCALES.KO
     ? (mayRepeatTarget ? "같은 유닛을 다시 선택할 수 있습니다." : "이전에 선택한 유닛은 다시 선택할 수 없습니다.")
     : (mayRepeatTarget ? "The same unit may be selected again." : "Previously selected units cannot be selected again.");
-  return `<p class="choice-repeat-progress"><strong>${label}</strong><span>${detail}</span></p>`;
+  return { label, detail };
+}
+
+function repeatedDamageProgress(choice) {
+  const progress = repeatedDamageProgressInfo(choice);
+  if (!progress) return "";
+  const { label, detail } = progress;
+  return `<p class="choice-repeat-progress"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(detail)}</span></p>`;
 }
 
 function choiceEffectInstruction(choice) {
@@ -6504,6 +6845,7 @@ function choiceEffectInstruction(choice) {
       alphaStrike: `${sourceName}: 선제 피해를 입힐 아군 유닛을 선택하세요.`,
       trashSpell: `${sourceName}: 폐기장에서 사용할 주문을 선택하세요.`,
       alphaStrikeDamage: `${sourceName}: 합법적인 적 유닛들에게 피해를 배정하세요.`,
+      splitDamageAllocation: `${sourceName}: 표시된 합법 피해 수치 중 하나를 적 유닛에게 배정하세요.`,
       starCrossedFriendly: `${sourceName}: 손으로 되돌릴 아군 유닛을 선택하세요.`,
       starCrossedEnemy: `${sourceName}: 손으로 되돌릴 적 유닛을 선택하세요.`,
       discardForHwei: `${sourceName}: 효과를 위해 버릴 카드를 선택하세요.`,
@@ -6543,6 +6885,7 @@ function choiceEffectInstruction(choice) {
     alphaStrike: `${sourceName}: choose the friendly unit that will deal Alpha Strike damage.`,
     trashSpell: `${sourceName}: choose a spell from trash to play through this effect.`,
     alphaStrikeDamage: `${sourceName}: assign the spell's damage among legal enemy units.`,
+    splitDamageAllocation: `${sourceName}: assign one of the shown legal damage amounts to an enemy unit.`,
     starCrossedFriendly: `${sourceName}: choose the friendly unit that will be returned to hand.`,
     starCrossedEnemy: `${sourceName}: choose the enemy unit that will be returned to hand.`,
     discardForHwei: `${sourceName}: choose a card to discard for Hwei's effect.`,
@@ -6555,26 +6898,60 @@ function choiceEffectInstruction(choice) {
   return "";
 }
 
+function damageAssignmentHistory(assignments) {
+  const safeAssignments = Array.isArray(assignments)
+    ? assignments.filter((item) => {
+        const targetId = String(item?.targetId || item?.cardId || "");
+        const amount = Number(item?.amount);
+        return targetId && Number.isFinite(amount) && amount > 0;
+      })
+    : [];
+  if (!safeAssignments.length) return "";
+  const label = locale() === LOCALES.KO ? "이미 배정한 피해" : "Assigned damage";
+  return `
+    <div class="damage-assignment-history" aria-label="${escapeHtml(label)}">
+      <strong>${escapeHtml(label)}</strong>
+      <div class="damage-assignment-history-track">
+        ${safeAssignments.map((item) => {
+          const targetId = String(item.targetId || item.cardId || "");
+          const target = findChoicePreviewCard(targetId) || findVisibleCard(targetId);
+          const targetLabel = target && !target.redacted
+            ? cardName(target)
+            : (locale() === LOCALES.KO ? "대상" : "Target");
+          const amount = Math.max(0, Number(item.amount) || 0);
+          return `<span class="damage-assignment-chip" data-target-id="${escapeHtml(targetId)}" data-amount="${amount}"><b>${escapeHtml(targetLabel)}</b><em>${amount}</em></span>`;
+        }).join("")}
+      </div>
+    </div>
+  `;
+}
+
 function combatDamagePanel(choice) {
   const assigning = game.players.find((player) => player.id === choice.playerId);
   const targetPlayer = game.players.find((player) => player.id === choice.data?.targetPlayerId);
-  const legal = new Set(choice.options.map((option) => option.cardId));
-  const infos = choice.data?.targetInfos || [];
+  const legalOptions = new Map(validChoiceOptions(choice)
+    .filter((option) => choiceOptionCardId(option) && !option.disabled)
+    .map((option) => [choiceOptionCardId(option), String(option.id || "")]));
+  const infos = Array.isArray(choice.data?.targetInfos) && choice.data.targetInfos.length
+    ? choice.data.targetInfos
+    : validChoiceOptions(choice).map((option) => ({ cardId: choiceOptionCardId(option), amount: option.amount || 0 }));
   return `
-    <section class="choice-panel modal-panel combat-damage-panel" ${choiceModalAttributes(choice)}>
-      <div class="section-head">
+    <section class="choice-zone-drawer damage-assignment-drawer combat-damage-panel" ${choiceModalAttributes(choice)}>
+      <div class="damage-assignment-head">
         <div>
+          <span>${locale() === LOCALES.KO ? "전투 피해 배정" : "Combat damage assignment"}</span>
           <h2>${t("damageAssign", locale())}</h2>
           <span>${t("assigningDamage", locale(), { actor: assigning ? playerName(assigning) : t("nobody", locale()), amount: choice.data?.remaining || 0, target: targetPlayer ? playerName(targetPlayer) : t("opponent", locale()) })}</span>
         </div>
+        <div class="damage-remaining-orb" aria-label="${escapeHtml(locale() === LOCALES.KO ? `남은 피해 ${choice.data?.remaining || 0}` : `${choice.data?.remaining || 0} damage remaining`)}">
+          <strong>${choice.data?.remaining || 0}</strong>
+          <span>${locale() === LOCALES.KO ? "남은 피해" : "remaining"}</span>
+        </div>
       </div>
-      <div class="combat-summary">
-        <strong>${choice.data?.remaining || 0}</strong>
-        <span>${locale() === LOCALES.KO ? "배정 가능한 피해" : "available damage"}</span>
-        <small>${t("autoLethalHint", locale())}</small>
-      </div>
-      <div class="choice-grid combat-choice-grid" data-scroll-key="choice-${escapeHtml(choice.id || choice.effect || "combat")}-options">
-        ${infos.map((info) => combatDamageOption(info, legal.has(info.cardId))).join("")}
+      <p class="damage-assignment-help">${t("autoLethalHint", locale())}</p>
+      ${damageAssignmentHistory(choice.data?.assignments)}
+      <div class="damage-target-track combat-choice-grid" data-scroll-key="choice-${escapeHtml(choice.id || choice.effect || "combat")}-options">
+        ${infos.filter((info) => info?.cardId).map((info) => combatDamageOption(info, legalOptions.get(String(info.cardId)) || "", choice.data?.battlefieldId)).join("")}
       </div>
     </section>
   `;
@@ -6616,32 +6993,46 @@ function alphaStrikeDamagePanel(choice) {
   const targets = [...new Map(choice.options
     .filter((option) => option.cardId)
     .map((option) => [option.cardId, option])).values()];
-  const remaining = choice.data?.remainingDamage || 0;
+  const remaining = Math.max(0, Number(choice.data?.splitDamage?.remainingDamage ?? choice.data?.remainingDamage ?? choice.data?.remaining) || 0);
   return `
-    <section class="choice-panel modal-panel alpha-strike-panel" ${choiceModalAttributes(choice)}>
-      <div class="section-head">
+    <section class="choice-zone-drawer damage-assignment-drawer alpha-strike-panel" ${choiceModalAttributes(choice)}>
+      <div class="damage-assignment-head">
         <div>
-          <h2>${cardName(choice.card)}</h2>
-          <span>${localizedChoicePrompt(choice)}</span>
+          <span>${locale() === LOCALES.KO ? "효과 피해 배정" : "Effect damage assignment"}</span>
+          <h2>${escapeHtml(choice?.card ? cardName(choice.card) : t("effect", locale()))}</h2>
+          <span>${escapeHtml(localizedChoicePrompt(choice))}</span>
+        </div>
+        <div class="damage-remaining-orb">
+          <strong>${remaining}</strong>
+          <span>${locale() === LOCALES.KO ? "남은 피해" : "remaining"}</span>
         </div>
       </div>
-      <div class="combat-summary">
-        <strong>${remaining}</strong>
-        <span>${locale() === LOCALES.KO ? "배정 가능한 피해" : "available damage"}</span>
-        <small>${choiceEffectInstruction(choice)}</small>
-      </div>
-      <div class="alpha-strike-targets" data-scroll-key="choice-${escapeHtml(choice.id || choice.effect || "alpha")}-targets">
+      <p class="damage-assignment-help">${escapeHtml(choiceEffectInstruction(choice))}</p>
+      ${damageAssignmentHistory(choice.data?.splitDamage?.allocations)}
+      <div class="damage-target-track alpha-strike-targets" data-scroll-key="choice-${escapeHtml(choice.id || choice.effect || "alpha")}-targets">
         ${targets.map((option) => {
           const target = findVisibleCard(option.cardId);
+          const stats = target ? boardUnitStats(target, selectedContext(target.instanceId)?.location) : { might: 0, remaining: 0 };
+          const amountOptions = validChoiceOptions(choice)
+            .filter((candidate) => candidate.cardId === option.cardId && Number(candidate.amount) > 0)
+            .sort((left, right) => Number(left.amount) - Number(right.amount));
+          const minimum = Number(amountOptions[0]?.amount) || 1;
+          const maximum = Number(amountOptions.at(-1)?.amount) || Math.max(1, remaining);
+          const initial = maximum;
           return `
             <div class="alpha-strike-target">
               ${choiceOptionImage(option)}
-              <strong>${target ? cardName(target) : localizedDynamicText(option.label)}</strong>
-              <label>
-                <span>${t("damage", locale())}</span>
-                <input type="number" min="1" max="${remaining}" value="1" data-alpha-target="${option.cardId}" />
-              </label>
-              <button type="button" class="primary" data-action="assign-alpha-strike" data-target="${option.cardId}">${t("confirm", locale())}</button>
+              <div class="damage-target-copy">
+                <strong>${target ? cardName(target) : localizedDynamicText(option.label)}</strong>
+                <span>${t("currentMight", locale())} ${stats.might} · ${t("remainingHealth", locale())} ${stats.remaining}</span>
+              </div>
+              <div class="damage-stepper" aria-label="${escapeHtml(locale() === LOCALES.KO ? "배정할 피해" : "Damage to assign")}">
+                <button type="button" data-action="adjust-alpha-damage" data-target="${escapeHtml(option.cardId || "")}" data-delta="-1" aria-label="${escapeHtml(locale() === LOCALES.KO ? "피해 1 감소" : "Decrease damage")}">−</button>
+                <output>${initial}</output>
+                <input type="number" min="${minimum}" max="${maximum}" value="${initial}" data-alpha-target="${escapeHtml(option.cardId || "")}" data-allowed-amounts="${escapeHtml(amountOptions.map((candidate) => candidate.amount).join(" "))}" aria-label="${escapeHtml(locale() === LOCALES.KO ? "배정 피해" : "Assigned damage")}" readonly />
+                <button type="button" data-action="adjust-alpha-damage" data-target="${escapeHtml(option.cardId || "")}" data-delta="1" aria-label="${escapeHtml(locale() === LOCALES.KO ? "피해 1 증가" : "Increase damage")}">+</button>
+              </div>
+              <button type="button" class="primary damage-assign-button" data-action="assign-alpha-strike" data-target="${escapeHtml(option.cardId || "")}">${locale() === LOCALES.KO ? "이 유닛에 배정" : "Assign here"}</button>
             </div>
           `;
         }).join("")}
@@ -6650,25 +7041,47 @@ function alphaStrikeDamagePanel(choice) {
   `;
 }
 
-function combatDamageOption(info, legal) {
+function combatDamageOption(info, legalOptionId, battlefieldId = null) {
   const card = findVisibleCard(info.cardId);
-  const optionId = legal ? info.cardId : "";
+  const legal = Boolean(legalOptionId);
+  const optionId = legal ? legalOptionId : "";
+  const stats = card ? boardUnitStats(card, battlefieldId) : { might: 0, remaining: 0 };
   const amountLabel = info.amount
     ? (locale() === LOCALES.KO ? `${info.amount} 피해${info.lethalNow ? " · 처치 가능" : ""}` : `${info.amount} damage${info.lethalNow ? " lethal" : ""}`)
     : "";
   return `
     <button
-      class="choice-option card-choice-option combat-choice ${legal ? "" : "disabled-choice"}"
+      class="damage-target-card combat-choice ${legal ? "is-legal" : "is-locked"} ${info.lethalNow ? "is-lethal" : ""}"
       data-action="choose-effect"
       data-choice="${optionId}"
       data-card-id="${info.cardId}"
       ${legal ? "" : "disabled"}
     >
       ${choiceOptionImage({ cardId: info.cardId })}
-      <span>${card ? cardName(card) : (locale() === LOCALES.KO ? "유닛" : "Unit")}</span>
-      <strong>${legal ? amountLabel : localizedDynamicText(info.reason, { fallback: "현재 이 대상에게 피해를 배정할 수 없습니다." })}</strong>
+      <span class="damage-target-copy">
+        <strong>${card ? cardName(card) : (locale() === LOCALES.KO ? "유닛" : "Unit")}</strong>
+        <small>${t("currentMight", locale())} ${stats.might} · ${t("remainingHealth", locale())} ${stats.remaining}</small>
+        <b>${legal ? amountLabel : combatDamageRestrictionLabel(info.reason)}</b>
+      </span>
     </button>
   `;
+}
+
+function combatDamageRestrictionLabel(reason) {
+  const korean = {
+    "Lethal already assigned": "이미 처치 피해가 배정되었습니다",
+    "Backline last": "후열 유닛은 마지막에 배정해야 합니다",
+    "Assign last": "이 유닛은 마지막에 배정해야 합니다",
+    "Tank first": "방벽 유닛에게 먼저 배정해야 합니다",
+    "Assign lethal first": "처치 가능한 유닛부터 배정해야 합니다"
+  };
+  const fallback = locale() === LOCALES.KO ? "현재 이 대상에게 배정할 수 없습니다" : "Damage cannot be assigned here yet";
+  const lethalFirst = locale() === LOCALES.KO
+    ? "먼저 처치 가능한 유닛에 필요한 피해를 배정해 주세요"
+    : "Assign the required lethal damage first";
+  if (!reason) return escapeHtml(lethalFirst);
+  if (locale() === LOCALES.KO) return escapeHtml(korean[reason] || localizedDynamicText(reason, { fallback }) || fallback);
+  return escapeHtml(localizedDynamicText(reason, { fallback }) || fallback);
 }
 
 function choiceOptionImage(option) {
@@ -6983,7 +7396,8 @@ function chainZoneItem(item = {}, order = 0, { active = false } = {}) {
     "chain-zone-item",
     active ? "chain-zone-active" : "chain-zone-queued",
     inspectedChainItemId === itemId ? "is-inspected" : "",
-    `status-${statusClass}`
+    `status-${statusClass}`,
+    choiceCardStateClasses(previewCardId)
   ].filter(Boolean).join(" ");
   const effectMarkup = effectText.summary || effectText.detail
     ? active
@@ -7072,9 +7486,16 @@ function responsePrompt(info) {
       <strong>${escapeHtml(info?.title || t("responseWindow", locale()))}</strong>
       <span>${escapeHtml(info?.detail || t("responseHint", locale()))}</span>
       ${passState ? `<small class="chain-pass-progress">${escapeHtml(passState.progressText)}</small>` : ""}
-      <div class="actions inline">
-        <button class="primary" data-action="toggle-hand">${handOpen ? t("hideHand", locale()) : t("playReaction", locale())}</button>
-      </div>
+    </div>
+  `;
+}
+
+function priorityResponseControls(actionMarkup = "") {
+  const reactionControl = actionMarkup || `<button class="primary" data-action="toggle-hand">${handOpen ? t("hideHand", locale()) : t("playReaction", locale())}</button>`;
+  return `
+    <div class="priority-response-controls" role="group" aria-label="${escapeHtml(locale() === LOCALES.KO ? "반응 또는 패스" : "React or pass")}">
+      ${reactionControl}
+      ${passControlButton()}
     </div>
   `;
 }
@@ -7383,6 +7804,9 @@ function playerSide(player, side) {
   const baseDeaths = unitDeathGhosts("base", player.id);
   const championReference = championIdentityReference(player, seat.champion);
   const paymentSeat = decisionVisibleToViewer(game.pendingPayment) && game.pendingPayment?.playerId === player.id;
+  const baseDropDestination = player.id === viewerPlayerId()
+    ? `data-play-destination="base" data-drop-owner="${escapeHtml(player.id)}"`
+    : "";
   return `
     <section class="player-side table-seat ${side} owner-${seat.id} ${acting ? "acting-player" : ""} ${paymentSeat ? "payment-seat" : ""} ${handGlow}" data-player-id="${escapeHtml(seat.id)}" data-side="${seat.side}">
       <div class="player-identity tabletop-identity-dock">
@@ -7425,7 +7849,7 @@ function playerSide(player, side) {
       </div>
       <div class="base-zone" data-zone="base" data-count="${seat.counts.base}">
         <span class="zone-caption">${t("base", locale())}</span>
-        <div class="base-row ${baseTarget.className}" data-scroll-key="base-${player.id}" ${baseTarget.attrs}>
+        <div class="base-row ${baseTarget.className}" data-scroll-key="base-${player.id}" ${baseDropDestination} ${baseTarget.attrs}>
           ${seat.base.map((card) => boardCard(card, "base")).join("")}${baseDeaths || (!seat.base.length ? `<p class="empty">${t("baseEmpty", locale())}</p>` : "")}
         </div>
       </div>
@@ -7466,7 +7890,7 @@ function miniIdentity(card, player = null) {
   const sourceGlow = uiMotion.sourceIds.has(card?.instanceId) ? " source-card-glow" : "";
   const chainTarget = chainTargetClass(card?.instanceId) ? " chain-effect-target" : "";
   return `
-    <button class="identity-button${championState}${exhausted}${sourceGlow}${chainTarget}" data-action="select-card" data-card="${escapeHtml(card.instanceId || "")}" data-card-id="${escapeHtml(card.instanceId || "")}" data-exhausted="${Boolean(card.exhausted)}" title="${escapeHtml(cardName(card))}">
+    <button class="identity-button${championState}${exhausted}${sourceGlow}${chainTarget} ${choiceCardStateClasses(card.instanceId)}" data-action="select-card" data-card="${escapeHtml(card.instanceId || "")}" data-card-id="${escapeHtml(card.instanceId || "")}" data-exhausted="${Boolean(card.exhausted)}" title="${escapeHtml(cardName(card))}">
       <span class="identity-orientation-layer card-exhaust-layer">
         ${card.image ? `<img src="${escapeHtml(card.image)}" alt="${escapeHtml(cardName(card))}" loading="lazy" />` : `<span class="identity-card-fallback">${escapeHtml(cardName(card))}</span>`}
       </span>
@@ -7514,22 +7938,23 @@ function battlefieldCard(field) {
   const topTarget = targetAttributes(field.instanceId, topPlayer.id);
   const bottomTarget = targetAttributes(field.instanceId, bottomPlayer.id);
   const showdownActive = game.phase === "showdown" && game.showdown?.battlefieldId === field.instanceId;
+  const bottomDropDestination = `data-play-destination="${escapeHtml(field.instanceId)}" data-drop-owner="${escapeHtml(bottomPlayer.id)}"`;
   return `
-    <article class="battlefield location-column ${showdownActive ? "showdown-location" : ""} ${chainTargetClass(field.instanceId)}" data-card-id="${field.instanceId}">
+    <article class="battlefield location-column ${showdownActive ? "showdown-location" : ""} ${chainTargetClass(field.instanceId)} ${choiceCardStateClasses(field.instanceId)}" data-card-id="${field.instanceId}">
       <div class="field-lane top-lane ${topTarget.className}" ${topTarget.attrs}>
         <span class="lane-label">${t("opponentUnits", locale())}</span>
         <div class="field-lane-track" data-scroll-key="field-${field.instanceId}-${topPlayer.id}">
           ${battlefieldLaneContents(topPlayer, field, topUnits, topHidden, "top")}
         </div>
       </div>
-      <div class="field-center location-card">
+      <div class="field-center location-card" ${bottomDropDestination}>
         <div class="field-image">${cardImage(field)}</div>
         <div class="battlefield-head">
           <h2>${battlefieldName(field)}</h2>
           <span>${controller}</span>
         </div>
       </div>
-      <div class="field-lane bottom-lane ${bottomTarget.className}" ${bottomTarget.attrs}>
+      <div class="field-lane bottom-lane ${bottomTarget.className}" ${bottomDropDestination} ${bottomTarget.attrs}>
         <span class="lane-label">${t("yourUnits", locale())}</span>
         <div class="field-lane-track" data-scroll-key="field-${field.instanceId}-${bottomPlayer.id}">
           ${battlefieldLaneContents(bottomPlayer, field, bottomUnits, bottomHidden, "bottom")}
@@ -7590,6 +8015,7 @@ function battlefieldLaneContents(player, field, units, hiddenItems, side) {
 }
 
 function hiddenCardBack(item, field) {
+  if (!item?.card || typeof item.card !== "object") return "";
   const controllerId = hiddenCardControllerId(item);
   const controlledByViewer = viewerPlayerId() === controllerId;
   const visibleByIntel = canViewPrivateInfo(viewerPlayerId(), controllerId);
@@ -7599,23 +8025,23 @@ function hiddenCardBack(item, field) {
   const chainTarget = chainTargetClass(item.card.instanceId) ? " chain-effect-target" : "";
   if (controlledByViewer) {
     return `
-      <button class="hidden-card-back hidden-card-owned owner-${item.ownerId} ${playable ? "usable-card" : ""}${sourceGlow}${targetGlow}${chainTarget}" data-action="select-card" data-card="${item.card.instanceId}" data-card-id="${item.card.instanceId}" title="${cardName(item.card)}">
-        ${cardImage(item.card)}
+      <button class="hidden-card-back hidden-card-visible hidden-card-owned owner-${escapeHtml(item.ownerId || "")} ${playable ? "usable-card" : ""}${sourceGlow}${targetGlow}${chainTarget} ${choiceCardStateClasses(item.card.instanceId)}" data-action="select-card" data-card="${escapeHtml(item.card.instanceId || "")}" data-card-id="${escapeHtml(item.card.instanceId || "")}" title="${escapeHtml(cardName(item.card))}">
+        <span class="hidden-visible-art">${cardImage(item.card)}</span>
         <span class="hidden-label">${t("hiddenZone", locale())}</span>
       </button>
     `;
   }
   if (visibleByIntel && !controlledByViewer) {
     return `
-      <article class="${imageCardClass(item.card, `hidden-revealed owner-${item.ownerId}${sourceGlow}${targetGlow}${chainTarget}`)}" data-card-id="${item.card.instanceId}" title="${cardName(item.card)}">
-        ${cardImage(item.card)}
-        <span class="status-line">${t("revealed", locale())}</span>
+      <article class="hidden-card-back hidden-card-visible hidden-card-intel owner-${escapeHtml(item.ownerId || "")}${sourceGlow}${targetGlow}${chainTarget} ${choiceCardStateClasses(item.card.instanceId)}" data-card-id="${escapeHtml(item.card.instanceId || "")}" title="${escapeHtml(cardName(item.card))}" role="button" tabindex="0">
+        <span class="hidden-visible-art">${cardImage(item.card)}</span>
+        <span class="hidden-label">${t("revealed", locale())}</span>
       </article>
     `;
   }
   const attrs = `title="${t("hiddenZone", locale())}" aria-label="${t("opponentHiddenCard", locale())}"`;
   return `
-    <button class="hidden-card-back owner-${item.ownerId} locked-hidden ${playable ? "usable-card" : ""}${sourceGlow}${targetGlow}${chainTarget}" ${attrs}>
+    <button class="hidden-card-back owner-${escapeHtml(item.ownerId || "")} locked-hidden ${playable ? "usable-card" : ""}${sourceGlow}${targetGlow}${chainTarget}" ${attrs}>
       <span class="card-back-mark">H</span>
       <span class="hidden-label">${controlledByViewer ? t("hiddenZone", locale()) : t("setHidden", locale())}</span>
     </button>
@@ -7680,8 +8106,16 @@ function pendingChoiceCardVisibleToViewer(cardId) {
   if (!choice || !cardId || !decisionVisibleToViewer(choice)) return false;
   const revealed = Array.isArray(choice.data?.revealedCards) ? choice.data.revealedCards : [];
   const options = Array.isArray(choice.options) ? choice.options : [];
+  const disclosedIds = [
+    ...(Array.isArray(choice.data?.revealedIds) ? choice.data.revealedIds : []),
+    ...(Array.isArray(choice.data?.lookedIds) ? choice.data.lookedIds : []),
+    ...(Array.isArray(choice.data?.observedIds) ? choice.data.observedIds : []),
+    ...(Array.isArray(choice.data?.topCardIds) ? choice.data.topCardIds : []),
+    ...(typeof choice.data?.topCardId === "string" ? [choice.data.topCardId] : [])
+  ].map(String);
   return revealed.some((card) => card?.instanceId === cardId && !card.redacted)
-    || options.some((option) => option?.card?.instanceId === cardId && !option.card.redacted);
+    || options.some((option) => option?.card?.instanceId === cardId && !option.card.redacted)
+    || disclosedIds.includes(String(cardId));
 }
 
 function cardVisibleToCurrentViewer(cardOrId) {
@@ -7814,13 +8248,106 @@ function championCard(player) {
 
 function handCard(card, index = 0, total = 1) {
   if (!card || typeof card !== "object") return "";
+  const choiceOption = choiceOptionForCard(card.instanceId);
+  const choiceSurface = game?.pendingChoice ? choiceCardSurface(game.pendingChoice) : "none";
+  const choiceSelectable = Boolean(choiceOption && ["hand", "board"].includes(choiceSurface) && !choiceOption.disabled);
+  const playDestinations = legalHandCardPlayDestinations(card.instanceId);
+  const draggable = !choiceSelectable && playDestinations.length > 0;
   return `
-    <article class="hand-fan-card ${imageCardClass(card, `${card.type || "card"} ${motionCardClass(card, "hand")}`)}" data-card-id="${escapeHtml(card.instanceId || "")}" data-hand-card style="${fanCardStyle(index, total)}" role="button" tabindex="0" aria-label="${escapeHtml(cardName(card))}">
+    <article class="hand-fan-card ${imageCardClass(card, `${card.type || "card"} ${motionCardClass(card, "hand")}`)}" data-card-id="${escapeHtml(card.instanceId || "")}" data-hand-card ${choiceSelectable ? `data-action="stage-choice-card" data-choice="${escapeHtml(choiceOption.id || "")}"` : ""} data-play-destinations="${escapeHtml(playDestinations.join(" "))}" draggable="${draggable}" style="${fanCardStyle(index, total)}" role="button" tabindex="0" aria-label="${escapeHtml(cardName(card))}" aria-pressed="${choiceSelectable ? choiceOptionCardId(stagedChoiceOption()) === card.instanceId : game.selectedCardId === card.instanceId}">
       <div class="card-orientation-layer">
         <div class="card-face-layer">${cardImage(card)}</div>
       </div>
     </article>
   `;
+}
+
+function legalHandCardPlayDestinations(cardId) {
+  if (!cardId || replayMode || game?.pendingChoice || game?.pendingPayment || online.commandPending || !viewerCanAct()) return [];
+  return [...new Set(uiLegalActions
+    .filter((action) => action?.kind === "beginPlayCard" && action.cardId === cardId && typeof action.destination === "string")
+    .filter((action) => tutorialAllowsUiAction("begin-play", { card: cardId, destination: action.destination }))
+    .map((action) => action.destination)
+    .filter(Boolean))];
+}
+
+function requestHandCardPlay(cardId, destination) {
+  const requestedCardId = String(cardId || "");
+  const requestedDestination = String(destination || "");
+  if (!requestedCardId || !requestedDestination) return false;
+  if (!legalHandCardPlayDestinations(requestedCardId).includes(requestedDestination)) return false;
+  const legalAction = uiLegalActions.find((action) =>
+    action?.kind === "beginPlayCard"
+      && action.cardId === requestedCardId
+      && action.destination === requestedDestination
+  );
+  if (!legalAction || !tutorialAllowsUiAction("begin-play", {
+    card: requestedCardId,
+    destination: requestedDestination
+  })) return false;
+  handOpen = false;
+  dispatchGameCommand(
+    { kind: "beginPlayCard", cardId: requestedCardId, destination: requestedDestination },
+    () => beginPlayCard(game, requestedCardId, requestedDestination)
+  );
+  return true;
+}
+
+function legalDropDestinationNode(node, cardId = draggingHandCardId) {
+  const destinationNode = node?.closest?.("[data-play-destination]") || null;
+  if (!destinationNode || !app.contains(destinationNode)) return null;
+  const destination = String(destinationNode.dataset.playDestination || "");
+  return legalHandCardPlayDestinations(cardId).includes(destination) ? destinationNode : null;
+}
+
+function beginHandCardDragPresentation(cardId, sourceNode = null) {
+  const destinations = new Set(legalHandCardPlayDestinations(cardId));
+  if (!cardId || !destinations.size) return false;
+  draggingHandCardId = String(cardId);
+  app.classList.add("is-dragging-card");
+  sourceNode?.classList.add("drag-source-active");
+  for (const node of app.querySelectorAll("[data-play-destination]")) {
+    node.classList.toggle("is-legal-drop", destinations.has(String(node.dataset.playDestination || "")));
+  }
+  return true;
+}
+
+function updateHandCardDragDestination(node) {
+  for (const current of app.querySelectorAll("[data-play-destination].drag-over, [data-play-destination].drop-target-active")) {
+    current.classList.remove("drag-over", "drop-target-active");
+  }
+  const target = legalDropDestinationNode(node);
+  if (target) target.classList.add("drag-over", "drop-target-active");
+  return target;
+}
+
+function clearHandCardDragPresentation() {
+  app.classList.remove("is-dragging-card");
+  for (const node of app.querySelectorAll(".drag-source-active, [data-play-destination].is-legal-drop, [data-play-destination].drag-over, [data-play-destination].drop-target-active")) {
+    node.classList.remove("drag-source-active", "is-legal-drop", "drag-over", "drop-target-active");
+  }
+  pointerHandCardDrag?.ghost?.remove?.();
+  draggingHandCardId = null;
+  pointerHandCardDrag = null;
+}
+
+function createPointerDragGhost(sourceNode) {
+  if (!(sourceNode instanceof HTMLElement)) return null;
+  const ghost = sourceNode.cloneNode(true);
+  ghost.removeAttribute("id");
+  ghost.removeAttribute("draggable");
+  ghost.removeAttribute("tabindex");
+  ghost.removeAttribute("role");
+  ghost.classList.add("hand-card-drag-ghost");
+  ghost.setAttribute("aria-hidden", "true");
+  document.body.appendChild(ghost);
+  return ghost;
+}
+
+function positionPointerDragGhost(ghost, clientX, clientY) {
+  if (!ghost) return;
+  ghost.style.left = `${clientX}px`;
+  ghost.style.top = `${clientY}px`;
 }
 
 function visibleCardStatuses(card) {
@@ -7834,7 +8361,8 @@ function visibleCardStatuses(card) {
 
 function cardStatusBadges(card) {
   const statuses = visibleCardStatuses(card)
-    .filter((status) => !["exhausted", "damage", "attachments"].includes(status.kind));
+    .filter((status) => !["exhausted", "damage", "attachments"].includes(status.kind))
+    .sort((left, right) => Number(right.kind === "empowered") - Number(left.kind === "empowered"));
   if (!statuses.length) return "";
   const visible = statuses.slice(0, 2);
   const remaining = statuses.length - visible.length;
@@ -7977,7 +8505,7 @@ function baseToken(card, location, owner, motion, attachments, flashed) {
     .concat(statusSummary ? [statusSummary] : [])
     .join(" · ");
   return `
-    <article class="unit-token base-token physical-board-card ${card.type}-token owner-${card.ownerId} controller-${card.controllerId} ${attachments.length ? "has-attachments" : ""} ${card.exhausted ? "exhausted" : "ready"} ${cardStatusClassNames(card)} ${unitMightAnimationClass(card)} ${chainTargetClass(card.instanceId)} ${flashed ? "effect-flash" : ""} ${motion}" data-card-id="${card.instanceId}" data-location="${location}" data-current-might="${stats?.might ?? gearMight ?? ""}" data-remaining-health="${stats?.remaining ?? ""}" data-damage="${Number(card.damage) || 0}" data-exhausted="${Boolean(card.exhausted)}" data-stunned="${Boolean(card.stunned)}" role="button" tabindex="0" aria-label="${escapeHtml(accessibleState)}" title="${escapeHtml(accessibleState)}">
+    <article class="unit-token base-token physical-board-card ${card.type}-token owner-${card.ownerId} controller-${card.controllerId} ${attachments.length ? "has-attachments" : ""} ${card.exhausted ? "exhausted" : "ready"} ${cardStatusClassNames(card)} ${unitMightAnimationClass(card)} ${chainTargetClass(card.instanceId)} ${choiceCardStateClasses(card.instanceId)} ${flashed ? "effect-flash" : ""} ${motion}" data-card-id="${card.instanceId}" data-location="${location}" data-current-might="${stats?.might ?? gearMight ?? ""}" data-remaining-health="${stats?.remaining ?? ""}" data-damage="${Number(card.damage) || 0}" data-exhausted="${Boolean(card.exhausted)}" data-stunned="${Boolean(card.stunned)}" role="button" tabindex="0" aria-label="${escapeHtml(accessibleState)}" title="${escapeHtml(accessibleState)}">
       <div class="card-exhaust-layer">
         <div class="card-face-layer">
           <div class="unit-token-art">
@@ -8009,7 +8537,7 @@ function unitToken(card, location, owner, motion, attachments, flashed) {
     statusSummary
   ].filter(Boolean).join(" · ");
   return `
-    <article class="unit-token ${zoneClass} physical-board-card owner-${card.ownerId} controller-${card.controllerId} ${attachments.length ? "has-attachments" : ""} ${card.exhausted ? "exhausted" : "ready"} ${cardStatusClassNames(card)} ${unitMightAnimationClass(card)} ${chainTargetClass(card.instanceId)} ${flashed ? "effect-flash" : ""} ${motion}" data-card-id="${card.instanceId}" data-location="${location}" data-current-might="${stats.might}" data-remaining-health="${stats.remaining}" data-damage="${Number(card.damage) || 0}" data-exhausted="${Boolean(card.exhausted)}" data-stunned="${Boolean(card.stunned)}" role="button" tabindex="0" aria-label="${escapeHtml(accessibleState)}" title="${escapeHtml(accessibleState)}">
+    <article class="unit-token ${zoneClass} physical-board-card owner-${card.ownerId} controller-${card.controllerId} ${attachments.length ? "has-attachments" : ""} ${card.exhausted ? "exhausted" : "ready"} ${cardStatusClassNames(card)} ${unitMightAnimationClass(card)} ${chainTargetClass(card.instanceId)} ${choiceCardStateClasses(card.instanceId)} ${flashed ? "effect-flash" : ""} ${motion}" data-card-id="${card.instanceId}" data-location="${location}" data-current-might="${stats.might}" data-remaining-health="${stats.remaining}" data-damage="${Number(card.damage) || 0}" data-exhausted="${Boolean(card.exhausted)}" data-stunned="${Boolean(card.stunned)}" role="button" tabindex="0" aria-label="${escapeHtml(accessibleState)}" title="${escapeHtml(accessibleState)}">
       <div class="card-exhaust-layer">
         <div class="card-face-layer">
           <div class="unit-token-art">
@@ -8055,7 +8583,7 @@ function attachmentStrip(attachments) {
       ${safeAttachments.map((gear) => {
         const state = attachedGearCompactState(gear);
         return `
-        <button class="attached-gear ${gear.exhausted ? "exhausted" : "ready"} ${cardStatusClassNames(gear)} ${game.selectedCardId === gear.instanceId ? "selected-attachment" : ""} ${chainTargetClass(gear.instanceId)}" data-action="select-card" data-card="${escapeHtml(gear.instanceId || "")}" data-card-id="${escapeHtml(gear.instanceId || "")}" data-current-might="${state.might}" data-exhausted="${Boolean(gear.exhausted)}" title="${escapeHtml(`${cardName(gear)} · ${state.summary}`)}">
+        <button class="attached-gear ${gear.exhausted ? "exhausted" : "ready"} ${cardStatusClassNames(gear)} ${game.selectedCardId === gear.instanceId ? "selected-attachment" : ""} ${chainTargetClass(gear.instanceId)} ${choiceCardStateClasses(gear.instanceId)}" data-action="select-card" data-card="${escapeHtml(gear.instanceId || "")}" data-card-id="${escapeHtml(gear.instanceId || "")}" data-current-might="${state.might}" data-exhausted="${Boolean(gear.exhausted)}" title="${escapeHtml(`${cardName(gear)} · ${state.summary}`)}">
           <span class="attachment-orientation-layer">
             ${gear.image ? `<img src="${escapeHtml(gear.image)}" alt="${escapeHtml(cardName(gear))}" loading="lazy" />` : `<span>${escapeHtml(cardName(gear))}</span>`}
             <span class="attached-gear-board-overlay" aria-hidden="true">
@@ -8162,7 +8690,8 @@ function imageCard(card, className = "") {
 function imageCardClass(card, extra = "") {
   const sourceGlow = uiMotion.sourceIds.has(card?.instanceId) ? "source-card-glow" : "";
   const targetGlow = uiMotion.targetIds.has(card?.instanceId) ? "target-card-glow" : "";
-  return `image-card ${extra} ${sourceGlow} ${targetGlow} ${chainTargetClass(card?.instanceId)} ${isUsableCard(card) ? "usable-card" : ""} ${game.selectedCardId === card.instanceId ? "selected-card" : ""}`.trim();
+  const choiceClasses = choiceCardStateClasses(card?.instanceId);
+  return `image-card ${extra} ${sourceGlow} ${targetGlow} ${chainTargetClass(card?.instanceId)} ${isUsableCard(card) ? "usable-card" : ""} ${game.selectedCardId === card?.instanceId ? "selected-card" : ""} ${choiceClasses}`.trim();
 }
 
 function chainTargetClass(cardId) {
@@ -8292,13 +8821,13 @@ function actionBar(player, card) {
           <span>${waiting ? t("waitingForOpponent", locale()) : rejection?.detail || responseInfo?.detail || chainSummary?.detail || (disabled ? t("finishDialog", locale()) : t("selectCardHint", locale()))}</span>
         </div>
         <div class="actions inline action-command-list" data-scroll-key="action-${escapeHtml(card?.instanceId || "global")}">
-          ${waiting ? `<button disabled>${t("noAction", locale())}</button>` : responseInfo ? `<button class="primary" data-action="toggle-hand">${handOpen ? t("hideHand", locale()) : t("playReaction", locale())}</button>` : quickActions.join("") || `<button disabled>${t("noAction", locale())}</button>`}
+          ${waiting ? `<button disabled>${t("noAction", locale())}</button>` : responseInfo ? priorityResponseControls() : quickActions.join("") || `<button disabled>${t("noAction", locale())}</button>`}
         </div>
         <div class="bar-controls table-action-rail">
           <button data-action="toggle-inspector" ${card ? "" : "disabled"}>${t("cardInfo", locale())}</button>
           <button class="primary" data-action="toggle-hand">${handOpen ? t("hideHand", locale()) : `${t("hand", locale())} ${cardCount}`}</button>
           ${chainSummary
-            ? passControlButton({ disabled: waiting || disabled })
+            ? (responseInfo ? "" : passControlButton({ disabled: waiting || disabled }))
             : `<button data-action="end-turn" ${game.phase !== "action" || waiting || disabled ? "disabled" : ""}>${t("endTurn", locale())}</button>`}
         </div>
       </section>
@@ -8314,13 +8843,13 @@ function actionBar(player, card) {
         <span>${rejection?.detail || (responseInfo ? `${responseInfo.detail} / ${t("selected", locale())}: ${cardName(card)}` : chainSummary ? `${chainSummary.detail} / ${t("selected", locale())}: ${cardName(card)}` : actionHint(card, context, actions))}</span>
       </div>
       <div class="actions inline action-command-list" data-scroll-key="action-${escapeHtml(card.instanceId || "selected")}">
-        ${actions.join("") || `<button disabled>${t("noAction", locale())}</button>`}
+        ${responseInfo ? priorityResponseControls(actions.join("")) : actions.join("") || `<button disabled>${t("noAction", locale())}</button>`}
       </div>
       <div class="bar-controls table-action-rail">
         <button data-action="toggle-inspector">${t("cardInfo", locale())}</button>
         <button class="primary" data-action="toggle-hand">${handOpen ? t("hideHand", locale()) : `${t("hand", locale())} ${cardCount}`}</button>
         ${chainSummary
-          ? passControlButton({ disabled })
+          ? (responseInfo ? "" : passControlButton({ disabled }))
           : `<button data-action="end-turn" ${game.phase !== "action" || !viewerCanAct() ? "disabled" : ""}>${t("endTurn", locale())}</button>`}
       </div>
     </section>
@@ -8594,7 +9123,6 @@ function canUseTarget(card, context, destination, ownerId) {
   if (ownerId !== viewerPlayerId()) return false;
   if (context.playerId !== viewerPlayerId()) return false;
   if (context.zone === "hand") {
-    if (card.type !== "unit") return false;
     return uiLegalActions.some((action) =>
       action.kind === "beginPlayCard" && action.cardId === card.instanceId && action.destination === destination);
   }
@@ -8663,7 +9191,6 @@ function runeSummary(player) {
 function runeChip(rune, index = 0, total = 1, playerId = "") {
   if (!rune || typeof rune !== "object") return "";
   const spent = rune.exhausted ? " spent" : "";
-  const canRecycle = uiCardEffects(rune).some((effect) => effect.timing === "activated" && effect.kind === "addPower" && effect.exhaust === false);
   const payment = directRunePaymentState(rune, playerId);
   const paymentClasses = payment.active
     ? [
@@ -8679,14 +9206,12 @@ function runeChip(rune, index = 0, total = 1, playerId = "") {
     ? "왼쪽 클릭: 에너지로 탈진 · 오른쪽 클릭: 힘으로 재활용"
     : "Left-click: exhaust for Energy · Right-click: recycle for Power";
   return `
-    <button type="button" class="rune rune-card-chip${spent} ${paymentClasses}" data-action="${payment.active ? "pay-rune" : "select-card"}" data-mode="${payment.active ? "energy" : ""}" data-direct-payment-rune="${payment.active}" data-card="${escapeHtml(rune.instanceId || "")}" data-card-id="${escapeHtml(rune.instanceId || "")}" data-rune="${escapeHtml(rune.instanceId || "")}" data-rune-card data-payment-energy="${payment.canPayEnergy}" data-payment-power="${payment.canPayPower}" style="--rune:${rune.color || RUNE_COLORS.Any};--rune-index:${index};--rune-count:${Math.max(1, total)}" title="${escapeHtml(payment.active ? `${cardText(rune)} · ${paymentHelp}` : cardText(rune))}" aria-pressed="${payment.active ? payment.energySelected || payment.powerSelected : game.selectedCardId === rune.instanceId}" ${payment.active ? `aria-describedby="payment-stage-help"` : ""}>
+    <button type="button" class="rune rune-card-chip${spent} ${paymentClasses} ${choiceCardStateClasses(rune.instanceId)}" data-action="${payment.active ? "pay-rune" : "select-card"}" data-mode="${payment.active ? "energy" : ""}" data-direct-payment-rune="${payment.active}" data-card="${escapeHtml(rune.instanceId || "")}" data-card-id="${escapeHtml(rune.instanceId || "")}" data-rune="${escapeHtml(rune.instanceId || "")}" data-rune-card data-payment-energy="${payment.canPayEnergy}" data-payment-power="${payment.canPayPower}" style="--rune:${rune.color || RUNE_COLORS.Any};--rune-index:${index};--rune-count:${Math.max(1, total)}" title="${escapeHtml(payment.active ? `${cardText(rune)} · ${paymentHelp}` : cardText(rune))}" aria-pressed="${payment.active ? payment.energySelected || payment.powerSelected : choiceOptionCardId(stagedChoiceOption()) === rune.instanceId || game.selectedCardId === rune.instanceId}" ${payment.active ? `aria-describedby="payment-stage-help"` : ""}>
       <span class="rune-orientation-layer">
         ${rune.image ? `<img src="${escapeHtml(rune.image)}" alt="${escapeHtml(cardName(rune))}" loading="lazy" />` : `<span class="rune-swatch"></span>`}
         <span class="rune-card-caption">${domainText(rune.domain)}</span>
         ${payment.energySelected ? `<strong class="payment-rune-mode energy-mode">${t("energy", locale())}</strong>` : ""}
         ${payment.powerSelected ? `<strong class="payment-rune-mode power-mode">${t("power", locale())}</strong>` : ""}
-        ${rune.exhausted ? `<strong>${t("exhausted", locale())}</strong>` : ""}
-        ${rune.exhausted && canRecycle ? `<small class="rune-recycle-ready">${locale() === LOCALES.KO ? "재활용 가능" : "Can recycle"}</small>` : ""}
       </span>
     </button>
   `;
@@ -8712,7 +9237,8 @@ function inspector(card) {
     return locale() === LOCALES.KO ? `${item.amount} ${domain} ${t("power", locale())}` : `${item.amount} ${domain}`;
   }).join(", ");
   const cost = card.type === "rune" ? domainText(card.domain) : `${card.energy ?? "-"}${power ? ` + ${power}` : ""}`;
-  const attachments = card.attachments || [];
+  const attachments = Array.isArray(card.attachments) ? card.attachments.filter(Boolean) : [];
+  const rulesText = String(cardText(card) || "").trim();
   return `
     <aside class="inspector inspector-panel" data-scroll-key="inspector">
       <div class="inspector-toolbar">
@@ -8723,11 +9249,11 @@ function inspector(card) {
         ${card.image ? `<img src="${card.image}" alt="${cardName(card)}" />` : ""}
       </div>
       <div class="inspector-text">
-        <h2>${cardName(card)}</h2>
-        <span>${cardTags(card).join(" / ")} / ${cost}</span>
+        <h2>${escapeHtml(cardName(card))}</h2>
+        <span>${escapeHtml(cardTags(card).join(" / "))} / ${escapeHtml(cost)}</span>
         ${["unit", "gear"].includes(card.type) ? `<strong>${t("might", locale())} ${card.type === "unit" ? inspectorUnitMight(card) : card.might || 0}</strong>` : ""}
-        <p>${shortCardText(cardText(card))}</p>
-        ${(card.keywords || []).length ? `<small>${keywordText(card.keywords)}</small>` : ""}
+        <p class="inspector-rules-text">${escapeHtml(rulesText)}</p>
+        ${(card.keywords || []).length ? `<small>${escapeHtml(keywordText(card.keywords))}</small>` : ""}
         ${cardStatusPanel(card, { compact: true })}
         <button class="secondary view-full-card" data-action="view-full-card">${t("viewFullCard", locale())}</button>
         ${attachments.length ? `
@@ -8766,14 +9292,6 @@ function attachedGearPanel(attachments) {
       </div>
     </div>
   `;
-}
-
-function shortCardText(text) {
-  return text
-    .split(/\n+/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .join("\n");
 }
 
 function fullCardModal(card) {
@@ -8824,6 +9342,10 @@ function dismissTopUiLayer() {
     return true;
   }
   if (modalKey.startsWith("choice-") && !replayMode && game.pendingChoice?.optional && decisionVisibleToViewer(game.pendingChoice)) {
+    dispatchGameCommand({ kind: "declineEffectChoice" }, () => declineEffectChoice(game));
+    return true;
+  }
+  if (!modalKey && !replayMode && game.pendingChoice?.optional && decisionVisibleToViewer(game.pendingChoice)) {
     dispatchGameCommand({ kind: "declineEffectChoice" }, () => declineEffectChoice(game));
     return true;
   }
@@ -8893,6 +9415,106 @@ function isFlashed(cardId) {
   return game.effectFlash?.sourceId === cardId || game.effectFlash?.targetIds?.includes(cardId);
 }
 
+app.addEventListener("dragstart", (event) => {
+  try {
+    if (replayMode || appView !== "game") return;
+    const cardNode = event.target.closest?.("[data-hand-card][draggable='true']");
+    const cardId = String(cardNode?.dataset.cardId || "");
+    if (!cardNode || !cardId || !beginHandCardDragPresentation(cardId, cardNode)) {
+      event.preventDefault();
+      return;
+    }
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = "move";
+      // The payload is deliberately opaque. The approved in-memory card id and
+      // the current legal action list are the authority at drop time.
+      event.dataTransfer.setData("text/plain", "riftbound-hand-card");
+      event.dataTransfer.setDragImage(cardNode, Math.round(cardNode.offsetWidth / 2), Math.round(cardNode.offsetHeight / 2));
+    }
+  } catch (error) {
+    clearHandCardDragPresentation();
+    reportUiException(error, "hand card drag start");
+  }
+});
+
+app.addEventListener("dragover", (event) => {
+  if (!draggingHandCardId) return;
+  const target = updateHandCardDragDestination(event.target);
+  if (!target) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+});
+
+app.addEventListener("drop", (event) => {
+  if (!draggingHandCardId) return;
+  const cardId = draggingHandCardId;
+  const target = legalDropDestinationNode(event.target, cardId);
+  event.preventDefault();
+  event.stopPropagation();
+  const destination = String(target?.dataset.playDestination || "");
+  clearHandCardDragPresentation();
+  if (destination) requestHandCardPlay(cardId, destination);
+  render();
+});
+
+app.addEventListener("dragend", () => clearHandCardDragPresentation());
+
+app.addEventListener("pointerdown", (event) => {
+  if (event.pointerType === "mouse" || !event.isPrimary || event.button !== 0 || replayMode || appView !== "game") return;
+  const cardNode = event.target.closest?.("[data-hand-card]");
+  const cardId = String(cardNode?.dataset.cardId || "");
+  if (!cardNode || !legalHandCardPlayDestinations(cardId).length) return;
+  pointerHandCardDrag = {
+    pointerId: event.pointerId,
+    cardId,
+    sourceNode: cardNode,
+    startX: event.clientX,
+    startY: event.clientY,
+    dragging: false,
+    ghost: null
+  };
+  cardNode.setPointerCapture?.(event.pointerId);
+});
+
+app.addEventListener("pointermove", (event) => {
+  const session = pointerHandCardDrag;
+  if (!session || session.pointerId !== event.pointerId) return;
+  const distance = Math.hypot(event.clientX - session.startX, event.clientY - session.startY);
+  if (!session.dragging && distance >= 10) {
+    if (!beginHandCardDragPresentation(session.cardId, session.sourceNode)) {
+      clearHandCardDragPresentation();
+      return;
+    }
+    session.dragging = true;
+    session.ghost = createPointerDragGhost(session.sourceNode);
+  }
+  if (!session.dragging) return;
+  event.preventDefault();
+  positionPointerDragGhost(session.ghost, event.clientX, event.clientY);
+  updateHandCardDragDestination(document.elementFromPoint(event.clientX, event.clientY));
+}, { passive: false });
+
+app.addEventListener("pointerup", (event) => {
+  const session = pointerHandCardDrag;
+  if (!session || session.pointerId !== event.pointerId) return;
+  if (!session.dragging) {
+    pointerHandCardDrag = null;
+    return;
+  }
+  event.preventDefault();
+  const dropNode = legalDropDestinationNode(document.elementFromPoint(event.clientX, event.clientY), session.cardId);
+  const destination = String(dropNode?.dataset.playDestination || "");
+  const cardId = session.cardId;
+  suppressCardClickUntil = Date.now() + 650;
+  clearHandCardDragPresentation();
+  if (destination) requestHandCardPlay(cardId, destination);
+  render();
+});
+
+app.addEventListener("pointercancel", (event) => {
+  if (pointerHandCardDrag?.pointerId === event.pointerId) clearHandCardDragPresentation();
+});
+
 app.addEventListener("click", (event) => {
   try {
     if (handlePendingChoiceClick(event)) return;
@@ -8904,23 +9526,96 @@ app.addEventListener("click", (event) => {
 
 function handlePendingChoiceClick(event) {
   if (replayMode || appView !== "game" || !game.pendingChoice) return false;
-  const button = event.target.closest("button[data-action='choose-effect'], button[data-action='decline-effect'], button[data-action='assign-alpha-strike']");
-  if (!button || !app.contains(button)) return false;
+  const button = event.target.closest("button[data-action='choose-effect'], button[data-action='decline-effect'], button[data-action='assign-alpha-strike'], button[data-action='adjust-alpha-damage'], button[data-action='confirm-staged-choice'], button[data-action='toggle-choice-drawer'], button[data-action='stage-choice-option'], button[data-action='toggle-hand'], button[data-action='view-choice-card'], button[data-action='close-full-card'], [data-action='stage-choice-card']");
+  const inlineCard = ["hand", "board"].includes(choiceCardSurface(game.pendingChoice))
+    ? event.target.closest("[data-card-id]")
+    : null;
+  const control = button || inlineCard;
+  if (!control || !app.contains(control)) return false;
   event.preventDefault();
   event.stopPropagation();
   event.stopImmediatePropagation();
 
-  const { action, choice } = button.dataset;
-  if (!tutorialAllowsUiAction(action, { ...button.dataset })) {
+  const action = button?.dataset.action || "stage-choice-card";
+  const choice = button?.dataset.choice;
+  const localChoiceUiAction = [
+    "stage-choice-card", "stage-choice-option", "toggle-choice-drawer", "toggle-hand", "adjust-alpha-damage",
+    "view-choice-card", "close-full-card", "confirm-staged-choice"
+  ].includes(action);
+  if (!localChoiceUiAction && !tutorialAllowsUiAction(action, { ...(button?.dataset || control.dataset || {}) })) {
+    render();
+    return true;
+  }
+  if (action === "toggle-choice-drawer") {
+    choiceDrawerCollapsed = !choiceDrawerCollapsed;
+    render();
+    return true;
+  }
+  if (action === "toggle-hand") {
+    handOpen = !handOpen;
+    render();
+    return true;
+  }
+  if (action === "stage-choice-option") {
+    setStagedChoiceOption(choice);
+    render();
+    return true;
+  }
+  if (action === "stage-choice-card") {
+    if (control.dataset.stageMode === "option") stageChoiceOption(choice);
+    else stageChoiceCard(control.dataset.cardId);
+    render();
+    return true;
+  }
+  if (action === "confirm-staged-choice") {
+    const selected = stagedChoiceOption();
+    if (selected && tutorialAllowsUiAction("choose-effect", { choice: selected.id, card: choiceOptionCardId(selected) })) {
+      stagedChoiceOptionId = null;
+      dispatchGameCommand({ kind: "chooseEffectOption", optionId: selected.id }, () => chooseEffectOption(game, selected.id));
+    }
+    render();
+    return true;
+  }
+  if (action === "adjust-alpha-damage") {
+    const input = app.querySelector(`input[data-alpha-target="${button.dataset.target}"]`);
+    if (input) {
+      const allowed = String(input.dataset.allowedAmounts || "")
+        .split(/\s+/)
+        .map(Number)
+        .filter((amount) => Number.isFinite(amount) && amount > 0)
+        .sort((left, right) => left - right);
+      const current = Number(input.value);
+      const currentIndex = Math.max(0, allowed.findIndex((amount) => amount === current));
+      const direction = Math.sign(Number(button.dataset.delta) || 0);
+      const nextIndex = Math.max(0, Math.min(allowed.length - 1, currentIndex + direction));
+      const next = allowed[nextIndex] || current || 1;
+      input.value = String(next);
+      const output = button.closest(".damage-stepper")?.querySelector("output");
+      if (output) output.textContent = String(next);
+    }
+    return true;
+  }
+  if (action === "view-choice-card") {
+    fullCardPreviewCard = findChoicePreviewCard(button.dataset.cardId);
+    fullCardOpen = Boolean(fullCardPreviewCard);
+    render();
+    return true;
+  }
+  if (action === "close-full-card") {
+    fullCardOpen = false;
+    fullCardPreviewCard = null;
     render();
     return true;
   }
   if (action === "choose-effect") dispatchGameCommand({ kind: "chooseEffectOption", optionId: choice }, () => chooseEffectOption(game, choice));
   if (action === "assign-alpha-strike") {
     const input = app.querySelector(`input[data-alpha-target="${button.dataset.target}"]`);
-    const amount = Math.max(1, Math.min(Number(input?.value) || 1, game.pendingChoice.data?.remainingDamage || 1));
-    const optionId = `${button.dataset.target}:${amount}`;
-    dispatchGameCommand({ kind: "chooseEffectOption", optionId }, () => chooseEffectOption(game, optionId));
+    const requested = Math.max(1, Number(input?.value) || 1);
+    const targetOptions = validChoiceOptions(game.pendingChoice)
+      .filter((option) => choiceOptionCardId(option) === button.dataset.target && Number(option.amount) > 0 && !option.disabled);
+    const legalOption = targetOptions.find((option) => Number(option.amount) === requested)
+      || targetOptions.sort((left, right) => Math.abs(Number(left.amount) - requested) - Math.abs(Number(right.amount) - requested))[0];
+    if (legalOption) dispatchGameCommand({ kind: "chooseEffectOption", optionId: legalOption.id }, () => chooseEffectOption(game, legalOption.id));
   }
   if (action === "decline-effect") dispatchGameCommand({ kind: "declineEffectChoice" }, () => declineEffectChoice(game));
   render();
@@ -8953,6 +9648,11 @@ app.addEventListener("contextmenu", (event) => {
 
 app.addEventListener("click", (event) => {
   try {
+    if (Date.now() < suppressCardClickUntil && event.target.closest?.("[data-hand-card], .hand-drawer")) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
     if (appView !== "game") {
       if (isTextEditingTarget(event.target)) return;
       handleShellClick(event);
@@ -8964,6 +9664,14 @@ app.addEventListener("click", (event) => {
 
     if (replayMode) {
       handleReplayGameClick(event);
+      render();
+      return;
+    }
+
+    // Every legal pending-choice interaction is handled by the capturing
+    // choice controller above. Suppress unrelated board commands while a
+    // decision is open so a bottom drawer behaves as a true focused step.
+    if (game.pendingChoice) {
       render();
       return;
     }
@@ -8982,7 +9690,7 @@ app.addEventListener("click", (event) => {
     if (payRunes) paymentRunesScrollLeft = payRunes.scrollLeft;
 
     const { button, cardNode, targetZone } = resolveBoardClickTarget(event.target);
-    if (cardNode && button?.dataset.directPaymentRune !== "true") setUiSelectedCard(cardNode.dataset.cardId);
+    if (cardNode && button?.dataset.directPaymentRune !== "true") toggleUiSelectedCard(cardNode.dataset.cardId);
 
     if (targetZone) {
       const { zoneAction, card, unit, destination } = targetZone.dataset;
@@ -8991,8 +9699,7 @@ app.addEventListener("click", (event) => {
         return;
       }
       if (zoneAction === "begin-play") {
-        handOpen = false;
-        dispatchGameCommand({ kind: "beginPlayCard", cardId: card, destination }, () => beginPlayCard(game, card, destination));
+        requestHandCardPlay(card, destination);
       }
       if (zoneAction === "begin-champion") {
         handOpen = false;
@@ -9128,8 +9835,7 @@ app.addEventListener("click", (event) => {
     if (action === "confirm-online-result") onlineLeaveRoom();
     if (action === "pass-showdown") dispatchGameCommand({ kind: "passShowdown" }, () => passShowdown(game, activePlayerId()));
     if (action === "begin-play") {
-      handOpen = false;
-      dispatchGameCommand({ kind: "beginPlayCard", cardId: card, destination }, () => beginPlayCard(game, card, destination));
+      requestHandCardPlay(card, destination);
     }
     if (action === "begin-play-from-trash") {
       graveyardOpenPlayerId = null;
@@ -9170,7 +9876,7 @@ app.addEventListener("click", (event) => {
     }
     if (action === "select-card") {
       if (game.selectedCardId !== card) attachmentsOpenCardId = null;
-      setUiSelectedCard(card);
+      toggleUiSelectedCard(card);
     }
     render();
   } catch (error) {
@@ -9203,7 +9909,11 @@ app.addEventListener("keydown", (event) => {
   const cardNode = event.target.closest?.("[data-card-id][role='button']");
   if (!cardNode || !app.contains(cardNode)) return;
   event.preventDefault();
-  setUiSelectedCard(cardNode.dataset.cardId);
+  if (game.pendingChoice && ["hand", "board"].includes(choiceCardSurface(game.pendingChoice))) {
+    stageChoiceCard(cardNode.dataset.cardId);
+  } else {
+    toggleUiSelectedCard(cardNode.dataset.cardId);
+  }
   render();
 });
 

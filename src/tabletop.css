@@ -7848,3 +7848,1492 @@
     max-height: calc(100% - 8px);
   }
 }
+
+/* Selection, inspection, and direct-manipulation seal --------------------
+   These rules are deliberately last. Card choices use the board and hand as
+   their input surface; only pile searches become a wide drawer above the
+   hand. Utility browsing remains a narrow, non-blocking right shelf. */
+
+/* Readiness is communicated by a 90-degree in-plane turn. It must never make
+   the art harder to read. Disabled payment/choice states use borders and a
+   subtle hatch instead of opacity or colour removal. */
+.tabletop-layout :is(
+  .identity-button.exhausted,
+  .rune-card-chip.spent,
+  .unit-token.exhausted,
+  .image-card.exhausted,
+  .physical-board-card.exhausted,
+  .attached-gear.exhausted,
+  .attached-gear[data-exhausted="true"],
+  .attached-gear-card.exhausted,
+  .attached-gear-card[data-exhausted="true"]
+) {
+  opacity: 1 !important;
+  filter: none !important;
+}
+
+.tabletop-layout .identity-button.exhausted > .identity-orientation-layer,
+.tabletop-layout .rune-card-chip.spent > .rune-orientation-layer,
+.tabletop-layout .unit-token.exhausted .card-exhaust-layer,
+.tabletop-layout .image-card.exhausted .card-exhaust-layer,
+.tabletop-layout .physical-board-card.exhausted > .card-exhaust-layer,
+.tabletop-layout :is(
+  .attached-gear.exhausted,
+  .attached-gear[data-exhausted="true"],
+  .attached-gear-card.exhausted,
+  .attached-gear-card[data-exhausted="true"]
+) > .attachment-orientation-layer {
+  opacity: 1 !important;
+  filter: none !important;
+}
+
+.tabletop-layout :is(
+  .identity-button.exhausted,
+  .rune-card-chip.spent,
+  .unit-token.exhausted,
+  .image-card.exhausted,
+  .physical-board-card.exhausted,
+  .attached-gear.exhausted,
+  .attached-gear[data-exhausted="true"],
+  .attached-gear-card.exhausted,
+  .attached-gear-card[data-exhausted="true"]
+) :is(img, .card-art, .card-face-layer, .unit-token-art) {
+  opacity: 1 !important;
+  filter: none !important;
+}
+
+.tabletop-layout .payment-rune-choice.payment-unavailable,
+.tabletop-layout .choice-card-disabled,
+.tabletop-layout .choice-drawer-card:disabled,
+.tabletop-layout .damage-target-card:disabled {
+  opacity: 1 !important;
+  filter: none !important;
+}
+
+.tabletop-layout .payment-rune-choice.payment-unavailable > .rune-orientation-layer {
+  border-color: rgba(130, 151, 165, 0.72);
+  box-shadow: inset 0 0 0 2px rgba(4, 13, 22, 0.42);
+}
+
+.tabletop-layout .payment-rune-choice.payment-unavailable::after {
+  content: "";
+  position: absolute;
+  z-index: 7;
+  inset: 2px;
+  border-radius: inherit;
+  background: repeating-linear-gradient(
+    -45deg,
+    transparent 0 7px,
+    rgba(3, 10, 17, 0.32) 7px 11px
+  );
+  pointer-events: none;
+}
+
+/* Hidden battlefield cards always occupy a horizontal card footprint. Cards
+   the viewer is allowed to identify show their portrait art turned in-plane
+   and softly obscured; an unknown card remains a crisp card back. */
+.tabletop-layout :is(.hidden-card-back, .hidden-revealed, .hidden-card-visible) {
+  position: relative;
+  flex: 0 0 clamp(98px, 7.3vw, 136px);
+  width: clamp(98px, 7.3vw, 136px);
+  min-width: clamp(98px, 7.3vw, 136px);
+  height: auto;
+  min-height: 0;
+  aspect-ratio: 7 / 5;
+  overflow: hidden;
+  border-radius: 7px;
+  opacity: 1 !important;
+  filter: none !important;
+}
+
+.tabletop-layout :is(
+  .hidden-card-back.hidden-card-owned,
+  .hidden-card-back.hidden-card-visible,
+  .hidden-revealed
+) > :is(.card-art, img),
+.tabletop-layout .hidden-card-visible > .hidden-visible-art > :is(.card-art, img),
+.tabletop-layout :is(
+  .hidden-card-back.hidden-card-owned,
+  .hidden-card-back.hidden-card-visible,
+  .hidden-revealed
+) .card-face-layer > :is(.card-art, img) {
+  position: absolute;
+  top: -20%;
+  left: 14.285%;
+  width: 71.43%;
+  height: 140%;
+  max-width: none;
+  max-height: none;
+  object-fit: cover;
+  object-position: center 20%;
+  opacity: 0.78 !important;
+  filter: blur(0.8px) saturate(0.72) brightness(0.76) !important;
+  transform: rotate(90deg) !important;
+  transform-origin: center;
+}
+
+.tabletop-layout .hidden-card-visible > .hidden-visible-art {
+  position: absolute;
+  inset: 0;
+  display: block;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.tabletop-layout :is(.hidden-card-back, .hidden-revealed, .hidden-card-visible) .hidden-label,
+.tabletop-layout .hidden-revealed .status-line {
+  position: absolute;
+  z-index: 4;
+  right: 4px;
+  bottom: 4px;
+  left: 4px;
+  overflow: hidden;
+  border: 1px solid rgba(125, 196, 226, 0.44);
+  border-radius: 4px;
+  padding: 3px 5px;
+  color: #eaf8ff;
+  font-size: var(--tt-font-meta, 11px);
+  font-weight: 900;
+  line-height: 1;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: rgba(2, 13, 23, 0.88);
+}
+
+.tabletop-layout .hidden-card-back.locked-hidden {
+  border-color: rgba(103, 177, 210, 0.62);
+  background:
+    linear-gradient(145deg, rgba(11, 55, 76, 0.98), rgba(3, 20, 34, 0.99)),
+    repeating-linear-gradient(45deg, transparent 0 8px, rgba(100, 196, 230, 0.13) 8px 10px);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.42), inset 0 0 0 2px rgba(115, 202, 233, 0.1);
+}
+
+.tabletop-layout .hidden-card-back.locked-hidden .card-back-mark {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: rgba(211, 244, 255, 0.8);
+  font-size: clamp(20px, 2vw, 30px);
+  font-weight: 1000;
+}
+
+/* Inline hand/board selection. All cards remain fully coloured. The staged
+   card lifts and receives the only strong glow, so a second click visibly
+   restores the unselected state. */
+.tabletop-layout .choice-card-selectable,
+.tabletop-layout .choice-card-disabled,
+.tabletop-layout .choice-card-staged,
+.tabletop-layout .choice-card-committed {
+  opacity: 1 !important;
+  filter: none !important;
+}
+
+.tabletop-layout .choice-card-selectable {
+  cursor: pointer;
+  outline: 2px solid rgba(94, 211, 255, 0.86);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 2px rgba(3, 19, 30, 0.82), 0 0 18px rgba(62, 193, 245, 0.5);
+}
+
+.tabletop-layout .choice-card-selectable:not(.choice-card-staged) {
+  animation: tabletop-choice-pulse 1.6s ease-in-out infinite;
+}
+
+.tabletop-layout .choice-card-staged,
+.tabletop-layout .choice-card-committed {
+  z-index: 74 !important;
+  outline: 3px solid #ffd75e;
+  outline-offset: 3px;
+  box-shadow: 0 0 0 2px rgba(3, 17, 27, 0.9), 0 0 27px rgba(255, 205, 63, 0.78);
+}
+
+.tabletop-layout .hand-fan-card.choice-card-staged,
+.tabletop-layout .hand-fan-card.choice-card-committed {
+  transform: translateY(-38px) rotate(0deg) scale(1.075) !important;
+}
+
+.tabletop-layout .choice-card-disabled {
+  cursor: not-allowed;
+  outline: 2px dashed rgba(139, 159, 171, 0.62);
+  outline-offset: 1px;
+  box-shadow: inset 0 0 0 2px rgba(1, 10, 17, 0.42);
+}
+
+.tabletop-layout .unit-state-badge[data-status-kind="empowered"] {
+  position: relative;
+  order: -20;
+  width: max-content;
+  max-width: calc(100% - 2px);
+  min-height: 19px;
+  overflow: visible;
+  border: 1px solid #fff1a1;
+  padding: 3px 6px 3px 18px;
+  color: #241400;
+  font-size: var(--tt-font-meta, 11px);
+  font-weight: 1000;
+  line-height: 1.05;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: linear-gradient(180deg, #ffe878, #e6a92f);
+  box-shadow: 0 0 0 1px rgba(50, 25, 0, 0.82), 0 0 14px rgba(255, 198, 48, 0.58);
+}
+
+.tabletop-layout .unit-state-badge[data-status-kind="empowered"]::before {
+  content: "✦";
+  position: absolute;
+  top: 50%;
+  left: 5px;
+  color: #5f3100;
+  font-size: 11px;
+  line-height: 1;
+  transform: translateY(-50%);
+}
+
+@keyframes tabletop-choice-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(3, 19, 30, 0.82), 0 0 12px rgba(62, 193, 245, 0.34); }
+  50% { box-shadow: 0 0 0 2px rgba(3, 19, 30, 0.82), 0 0 23px rgba(62, 193, 245, 0.68); }
+}
+
+/* The hand/board prompt replaces only the command strip. */
+.tabletop-layout .choice-stage-bar {
+  position: absolute;
+  z-index: 76;
+  right: 8px;
+  bottom: var(--tt-hand-height);
+  left: 8px;
+  display: grid;
+  grid-template-columns: minmax(240px, 0.86fr) minmax(0, 1.14fr);
+  align-items: center;
+  gap: 10px;
+  height: calc(var(--tt-command-height) - 6px);
+  min-height: 48px;
+  max-height: calc(var(--tt-command-height) - 4px);
+  overflow: hidden;
+  border: 1px solid rgba(75, 194, 235, 0.72);
+  border-radius: 10px;
+  padding: 5px 8px;
+  color: #e9f9ff;
+  background: linear-gradient(100deg, rgba(3, 22, 37, 0.98), rgba(5, 35, 51, 0.98));
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.46), 0 0 18px rgba(48, 174, 224, 0.14);
+  pointer-events: auto;
+}
+
+.tabletop-layout .choice-stage-copy {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    "kind title"
+    "kind prompt";
+  align-items: center;
+  gap: 1px 7px;
+  min-width: 0;
+}
+
+.tabletop-layout .choice-stage-copy > span {
+  grid-area: kind;
+  align-self: stretch;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  padding: 3px 7px;
+  color: #fff1a9;
+  font-size: var(--tt-font-meta, 11px);
+  font-weight: 1000;
+  white-space: nowrap;
+  background: rgba(121, 83, 9, 0.8);
+}
+
+.tabletop-layout .choice-stage-copy > strong {
+  grid-area: title;
+  overflow: hidden;
+  font-size: var(--tt-font-body, 13px);
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tabletop-layout .choice-stage-copy > p {
+  grid-area: prompt;
+  overflow: hidden;
+  margin: 0;
+  color: #b9dce9;
+  font-size: var(--tt-font-meta, 11px);
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tabletop-layout .choice-stage-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+
+.tabletop-layout .choice-stage-actions > button {
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 5px 9px;
+  font-size: var(--tt-font-small, 12px);
+  white-space: nowrap;
+}
+
+.tabletop-layout .choice-stage-actions .confirm-staged-choice {
+  max-width: min(330px, 34vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Pile choice and damage allocation use the broad lower-board drawer. */
+.tabletop-layout .choice-zone-drawer {
+  position: absolute;
+  z-index: 78;
+  right: 8px;
+  bottom: var(--tt-hand-height);
+  left: 8px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 8px;
+  width: auto;
+  height: clamp(224px, 28dvh, 292px);
+  min-width: 0;
+  min-height: 0;
+  max-height: calc(100dvh - var(--tt-hand-height) - var(--tt-opponent-row) - 76px);
+  overflow: hidden;
+  border: 1px solid rgba(74, 188, 229, 0.76);
+  border-radius: 12px 12px 8px 8px;
+  padding: 9px;
+  color: #eaf9ff;
+  background:
+    linear-gradient(180deg, rgba(3, 20, 34, 0.99), rgba(3, 14, 25, 0.99)),
+    radial-gradient(circle at 50% 100%, rgba(38, 135, 178, 0.2), transparent 60%);
+  box-shadow: 0 -12px 34px rgba(0, 0, 0, 0.48), 0 0 24px rgba(48, 170, 218, 0.14);
+  pointer-events: auto;
+}
+
+.tabletop-layout .choice-zone-drawer.is-collapsed {
+  grid-template-rows: minmax(0, 1fr);
+  height: calc(var(--tt-command-height) - 5px);
+  min-height: 48px;
+  max-height: calc(var(--tt-command-height) - 3px);
+  padding-block: 5px;
+}
+
+.tabletop-layout .choice-drawer-head,
+.tabletop-layout .damage-assignment-head {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(0, auto);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.tabletop-layout .choice-drawer-head > div:first-child,
+.tabletop-layout .damage-assignment-head > div:first-child {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: 2px 8px;
+  min-width: 0;
+}
+
+.tabletop-layout .choice-drawer-head :is(span, strong, p),
+.tabletop-layout .damage-assignment-head :is(span, h2) {
+  min-width: 0;
+  margin: 0;
+}
+
+.tabletop-layout .choice-drawer-head > div:first-child > span,
+.tabletop-layout .damage-assignment-head > div:first-child > span:first-child {
+  color: #ffd969;
+  font-size: var(--tt-font-meta, 11px);
+  font-weight: 1000;
+  white-space: nowrap;
+}
+
+.tabletop-layout .choice-drawer-head > div:first-child > strong,
+.tabletop-layout .damage-assignment-head h2 {
+  overflow: hidden;
+  color: #f1fbff;
+  font-size: var(--tt-font-title, 14px);
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tabletop-layout .choice-drawer-head > div:first-child > p,
+.tabletop-layout .damage-assignment-head > div:first-child > span:last-child {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  color: #b7d8e6;
+  font-size: var(--tt-font-meta, 11px);
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tabletop-layout .choice-drawer-track,
+.tabletop-layout .damage-target-track {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+  padding: 4px 5px 9px;
+  scroll-padding-inline: 5px;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  touch-action: pan-x;
+}
+
+.tabletop-layout .choice-drawer-card-wrap {
+  position: relative;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) 25px;
+  flex: 0 0 clamp(94px, 7.2vw, 116px);
+  width: clamp(94px, 7.2vw, 116px);
+  min-width: clamp(94px, 7.2vw, 116px);
+  min-height: 0;
+  border: 2px solid rgba(80, 163, 196, 0.44);
+  border-radius: 8px;
+  padding: 3px;
+  background: rgba(7, 27, 42, 0.94);
+}
+
+.tabletop-layout .choice-drawer-card-wrap:is(.is-staged, .is-committed) {
+  border-color: #ffd452;
+  box-shadow: 0 0 0 2px rgba(3, 14, 23, 0.92), 0 0 20px rgba(255, 202, 55, 0.58);
+}
+
+.tabletop-layout .choice-drawer-card {
+  position: relative;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  gap: 2px;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 5px;
+  padding: 0 0 3px;
+  color: #eefaff;
+  text-align: left;
+  background: rgba(2, 13, 23, 0.95);
+}
+
+.tabletop-layout .choice-drawer-card > .choice-card-art {
+  display: block;
+  width: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 5px 5px 2px 2px;
+  background: #0a1c2b;
+}
+
+.tabletop-layout .choice-drawer-card > .choice-card-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 20%;
+  opacity: 1;
+  filter: none;
+}
+
+.tabletop-layout .choice-drawer-card .choice-card-name {
+  overflow: hidden;
+  padding-inline: 3px;
+  font-size: var(--tt-font-meta, 11px);
+  font-weight: 900;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tabletop-layout .choice-drawer-card > small {
+  overflow: hidden;
+  padding-inline: 3px;
+  color: #9fc4d3;
+  font-size: 10px;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tabletop-layout .choice-drawer-card .choice-check {
+  position: absolute;
+  z-index: 3;
+  top: 4px;
+  right: 4px;
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 50%;
+  color: #07111b;
+  font-size: 15px;
+  background: #ffd65a;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.48);
+}
+
+.tabletop-layout .choice-drawer-card .choice-check:empty { display: none; }
+
+.tabletop-layout .choice-drawer-card-wrap > .choice-card-view {
+  width: 100%;
+  min-height: 23px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  font-size: 10px;
+}
+
+/* Damage allocation is horizontal, legible, and never fades a restricted
+   target. The remaining-damage orb is always visible beside the heading. */
+.tabletop-layout .damage-assignment-drawer {
+  grid-template-rows: auto auto minmax(0, 1fr);
+  border-color: rgba(255, 190, 70, 0.8);
+  background: linear-gradient(180deg, rgba(30, 18, 12, 0.99), rgba(4, 15, 25, 0.99));
+  box-shadow: 0 -12px 34px rgba(0, 0, 0, 0.5), 0 0 25px rgba(255, 169, 51, 0.16);
+}
+
+.tabletop-layout .damage-assignment-head {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.tabletop-layout .damage-remaining-orb {
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: baseline;
+  gap: 4px 7px;
+  min-width: 112px;
+  border: 2px solid rgba(255, 200, 77, 0.86);
+  border-radius: 999px;
+  padding: 5px 11px;
+  color: #fff4bc;
+  background: rgba(93, 53, 7, 0.78);
+  box-shadow: 0 0 16px rgba(255, 176, 39, 0.22);
+}
+
+.tabletop-layout .damage-remaining-orb > strong {
+  font-size: 21px;
+  line-height: 1;
+}
+
+.tabletop-layout .damage-remaining-orb > span {
+  font-size: var(--tt-font-meta, 11px);
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.tabletop-layout .damage-assignment-help {
+  overflow: hidden;
+  margin: 0;
+  border-left: 3px solid rgba(255, 194, 66, 0.84);
+  padding: 3px 7px;
+  color: #f2dcab;
+  font-size: var(--tt-font-meta, 11px);
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: rgba(93, 55, 11, 0.22);
+}
+
+.tabletop-layout .damage-target-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: 72px minmax(118px, 1fr);
+  align-items: stretch;
+  flex: 0 0 230px;
+  width: 230px;
+  min-width: 230px;
+  min-height: 112px;
+  overflow: hidden;
+  border: 2px solid rgba(109, 191, 224, 0.62);
+  border-radius: 9px;
+  padding: 4px;
+  color: #edf9ff;
+  text-align: left;
+  background: rgba(5, 24, 38, 0.96);
+}
+
+.tabletop-layout .damage-target-card > .choice-card-art {
+  display: block;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 5px;
+  background: #071724;
+}
+
+.tabletop-layout .damage-target-card > .choice-card-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 20%;
+  opacity: 1 !important;
+  filter: none !important;
+}
+
+.tabletop-layout .damage-target-card .damage-target-copy {
+  display: grid;
+  align-content: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 5px 7px;
+}
+
+.tabletop-layout .damage-target-copy :is(strong, small, b, span) {
+  min-width: 0;
+  font-size: var(--tt-font-meta, 11px);
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.tabletop-layout .damage-target-card.is-legal {
+  border-color: #63d7ff;
+  box-shadow: 0 0 0 2px rgba(2, 15, 24, 0.82), 0 0 18px rgba(67, 195, 240, 0.38);
+}
+
+.tabletop-layout .damage-target-card.is-lethal {
+  border-color: #ffcc4e;
+  box-shadow: 0 0 0 2px rgba(2, 15, 24, 0.82), 0 0 20px rgba(255, 190, 50, 0.48);
+}
+
+.tabletop-layout .damage-target-card.is-locked {
+  border-style: dashed;
+  border-color: rgba(151, 167, 177, 0.7);
+  color: #d3e0e6;
+  cursor: not-allowed;
+}
+
+.tabletop-layout .damage-target-card.is-locked::after {
+  content: "LOCK";
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  border: 1px solid rgba(172, 190, 199, 0.66);
+  border-radius: 4px;
+  padding: 2px 4px;
+  color: #eef6f9;
+  font-size: 9px;
+  font-weight: 1000;
+  line-height: 1;
+  background: rgba(7, 20, 29, 0.88);
+}
+
+.tabletop-layout .alpha-strike-target {
+  display: grid;
+  grid-template-columns: 70px minmax(108px, 1fr);
+  grid-template-rows: minmax(0, 1fr) 32px;
+  flex: 0 0 244px;
+  width: 244px;
+  min-width: 244px;
+  min-height: 118px;
+  overflow: hidden;
+  border: 2px solid rgba(255, 190, 68, 0.72);
+  border-radius: 9px;
+  padding: 4px;
+  background: rgba(26, 23, 24, 0.96);
+}
+
+.tabletop-layout .alpha-strike-target > .choice-card-art {
+  grid-row: 1 / -1;
+  grid-column: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 5px;
+}
+
+.tabletop-layout .alpha-strike-target > .choice-card-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 20%;
+  opacity: 1;
+  filter: none;
+}
+
+.tabletop-layout .alpha-strike-target > .damage-target-copy {
+  grid-row: 1;
+  grid-column: 2;
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 4px 7px;
+}
+
+.tabletop-layout .damage-stepper {
+  grid-row: 2;
+  grid-column: 2;
+  display: grid;
+  grid-template-columns: 29px minmax(38px, 1fr) 29px;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+}
+
+.tabletop-layout .damage-stepper > output { display: none; }
+
+.tabletop-layout .damage-stepper > :is(button, input) {
+  width: 100%;
+  min-width: 0;
+  height: 29px;
+  min-height: 29px;
+  padding: 0 3px;
+  border-radius: 5px;
+  font-size: var(--tt-font-small, 12px);
+  font-weight: 900;
+  text-align: center;
+}
+
+.tabletop-layout .damage-stepper > input {
+  color: #fff4be;
+  background: rgba(4, 16, 25, 0.94);
+}
+
+.tabletop-layout .alpha-strike-target > .damage-assign-button {
+  grid-row: 3;
+  grid-column: 1 / -1;
+  min-height: 29px;
+  margin-top: 4px;
+  padding: 3px 6px;
+  font-size: var(--tt-font-meta, 11px);
+}
+
+/* Normal Trash/Banished browsing is a compact vertical shelf. It does not
+   become a second full-size card chooser and its cards open the inspector. */
+.tabletop-layout.inspector-open,
+.tabletop-layout:has(.floating-panels > .graveyard-panel),
+.tabletop-layout:has(.floating-panels > .banished-panel) {
+  --tt-sheet-reserve: clamp(252px, 16vw, 292px);
+}
+
+.tabletop-layout .floating-panels :is(.graveyard-panel, .banished-panel) {
+  right: 8px;
+  width: calc(var(--tt-sheet-reserve) - 16px);
+  max-width: calc(var(--tt-sheet-reserve) - 16px);
+  overflow: hidden;
+  padding: 8px;
+}
+
+.tabletop-layout .floating-panels :is(.graveyard-panel, .banished-panel) > .section-head {
+  min-height: 34px;
+  margin: 0 0 6px;
+  padding: 0;
+}
+
+.tabletop-layout .floating-panels :is(.graveyard-panel, .banished-panel) > .section-head :is(h2, span) {
+  overflow: hidden;
+  font-size: var(--tt-font-small, 12px);
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tabletop-layout .floating-panels :is(.graveyard-panel, .banished-panel) > .section-head button {
+  min-height: 28px;
+  padding: 3px 7px;
+  font-size: var(--tt-font-meta, 11px);
+}
+
+.tabletop-layout .floating-panels :is(.graveyard-panel, .banished-panel) .graveyard-cards {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-rows: max-content;
+  align-content: start;
+  gap: 6px;
+  min-height: 0;
+  max-height: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 1px 4px 8px 1px;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  touch-action: pan-y;
+}
+
+.tabletop-layout .pile-browser-entry,
+.tabletop-layout .graveyard-card-entry.pile-browser-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+  flex: none;
+  width: 100%;
+  min-width: 0;
+  overflow: visible;
+  border: 1px solid rgba(92, 166, 199, 0.34);
+  border-radius: 7px;
+  padding: 4px;
+  background: rgba(4, 22, 35, 0.78);
+}
+
+.tabletop-layout .banished-panel .pile-browser-entry {
+  border-color: rgba(181, 109, 232, 0.42);
+  background: rgba(30, 14, 46, 0.76);
+}
+
+.tabletop-layout .pile-browser-card.image-card,
+.tabletop-layout .floating-panels .graveyard-cards .pile-browser-card.image-card {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  height: 68px;
+  min-height: 68px;
+  aspect-ratio: auto;
+  overflow: hidden;
+  border: 0;
+  border-radius: 5px;
+  padding: 0;
+  cursor: pointer;
+  background: rgba(3, 15, 25, 0.9);
+  box-shadow: none;
+}
+
+.tabletop-layout .pile-browser-card .pile-browser-art {
+  display: block;
+  width: 48px;
+  height: 68px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: #071824;
+}
+
+.tabletop-layout .pile-browser-card .pile-browser-art > .card-art {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  object-fit: cover;
+  object-position: center 20%;
+  opacity: 1 !important;
+  filter: none !important;
+  transform: none !important;
+}
+
+.tabletop-layout .pile-browser-copy {
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  min-width: 0;
+  padding-right: 5px;
+}
+
+.tabletop-layout .pile-browser-copy > :is(strong, small) {
+  overflow: hidden;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tabletop-layout .pile-browser-copy > strong {
+  color: #edfaff;
+  font-size: var(--tt-font-small, 12px);
+}
+
+.tabletop-layout .pile-browser-copy > small {
+  color: #9fc2d1;
+  font-size: var(--tt-font-meta, 11px);
+}
+
+.tabletop-layout .pile-browser-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.tabletop-layout .pile-browser-actions > button {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  min-height: 27px;
+  padding: 3px 5px;
+  font-size: 10px;
+  white-space: normal;
+}
+
+/* Inspector keeps its toolbar fixed while card art and the complete rules
+   ledger remain independently readable. Any legacy four-line clamp is reset. */
+.tabletop-layout .inspector.inspector-panel {
+  right: 8px;
+  display: none;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(132px, 42%) minmax(0, 1fr);
+  width: calc(var(--tt-sheet-reserve) - 16px);
+  max-width: calc(var(--tt-sheet-reserve) - 16px);
+  overflow: hidden;
+  padding: 8px;
+}
+
+.tabletop-layout.inspector-open .inspector.inspector-panel { display: grid; }
+
+.tabletop-layout .inspector.inspector-panel .inspector-toolbar {
+  position: relative;
+  z-index: 2;
+  grid-row: 1;
+  min-width: 0;
+  min-height: 32px;
+  border-bottom: 1px solid rgba(97, 174, 208, 0.28);
+  padding: 0 0 6px;
+  background: inherit;
+}
+
+.tabletop-layout .inspector.inspector-panel .inspector-toolbar :is(strong, button) {
+  font-size: var(--tt-font-small, 12px);
+}
+
+.tabletop-layout .inspector.inspector-panel .inspector-toolbar button {
+  min-height: 27px;
+  padding: 3px 7px;
+}
+
+.tabletop-layout .inspector.inspector-panel .inspector-card {
+  grid-row: 2;
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  max-height: none;
+  place-items: center;
+  overflow: hidden;
+  padding: 7px;
+  background: rgba(12, 31, 46, 0.76);
+}
+
+.tabletop-layout .inspector.inspector-panel .inspector-card img {
+  width: auto;
+  max-width: 100%;
+  height: 100%;
+  max-height: 100%;
+  border-radius: 6px;
+  object-fit: contain;
+  opacity: 1;
+  filter: none;
+}
+
+.tabletop-layout .inspector.inspector-panel .inspector-text {
+  grid-row: 3;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 9px 8px 18px;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.tabletop-layout .inspector.inspector-panel .inspector-text > :is(h2, span, strong, p, small) {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.tabletop-layout .inspector.inspector-panel .inspector-text > h2 {
+  color: #f4fbff;
+  font-size: var(--tt-font-title, 14px);
+  line-height: 1.2;
+}
+
+.tabletop-layout .inspector.inspector-panel .inspector-text > :is(span, strong, small) {
+  font-size: var(--tt-font-meta, 11px);
+  line-height: 1.3;
+  white-space: normal;
+}
+
+.tabletop-layout .inspector.inspector-panel .inspector-text > p,
+.tabletop-layout .inspector.inspector-panel .inspector-rules-text {
+  display: block;
+  max-height: none;
+  overflow: visible;
+  color: #e1eef4;
+  font-size: var(--tt-font-small, 12px);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  -webkit-box-orient: initial;
+  -webkit-line-clamp: unset;
+}
+
+.tabletop-layout .inspector.inspector-panel .inspector-empty-state {
+  grid-row: 2 / -1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Reaction and pass are one decision group inside the command strip. */
+.tabletop-layout :is(.response-action-group, .priority-action-group, .priority-response-controls) {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 6px;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.tabletop-layout :is(.response-action-group, .priority-action-group, .priority-response-controls) > button {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 112px;
+  min-height: 36px;
+}
+
+.tabletop-layout :is(.response-action-group, .priority-action-group, .priority-response-controls) .pass-control,
+.tabletop-layout .action-command-list > .pass-control {
+  display: grid;
+  width: auto;
+  min-width: 138px;
+  min-height: 36px;
+  padding: 4px 9px;
+}
+
+/* Drag-to-play feedback. The app may use either the classes or the data-state
+   form while a native/pointer drag is active; all variants share one visual
+   contract and do not alter the drop zone's geometry. */
+.tabletop-layout [data-play-destination] {
+  transition: outline-color 120ms ease, box-shadow 120ms ease, background-color 120ms ease;
+}
+
+.tabletop-layout .hand-fan-card {
+  touch-action: pan-x;
+}
+
+.tabletop-layout :is(
+  [data-play-destination].is-legal-drop,
+  [data-play-destination].legal-drop-target,
+  [data-play-destination][data-drop-state="legal"]
+),
+.tabletop-layout :is(.is-dragging-card, .hand-card-drag-active, .drag-play-active) [data-play-destination].can-drop {
+  outline: 3px solid rgba(92, 218, 255, 0.9);
+  outline-offset: -4px;
+  background-color: rgba(49, 170, 213, 0.12);
+  box-shadow: inset 0 0 28px rgba(55, 184, 229, 0.24), 0 0 18px rgba(55, 184, 229, 0.22);
+}
+
+.tabletop-layout :is(
+  [data-play-destination].drag-over,
+  [data-play-destination].is-drag-over,
+  [data-play-destination].drop-target-active,
+  [data-play-destination][data-drop-state="active"]
+) {
+  outline: 4px solid #ffd65a;
+  outline-offset: -5px;
+  background-color: rgba(255, 200, 61, 0.16);
+  box-shadow: inset 0 0 34px rgba(255, 194, 49, 0.3), 0 0 24px rgba(255, 190, 42, 0.32);
+}
+
+.tabletop-layout :is(.dragging-hand-card, .drag-source-active, .hand-fan-card[data-dragging="true"]) {
+  z-index: 90 !important;
+  opacity: 0.82;
+  filter: none;
+  transform: translateY(-42px) rotate(0deg) scale(1.06) !important;
+}
+
+.tabletop-layout .card-drag-ghost,
+.tabletop-layout .hand-card-drag-ghost,
+body > .hand-card-drag-ghost {
+  position: fixed;
+  z-index: 320;
+  width: var(--tt-hand-card-width);
+  aspect-ratio: 5 / 7;
+  overflow: hidden;
+  border: 2px solid #75ddff;
+  border-radius: 8px;
+  opacity: 0.9;
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.55), 0 0 20px rgba(71, 199, 244, 0.48);
+  transform: translate(-50%, -50%) rotate(2deg);
+  pointer-events: none;
+}
+
+body > .hand-card-drag-ghost :is(.card-orientation-layer, .card-face-layer) {
+  position: absolute;
+  inset: 0;
+  display: block;
+  overflow: hidden;
+  border-radius: inherit;
+}
+
+body > .hand-card-drag-ghost .card-face-layer {
+  border: 1px solid rgba(154, 205, 228, 0.58);
+  background: #071a2a;
+}
+
+body > .hand-card-drag-ghost .card-art {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 20%;
+  opacity: 1;
+  filter: none;
+}
+
+.tabletop-layout .choice-stage-variants {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: min(360px, 32vw);
+  padding: 3px;
+  overflow-x: auto;
+  border: 1px solid rgba(123, 190, 222, 0.34);
+  border-radius: 8px;
+  background: rgba(3, 17, 29, 0.84);
+  scrollbar-width: thin;
+}
+
+.tabletop-layout .choice-stage-variant {
+  flex: 0 0 auto;
+  min-height: 30px;
+  padding: 4px 10px;
+  border-color: rgba(117, 185, 218, 0.44);
+  color: #c9e9f8;
+  background: rgba(17, 49, 70, 0.86);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.tabletop-layout .choice-stage-variant.is-active {
+  border-color: #ffd65a;
+  color: #07131e;
+  background: #ffd65a;
+  box-shadow: 0 0 13px rgba(255, 207, 75, 0.35);
+}
+
+.tabletop-layout .damage-assignment-history {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid rgba(111, 184, 217, 0.3);
+  border-radius: 8px;
+  background: rgba(4, 22, 35, 0.8);
+}
+
+.tabletop-layout .damage-assignment-history > strong {
+  color: #9ec9dc;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.tabletop-layout .damage-assignment-history-track {
+  display: flex;
+  gap: 5px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.tabletop-layout .damage-assignment-chip {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 3px 5px 3px 9px;
+  border: 1px solid rgba(255, 174, 87, 0.48);
+  border-radius: 999px;
+  color: #f2f7fa;
+  background: rgba(77, 35, 23, 0.72);
+  font-size: 11px;
+}
+
+.tabletop-layout .damage-assignment-chip em {
+  display: grid;
+  place-items: center;
+  min-width: 22px;
+  min-height: 22px;
+  border-radius: 50%;
+  color: #210d08;
+  background: #ffad66;
+  font-style: normal;
+  font-weight: 900;
+}
+
+/* Measured desktop adaptations: the lower drawers retain their purpose at
+   1366x768 while 1920x1080 keeps larger card previews and breathing room. */
+@media (min-width: 1200px) and (max-height: 820px) {
+  .tabletop-layout .choice-zone-drawer {
+    height: clamp(190px, 26dvh, 210px);
+    max-height: calc(100dvh - var(--tt-hand-height) - 150px);
+    gap: 5px;
+    padding: 6px;
+  }
+
+  .tabletop-layout .choice-drawer-head,
+  .tabletop-layout .damage-assignment-head { gap: 6px; }
+
+  .tabletop-layout .choice-drawer-card-wrap {
+    grid-template-rows: minmax(0, 1fr) 22px;
+    flex-basis: 88px;
+    width: 88px;
+    min-width: 88px;
+  }
+
+  .tabletop-layout .choice-drawer-card-wrap > .choice-card-view {
+    min-height: 20px;
+    font-size: 9px;
+  }
+
+  .tabletop-layout .damage-target-card {
+    grid-template-columns: 60px minmax(110px, 1fr);
+    flex-basis: 206px;
+    width: 206px;
+    min-width: 206px;
+    min-height: 96px;
+  }
+
+  .tabletop-layout .alpha-strike-target {
+    grid-template-columns: 60px minmax(104px, 1fr);
+    flex-basis: 220px;
+    width: 220px;
+    min-width: 220px;
+    min-height: 98px;
+  }
+
+  .tabletop-layout .inspector.inspector-panel {
+    grid-template-rows: auto minmax(104px, 35%) minmax(0, 1fr);
+  }
+
+  .tabletop-layout .inspector.inspector-panel .inspector-text {
+    gap: 6px;
+    padding: 7px 7px 14px;
+  }
+
+  .tabletop-layout .battlefield.location-column .battlefield-head {
+    gap: 2px;
+    padding: 4px 8px;
+  }
+
+  .tabletop-layout .battlefield.location-column .battlefield-head h2 {
+    min-height: 14px;
+    font-size: 13px;
+    line-height: 14px;
+  }
+
+  .tabletop-layout .battlefield.location-column .battlefield-head span {
+    display: block;
+    min-height: 12px;
+    overflow: visible;
+    font-size: 11px;
+    line-height: 12px;
+  }
+}
+
+@media (min-width: 1700px) and (min-height: 900px) {
+  .tabletop-layout.inspector-open,
+  .tabletop-layout:has(.floating-panels > .graveyard-panel),
+  .tabletop-layout:has(.floating-panels > .banished-panel) {
+    --tt-sheet-reserve: clamp(276px, 15.2vw, 304px);
+  }
+
+  .tabletop-layout .choice-zone-drawer { height: clamp(256px, 27dvh, 310px); }
+
+  .tabletop-layout .choice-drawer-card-wrap {
+    flex-basis: 118px;
+    width: 118px;
+    min-width: 118px;
+  }
+
+  .tabletop-layout .inspector.inspector-panel {
+    grid-template-rows: auto minmax(188px, 46%) minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tabletop-layout .choice-card-selectable:not(.choice-card-staged) { animation: none; }
+  .tabletop-layout [data-play-destination] { transition: none; }
+}
+
+/* Final tabletop interaction geometry -----------------------------------
+   Unit state now lives on the card corners. Remove the retired side-ledger
+   footprint so battlefield and Base cards use the space as physical cards. */
+@media (min-width: 1200px) {
+  .tabletop-layout {
+    --tt-board-card-width: 72px;
+    --tt-board-card-height: 101px;
+    --tt-board-card-footprint: 104px;
+    --tt-base-card-width: 74px;
+    --tt-base-card-height: 104px;
+    --tt-base-card-footprint: 108px;
+  }
+
+  .tabletop-layout .field-lane-track > .unit-token.field-token.physical-board-card {
+    position: relative;
+    flex: 0 0 var(--tt-board-card-footprint) !important;
+    width: var(--tt-board-card-footprint) !important;
+    min-width: var(--tt-board-card-footprint) !important;
+    max-width: var(--tt-board-card-footprint) !important;
+    height: var(--tt-board-card-height) !important;
+    max-height: none !important;
+    aspect-ratio: auto !important;
+    overflow: visible !important;
+    padding: 0 !important;
+  }
+
+  .tabletop-layout .base-row > .unit-token.base-token.physical-board-card {
+    position: relative;
+    flex: 0 0 var(--tt-base-card-footprint) !important;
+    width: var(--tt-base-card-footprint) !important;
+    min-width: var(--tt-base-card-footprint) !important;
+    max-width: var(--tt-base-card-footprint) !important;
+    height: var(--tt-base-card-height) !important;
+    max-height: none !important;
+    aspect-ratio: auto !important;
+    overflow: visible !important;
+    padding: 0 !important;
+  }
+
+  .tabletop-layout .unit-token.field-token.physical-board-card > .card-exhaust-layer {
+    inset: 50% auto auto 50% !important;
+    width: var(--tt-board-card-width) !important;
+    height: var(--tt-board-card-height) !important;
+    max-width: none !important;
+    max-height: none !important;
+    transform: translate(-50%, -50%) rotate(0deg) !important;
+  }
+
+  .tabletop-layout .unit-token.base-token.physical-board-card > .card-exhaust-layer {
+    inset: 50% auto auto 50% !important;
+    width: var(--tt-base-card-width) !important;
+    height: var(--tt-base-card-height) !important;
+    max-width: none !important;
+    max-height: none !important;
+    transform: translate(-50%, -50%) rotate(0deg) !important;
+  }
+
+  .tabletop-layout :is(.unit-token.field-token, .unit-token.base-token).physical-board-card.exhausted > .card-exhaust-layer {
+    transform: translate(-50%, -50%) rotate(90deg) !important;
+  }
+
+  .tabletop-layout :is(.unit-token.field-token, .unit-token.base-token).physical-board-card > .owner-chip {
+    top: 3px;
+    right: auto;
+    left: 3px;
+    max-width: calc(var(--tt-board-card-width) - 8px);
+  }
+
+  .tabletop-layout :is(.unit-token.field-token, .unit-token.base-token).physical-board-card > .move-select-chip {
+    top: 3px;
+    right: 3px;
+    left: auto;
+  }
+
+  .tabletop-layout :is(.unit-token.field-token, .unit-token.base-token).physical-board-card > .attachment-strip {
+    z-index: 14;
+    top: 50%;
+    right: -20px !important;
+    bottom: auto;
+    left: auto !important;
+    transform: translateY(-50%);
+  }
+
+  .tabletop-layout:has(.chain-pod) {
+    --tt-sheet-reserve: clamp(360px, 22vw, 420px);
+  }
+}
+
+@media (min-width: 1200px) and (max-height: 820px) {
+  .tabletop-layout {
+    --tt-board-card-width: 66px;
+    --tt-board-card-height: 92px;
+    --tt-board-card-footprint: 94px;
+    --tt-base-card-width: 68px;
+    --tt-base-card-height: 95px;
+    --tt-base-card-footprint: 98px;
+  }
+
+  .tabletop-layout .battlefield.location-column .battlefield-head span {
+    display: block;
+    min-height: 12px;
+    max-width: 100%;
+    overflow: hidden;
+    font-size: 11px;
+    line-height: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tabletop-layout .damage-assignment-drawer:has(.damage-assignment-history) {
+    height: clamp(214px, 29dvh, 228px);
+  }
+
+  .tabletop-layout .damage-assignment-drawer .damage-target-track {
+    min-height: 60px;
+  }
+}
+
+@media (min-width: 1700px) and (min-height: 900px) {
+  .tabletop-layout {
+    --tt-board-card-width: 78px;
+    --tt-board-card-height: 109px;
+    --tt-board-card-footprint: 112px;
+    --tt-base-card-width: 82px;
+    --tt-base-card-height: 115px;
+    --tt-base-card-footprint: 118px;
+  }
+}
+
+.tabletop-layout .damage-assignment-drawer {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.tabletop-layout .damage-assignment-drawer:has(.damage-assignment-history) {
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+}
+
+.tabletop-layout .damage-assignment-drawer:has(.damage-assignment-history) .damage-target-track {
+  grid-row: 4;
+}
+
+.tabletop-layout .damage-assignment-drawer .damage-assignment-history {
+  max-height: 38px;
+  overflow: hidden;
+}
+
+.tabletop-layout .choice-stage-copy > p.has-repeat-progress {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tabletop-layout .choice-stage-copy > p.has-repeat-progress > strong {
+  flex: 0 0 auto;
+  color: #ffd866;
+  font-size: inherit;
+}
+
+.tabletop-layout .choice-stage-copy > p.has-repeat-progress > span {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.tabletop-layout .choice-stage-copy > p.has-repeat-progress > .choice-stage-prompt {
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: #8fb9ca;
+  text-overflow: ellipsis;
+}
+
+.tabletop-layout .choice-repeat-progress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
