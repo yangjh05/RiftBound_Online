@@ -181,11 +181,11 @@ export async function runCardRuleBehaviorProbes() {
     }, printedMultiPartEffects,
     "Exercise every formerly omitted clause on Iron Ballista, Peak Guardian, Mageseeker Warden, Teemo, and Forge of the Future."),
     probe("PLAYED_EVENT_REQUIRES_RESOLUTION", {
-      pending: { count: 0, luxMight: 0, ravenMight: 0, drawn: 0 },
-      countered: { count: 0, luxMight: 0, ravenMight: 0, drawn: 0, chainCount: 0, inOwnerTrash: true },
+      pending: { count: 1, luxMight: 0, ravenMight: 0, drawn: 0 },
+      countered: { count: 1, luxMight: 0, ravenMight: 0, drawn: 0, chainCount: 0, inOwnerTrash: true },
       resolved: { count: 1, luxMight: 3, ravenMight: 1, drawn: 1 }
     }, playedEventRequiresResolution,
-    "Put a high-cost spell on the Chain twice: counter the first copy and fully resolve the second while Lux and Ravenbloom Student observe it.")
+    "Finalize a high-cost spell twice: counter the first copy and fully resolve the second while Lux and Ravenbloom Student observe it; turn history counts both, resolved-play triggers only the second.")
   ];
 }
 

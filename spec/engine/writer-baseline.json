@@ -182,6 +182,7 @@
       "offerReadyRunesChoice|game.pendingChoice =": 1,
       "prepareOptionalTriggerPlacements|game.pendingChoice =": 1,
       "prepareTriggerCosts|game.pendingPayment =": 1,
+      "presentCostModifierOrderChoice|game.pendingPayment =": 1,
       "promptCombatDamageChoice|game.pendingChoice =": 1,
       "promptDeathReplacementSource|game.pendingChoice =": 1,
       "promptEachOtherPlayerKillUncontrolledUnit|game.pendingChoice =": 1,

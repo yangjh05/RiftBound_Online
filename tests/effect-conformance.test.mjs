@@ -2527,10 +2527,10 @@ test("complex spell continuations and battlefield static permissions complete ev
     for (const candidate of [player, opponent]) {
       assert.equal(candidate.hand.length, 2);
       assert.equal(candidate.runes.length, 2);
-      assert.equal(candidate.base.filter((card) => card.type === "unit").length, 2);
-      assert.equal(candidate.base.filter((card) => card.type === "gear").length, 2);
+      assert.equal(candidate.base.filter((card) => card.type === "unit").length, candidate.id === player.id ? 2 : 0);
+      assert.equal(candidate.base.filter((card) => card.type === "gear").length, candidate.id === player.id ? 2 : 0);
       assert.equal(candidate.runeDeck.length, 1);
-      assert.equal(candidate.mainDeck.length, 3);
+      assert.equal(candidate.mainDeck.length, candidate.id === player.id ? 3 : 7);
     }
   }
 
@@ -2627,6 +2627,8 @@ test("complex spell continuations and battlefield static permissions complete ev
 test("Divine Judgment lets every player explicitly choose each pair to keep", () => {
   const game = ruleGame({ interactive: true });
   const expected = new Map();
+  const publicUnits = [];
+  const publicGear = [];
   for (const candidate of game.players) {
     const hand = Array.from({ length: 3 }, (_, index) => plainSpell(candidate.id, `judgment-choice-${candidate.id}-hand-${index}`));
     const runes = Array.from({ length: 3 }, (_, index) => rune(DOMAINS.CALM, candidate.id, `judgment-choice-${candidate.id}-rune-${index}`));
@@ -2635,12 +2637,27 @@ test("Divine Judgment lets every player explicitly choose each pair to keep", ()
     candidate.hand = hand;
     candidate.runes = runes;
     candidate.base = [...units, ...gear];
+    publicUnits.push(...units);
+    publicGear.push(...gear);
     expected.set(candidate.id, {
       hand: new Set(hand.slice(-2).map((card) => card.instanceId)),
       runes: new Set(runes.slice(-2).map((card) => card.instanceId)),
-      units: new Set(units.slice(-2).map((card) => card.instanceId)),
-      gear: new Set(gear.slice(-2).map((card) => card.instanceId))
+      units: new Set(),
+      gear: new Set(),
+      mainDeckCount: 0
     });
+  }
+  const globallyKeptUnits = new Set(publicUnits.slice(-2).map((card) => card.instanceId));
+  const globallyKeptGear = new Set(publicGear.slice(-2).map((card) => card.instanceId));
+  for (const candidate of game.players) {
+    const selection = expected.get(candidate.id);
+    selection.units = new Set(publicUnits
+      .filter((card) => card.controllerId === candidate.id && globallyKeptUnits.has(card.instanceId))
+      .map((card) => card.instanceId));
+    selection.gear = new Set(publicGear
+      .filter((card) => card.controllerId === candidate.id && globallyKeptGear.has(card.instanceId))
+      .map((card) => card.instanceId));
+    selection.mainDeckCount = 1 + (3 - selection.units.size) + (3 - selection.gear.size);
   }
 
   resolveEffect(game, game.players[0], instance(cards.divineJudgment, game.players[0].id, "divine-judgment-explicit"));
@@ -2659,7 +2676,7 @@ test("Divine Judgment lets every player explicitly choose each pair to keep", ()
     assert.deepEqual(new Set(candidate.runes.map((card) => card.instanceId)), keep.runes);
     assert.deepEqual(new Set(candidate.base.filter((card) => card.type === "unit").map((card) => card.instanceId)), keep.units);
     assert.deepEqual(new Set(candidate.base.filter((card) => card.type === "gear").map((card) => card.instanceId)), keep.gear);
-    assert.equal(candidate.mainDeck.length, 3);
+    assert.equal(candidate.mainDeck.length, keep.mainDeckCount);
     assert.equal(candidate.runeDeck.length, 1);
   }
 });

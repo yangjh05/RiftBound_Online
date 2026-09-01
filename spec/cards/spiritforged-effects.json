@@ -223,7 +223,7 @@
     },
     "SFD-045/221": {
       "effects": [
-        { "timing": "spell", "kind": "counterSpell", "includeAbilities": true, "requiresChoosingFriendlyUnitOrGear": true }
+        { "timing": "spell", "kind": "counterSpell", "includeAbilities": true, "enemyOnly": true, "requiresChoosingFriendlyUnitOrGear": true }
       ]
     },
     "SFD-046/221": {

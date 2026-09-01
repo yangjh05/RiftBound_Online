@@ -18,6 +18,7 @@ import {
   selectChampion,
   skipMulligan,
   startTurn,
+  toggleOptionalPaymentEffect,
   togglePaymentRune
 } from "../src/engine.mjs";
 
@@ -365,6 +366,131 @@ test("LeBlanc draws two during her controller's Beginning Phase", () => {
   }, opponent.id, "unl-leblanc-source");
   resolveEffect(game, opponent, lethalSpell);
   assert.equal(player.hand.length, 2);
+});
+
+test("Mirror Image plays a blank Reflection before its reflexive copy trigger resolves", () => {
+  const game = createGame({ interactive: true, manualActionChainPriority: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const target = instance(cards.stalwartPoro, player.id, "unl-mirror-target");
+  const mirror = instance({ ...cards.unl200mirrorImage, energy: 0, power: [] }, player.id, "unl-mirror-image");
+  mirror.declaredPlayTargets = [{ effect: "unleashedUnit", targetId: target.instanceId }];
+  player.base = [target];
+
+  assert.equal(resolveEffect(game, player, mirror), true);
+  for (let guard = 0; !player.base.some((unit) => unit.tokenKind === "reflection") && game.actionChain && guard < 4; guard += 1) {
+    assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
+  }
+  const reflection = player.base.find((unit) => unit.tokenKind === "reflection");
+  assert.ok(reflection);
+  assert.equal(reflection.name, "Reflection");
+  assert.equal(reflection.might, 0);
+  assert.equal((reflection.keywords || []).includes("Temporary"), false);
+  assert.equal(game.actionChain?.chain.some((item) => item.trigger?.kind === "reflexiveTransformReflection"), true);
+
+  settleAllChains(game);
+  assert.equal(reflection.name, target.name);
+  assert.equal(reflection.might, target.might);
+  assert.equal(reflection.keywords.includes("Temporary"), true);
+});
+
+test("a removed Reflection is not replaced or retargeted when the copy trigger resolves", () => {
+  const game = createGame({ interactive: true, manualActionChainPriority: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const target = instance(cards.stalwartPoro, player.id, "unl-mirror-removed-target");
+  const mirror = instance({ ...cards.unl200mirrorImage, energy: 0, power: [] }, player.id, "unl-mirror-removed");
+  mirror.declaredPlayTargets = [{ effect: "unleashedUnit", targetId: target.instanceId }];
+  player.base = [target];
+
+  resolveEffect(game, player, mirror);
+  for (let guard = 0; !player.base.some((unit) => unit.tokenKind === "reflection") && game.actionChain && guard < 4; guard += 1) {
+    assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
+  }
+  const reflectionIndex = player.base.findIndex((unit) => unit.tokenKind === "reflection");
+  assert.ok(reflectionIndex >= 0, JSON.stringify({ base: player.base, actionChain: game.actionChain, log: game.log.slice(-10) }));
+  player.base.splice(reflectionIndex, 1);
+
+  assert.doesNotThrow(() => settleAllChains(game));
+  assert.equal(player.base.some((unit) => unit.tokenKind === "reflection"), false);
+});
+
+test("Bone Skewer lets Clockwork Keeper choose its ignored optional Power cost and draw", () => {
+  const game = createGame({ interactive: true, manualActionChainPriority: true });
+  finishSetup(game);
+  const caster = currentPlayer(game);
+  const opponent = game.players.find((candidate) => candidate.id !== caster.id);
+  const battlefield = game.battlefields[0];
+  const skewer = instance(cards.unl139boneSkewer, caster.id, "unl-bone-skewer");
+  skewer.declaredPlayTargets = [{ effect: "unleashedBattlefield", targetId: battlefield.instanceId }];
+  const keeper = instance(cards.clockworkKeeper, opponent.id, "unl-bone-keeper");
+  const drawn = instance(cards.charm, opponent.id, "unl-bone-draw");
+  opponent.hand = [keeper];
+  opponent.mainDeck = [drawn];
+  opponent.runes = [];
+
+  assert.equal(resolveEffect(game, caster, skewer), true);
+  assert.equal(game.pendingChoice?.effect, "unleashedBoneSkewerUnit");
+  assert.equal(chooseEffectOption(game, keeper.instanceId).ok, true);
+  assert.equal(game.pendingPayment?.playerId, opponent.id);
+  assert.equal(game.pendingPayment?.energyCost, 0);
+  assert.deepEqual(game.pendingPayment?.powerCost, []);
+  const optional = game.pendingPayment?.optionalPowerEffects.find((effect) => effect.kind === "optionalPowerDraw");
+  assert.ok(optional);
+  assert.match(optional.label, /cost ignored/);
+  assert.equal(toggleOptionalPaymentEffect(game, optional.id).ok, true);
+  assert.equal(confirmPayment(game).ok, true);
+
+  assert.equal(battlefield.units.some((unit) => unit.instanceId === keeper.instanceId), true);
+  assert.equal(keeper.stunned, true);
+  settleAllChains(game);
+  assert.equal(opponent.hand.some((card) => card.instanceId === drawn.instanceId), true);
+});
+
+test("Sacrifice can kill its attacking Mighty Immortal Phoenix and the Phoenix triggers from trash", () => {
+  const game = createGame({ interactive: true, manualActionChainPriority: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const opponent = game.players.find((candidate) => candidate.id !== player.id);
+  const field = game.battlefields[0];
+  const phoenix = instance(cards.immortalPhoenix, player.id, "unl-sacrifice-phoenix");
+  const defender = instance(cards.stalwartPoro, opponent.id, "unl-sacrifice-defender");
+  const sacrifice = instance({ ...cards.unl173sacrifice, energy: 0, power: [] }, player.id,
+    "unl-sacrifice-spell");
+  player.base = [phoenix];
+  player.hand = [sacrifice];
+  player.runes = [rune(DOMAINS.FURY, player.id, "unl-phoenix-return-power")];
+  player.mainDeck = [
+    instance(cards.charm, player.id, "unl-sacrifice-draw-1"),
+    instance(cards.gust, player.id, "unl-sacrifice-draw-2")
+  ];
+  field.controlledBy = opponent.id;
+  field.units = [defender];
+
+  assert.equal(moveUnit(game, phoenix.instanceId, field.instanceId).ok, true);
+  assert.equal(phoenix.combatRole, "attacker");
+  assert.equal(beginPlayCard(game, sacrifice.instanceId, "base").ok, true);
+  assert.equal(game.pendingChoice?.data?.targetEffect, "killFriendlyUnitAdditionalCost");
+  assert.ok(game.pendingChoice.options.some((option) => option.unitId === phoenix.instanceId),
+    "Assault 2 makes the attacking Phoenix Mighty for Sacrifice's cost");
+  assert.equal(chooseEffectOption(game, phoenix.instanceId).ok, true);
+  assert.equal(confirmPayment(game).ok, true);
+  assert.equal(player.trash.some((card) => card.instanceId === phoenix.instanceId), true);
+  assert.equal(game.pendingChoice?.effect, "declareOptionalTrigger", JSON.stringify({
+    pendingChoice: game.pendingChoice,
+    pendingPayment: game.pendingPayment,
+    showdown: game.showdown,
+    actionChain: game.actionChain,
+    log: game.log.slice(-15)
+  }));
+  assert.equal(chooseEffectOption(game, "use-optional-trigger").ok, true);
+  assert.equal(game.pendingPayment?.source, "triggeredAbility");
+  assert.equal(togglePaymentRune(game, "unl-phoenix-return-power", "power").ok, true);
+  assert.equal(confirmPayment(game).ok, true);
+
+  settleAllChains(game);
+  assert.equal(player.base.some((card) => card.instanceId === phoenix.instanceId), true);
+  assert.equal(player.trash.some((card) => card.instanceId === phoenix.instanceId), false);
 });
 
 test("Pyke and Star Spring enforce their once-per-turn and first-non-token markers", () => {

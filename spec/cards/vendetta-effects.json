@@ -245,7 +245,7 @@
     ] },
     "VEN-137/166": { "effects": [{ "timing": "replacement", "kind": "copyOtherFriendlyOnAttach", "textSection": "effect" }] },
     "VEN-138/166": { "effects": [{ "timing": "hold", "kind": "gainPoint", "amount": 1, "requiresExactlyOneOtherFriendlyHere": true }] },
-    "VEN-139/166": { "effects": [{ "timing": "activated", "kind": "moveShowdownFriendlyToBaseReadyIfEmpowered", "abilityId": "rogue-assassin", "exhaust": true, "abilityKeywords": ["Action"], "requiresOwnTurn": true }] },
+    "VEN-139/166": { "effects": [{ "timing": "activated", "kind": "moveShowdownFriendlyToBaseReadyIfEmpowered", "abilityId": "rogue-assassin", "exhaust": true, "abilityKeywords": ["Action"], "effectRequiresOwnTurn": true }] },
     "VEN-140/166": { "effects": [{ "timing": "spell", "kind": "optionalDamageEnemyThenMoveFriendly", "amount": 2 }] },
     "VEN-141/166": { "effects": [{ "timing": "activated", "kind": "addEnergy", "abilityId": "butcher-energy", "costPower": [{ "domain": "Any", "amount": 2 }], "exhaust": true, "abilityKeywords": ["Reaction"], "amount": 2, "restriction": "unitOrUnitAbility" }] },
     "VEN-142/166": { "effects": [{ "timing": "spell", "kind": "doubleMightGrantReadyAbility", "target": "unit", "costPower": [{ "domain": "Any", "amount": 2 }], "temporary": true }] },

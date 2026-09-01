@@ -99,8 +99,8 @@ const mutants = [
     const moving = game.players[0].base.shift();
     game.battlefields[0].units.push(moving);
   }, { kind: "standardMove", unitIds: ["base-unit"], ok: true }),
-  transitionMutant("countered-card-counted-as-played", "resolved-play-accounting", (game) => {
-    game.players[0].cardsPlayedThisTurn += 1;
+  transitionMutant("countered-card-counted-twice", "resolved-play-accounting", (game) => {
+    game.players[0].cardsPlayedThisTurn += 2;
   }, { kind: "cardResolution", playerId: "p1", resolved: false, countered: true }),
   transitionMutant("resolved-card-not-counted", "resolved-play-accounting", () => {}, {
     kind: "cardResolution", playerId: "p1", resolved: true, countered: false

@@ -146,8 +146,8 @@
     {
       "id": "RB-419.4.a/RB-419.4.b",
       "category": "resolved-play-accounting",
-      "summary": "A card is played only after its play process completes by resolution; a countered card or one prevented from resolving was not played and causes no played trigger.",
-      "boundaryAxes": ["on Chain", "resolved", "countered", "resolution prevented"],
+      "summary": "A finalized card counts in turn play history even if it is later countered or prevented from resolving; resolved-play triggers still require resolution.",
+      "boundaryAxes": ["pending", "finalized", "resolved", "countered", "resolution prevented"],
       "oracleChecks": ["resolved-play-accounting"],
       "evidenceTests": ["resolved and countered card plays agree with the independent 419.4 oracle"]
     },

@@ -27,6 +27,18 @@ test("dynamic room, card-pool, rarity, choice, and combat labels are Korean", ()
   assert.equal(localizeKoreanRarity("Epic"), "서사급");
   assert.equal(localizeKoreanRarity("Showcase"), "쇼케이스");
   assert.equal(localizeKoreanChoiceLabel("Pay Energy 2"), "에너지 2 지불");
+  assert.equal(
+    localizeKoreanChoiceLabel("Applied Researcher: -2 Energy (minimum 1)"),
+    "Applied Researcher: 에너지 2 감소 (최저 비용 1)"
+  );
+  assert.equal(
+    localizeKoreanChoiceLabel("Prevent damage first, then double what remains"),
+    "피해를 먼저 방지한 뒤 남은 피해를 두 배로 적용"
+  );
+  assert.equal(
+    localizeKoreanChoiceLabel("Double damage first, then prevent damage"),
+    "피해를 먼저 두 배로 한 뒤 피해 방지 적용"
+  );
   assert.equal(localizeKoreanChoiceLabel("Do not pay 1 Energy + 1 Any Power"), "에너지 1 + 힘 1 지불하지 않음");
   assert.equal(localizeKoreanChoiceLabel("Pay 1 Energy + 1 Any Power to repeat once"), "에너지 1 + 힘 1 지불하고 1회 반복");
   assert.equal(localizeKoreanChoiceLabel("Spend 5 XP"), "XP 5 사용");

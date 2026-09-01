@@ -2670,7 +2670,8 @@ test("resolved and countered card plays agree with the independent 419.4 oracle"
     const { game, player, opponent, observer, spell } = makePlayGame("countered");
     const before = captureRuleState(game);
     assert.equal(playCard(game, spell.instanceId).ok, true);
-    assert.equal(player.cardsPlayedThisTurn, 0, "a pending Chain item is not yet played");
+    assert.equal(player.cardsPlayedThisTurn, 1,
+      "playCard has paid and Finalized the item, so it is already in turn play history");
     assert.equal(observer.temporaryMight || 0, 0, "played triggers wait for successful resolution");
 
     const defy = instance(cards.defy, opponent.id, "played-counter-defy");
@@ -2745,7 +2746,8 @@ test("cards and tokens follow the independent complete play lifecycle", () => {
   assert.equal(spellGame.pendingPayment?.cardId, spell.instanceId);
   assert.equal(confirmPayment(spellGame).ok, true);
   assert.equal(spellGame.actionChain?.chain[0].status, "finalized");
-  assert.equal(spellPlayer.cardsPlayedThisTurn, 0, "Finalized is not yet Played before spell resolution completes");
+  assert.equal(spellPlayer.cardsPlayedThisTurn, 1,
+    "Finalized cards count for turn history before their resolved-play triggers fire");
   assert.equal(spellPlayer.trash.includes(spell), false);
   assert.equal(passShowdown(spellGame, spellGame.actionChain.priorityPlayerId).ok, true);
   assert.equal(passShowdown(spellGame, spellGame.actionChain.priorityPlayerId).ok, true);
@@ -2776,8 +2778,8 @@ test("cards and tokens follow the independent complete play lifecycle", () => {
   assert.equal(permanentExpected.zone, "board");
 
   const counteredExpected = resolvePlayLifecycleReference({ objectKind: "spell", resolved: false });
-  assert.equal(counteredExpected.played, false);
-  assert.equal(counteredExpected.cardOrdinalDelta, 0);
+  assert.equal(counteredExpected.played, true);
+  assert.equal(counteredExpected.cardOrdinalDelta, 1);
   assert.deepEqual(
     resolvePlayLifecycleReference({ objectKind: "spell", enclosingEffect: true, outstandingTask: true }).trace.slice(0, 4),
     ["close", "pending", "wait-for-enclosing-effect", "wait-for-outstanding-task"]
@@ -3019,6 +3021,10 @@ test("component minima do not prevent a later total discount from reducing Energ
 
   assert.equal(beginPlayCard(game, spell.instanceId, "base").ok, true);
   assert.equal(chooseEffectOption(game, target.instanceId).ok, true);
+  assert.equal(game.pendingChoice?.effect, "costModifierOrder");
+  const apprenticeFirst = game.pendingChoice.options.find((option) => option.label.includes("Eager Apprentice"));
+  assert.ok(apprenticeFirst);
+  assert.equal(chooseEffectOption(game, apprenticeFirst.id).ok, true);
   assert.equal(game.pendingPayment?.energyCost, 0);
 });
 

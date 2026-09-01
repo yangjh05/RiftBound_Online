@@ -6,6 +6,7 @@ import { effectDefinition, effectKey } from "../src/effects/registry.mjs";
 import { effectIsEnabledByMutation } from "../src/effects/runtime.mjs";
 import {
   activateCard,
+  applyDamage,
   beginPlayCard,
   beginPlayCardFromTrash,
   chooseEffectOption,
@@ -355,6 +356,16 @@ test("Gangplank pays two Body Power and replaces only enemy chosen disable effec
   assert.equal(game.battlefields[0].units.some((card) => card.instanceId === gangplank.instanceId), true);
   assert.equal(currentMight(game, gangplank), (gangplank.might || 0) + 3);
   assert.equal(gangplank.temporaryMight, 3);
+
+  gangplank.stunned = true;
+  const redundantStun = instance({ ...cards.backOff, energy: 0, power: [] }, opponent.id, "ven-redundant-stun");
+  opponent.hand = [redundantStun];
+  assert.equal(beginPlayCard(game, redundantStun.instanceId, "base").ok, true);
+  assert.equal(chooseEffectOption(game, gangplank.instanceId).ok, true);
+  assert.equal(confirmPayment(game).ok, true);
+  settleAllChains(game);
+  assert.equal(gangplank.temporaryMight, 3,
+    "an already-stunned unit has no new Stun event for Gangplank to replace");
 });
 
 test("Wild Claw recycles every looked card when its optional play is declined", () => {
@@ -1262,4 +1273,129 @@ test("Rebuttal can remake one choice while retaining another legal choice", () =
   assert.equal(currentMight(game, positive), 2, "the remade positive target is no longer affected");
   assert.equal(currentMight(game, negative), 2, "the retained negative target remains chosen");
   assert.equal(currentMight(game, replacement), 5, "the newly chosen positive target gets +2");
+});
+
+test("Rebuttal keeps Rampage's paid additional cost for its new controller and remade targets", () => {
+  const game = createGame({ interactive: true, manualActionChainPriority: true });
+  finishSetup(game);
+  const originalPlayer = currentPlayer(game);
+  const rebuttalPlayer = game.players.find((candidate) => candidate.id !== originalPlayer.id);
+  const originalUnit = instance({ ...cards.stalwartPoro, might: 3 }, originalPlayer.id,
+    "ven-rampage-original-unit");
+  const rebuttalUnit = instance({ ...cards.stalwartPoro, might: 3 }, rebuttalPlayer.id,
+    "ven-rampage-rebuttal-unit");
+  originalPlayer.base = [originalUnit];
+  rebuttalPlayer.base = [rebuttalUnit];
+  originalPlayer.runes = [rune(DOMAINS.BODY, originalPlayer.id, "ven-rampage-paid-power")];
+  rebuttalPlayer.runes = [rune(DOMAINS.MIND, rebuttalPlayer.id, "ven-rebuttal-control-power")];
+  const rampage = instance({ ...cards.ven083rampage, energy: 0, power: [] }, originalPlayer.id,
+    "ven-controlled-rampage");
+  const rebuttal = instance({ ...cards.ven152rebuttal, energy: 0, power: [] }, rebuttalPlayer.id,
+    "ven-rampage-rebuttal");
+  originalPlayer.hand = [rampage];
+  rebuttalPlayer.hand = [rebuttal];
+
+  assert.equal(beginPlayCard(game, rampage.instanceId, "base").ok, true);
+  assert.equal(game.pendingChoice?.data?.targetEffect, "powerAdditionalCost");
+  assert.equal(chooseEffectOption(game, "pay-power").ok, true);
+  assert.equal(chooseEffectOption(game, originalUnit.instanceId).ok, true);
+  assert.equal(chooseEffectOption(game, rebuttalUnit.instanceId).ok, true);
+  assert.equal(togglePaymentRune(game, "ven-rampage-paid-power", "power").ok, true);
+  assert.equal(confirmPayment(game).ok, true);
+  assert.equal(rampage.paidAdditionalCost, true);
+
+  if (game.actionChain?.priorityPlayerId === originalPlayer.id) {
+    assert.equal(passShowdown(game, originalPlayer.id).ok, true);
+  }
+  assert.equal(game.actionChain?.priorityPlayerId, rebuttalPlayer.id);
+  assert.equal(beginPlayCard(game, rebuttal.instanceId, "base").ok, true);
+  assert.equal(chooseEffectOption(game, rampage.instanceId).ok, true);
+  assert.equal(confirmPayment(game).ok, true);
+  settleAllChains(game);
+  assert.equal(game.pendingChoice?.data?.operation, "rebuttalResolve");
+  assert.equal(chooseEffectOption(game, "control").ok, true);
+  assert.equal(game.pendingChoice?.effect, "gainControlNewChoices");
+  assert.equal(chooseEffectOption(game, "new").ok, true);
+
+  for (const entryId of game.pendingChoice.options
+    .filter((option) => option.kind === "target")
+    .map((option) => option.id)) {
+    assert.equal(chooseEffectOption(game, entryId).ok, true);
+  }
+  assert.equal(chooseEffectOption(game, "confirm-controlled-choices").ok, true);
+  assert.equal(game.pendingChoice?.effect, "declarePlayTarget", JSON.stringify(game.pendingChoice));
+  assert.equal(chooseEffectOption(game, rebuttalUnit.instanceId).ok, true);
+  assert.equal(game.pendingChoice?.effect, "declarePlayTarget");
+  assert.equal(chooseEffectOption(game, originalUnit.instanceId).ok, true);
+
+  settleAllChains(game);
+  assert.equal(currentMight(game, rebuttalUnit), 5,
+    "the original player's paid Body cost gives the new controller's friendly unit +2 Might");
+  assert.equal(rebuttalUnit.damage, 3);
+  assert.equal(originalPlayer.trash.some((card) => card.instanceId === originalUnit.instanceId), true);
+});
+
+test("Applied Researchers and Shock Blast let the player choose cost-reduction order", () => {
+  function paymentAfterChoosing(firstSourceName) {
+    const game = createGame({ interactive: true });
+    finishSetup(game);
+    const player = currentPlayer(game);
+    const opponent = game.players.find((candidate) => candidate.id !== player.id);
+    const researchers = instance(cards.ven055appliedResearchers, player.id,
+      `ven-cost-order-researchers-${firstSourceName}`);
+    researchers.empoweredCount = 1;
+    const shockBlast = instance(cards.ven059shockBlast, player.id,
+      `ven-cost-order-shock-${firstSourceName}`);
+    const target = instance(cards.stalwartPoro, opponent.id,
+      `ven-cost-order-target-${firstSourceName}`);
+    player.base = [researchers];
+    player.hand = [shockBlast];
+    game.battlefields[0].units = [target];
+
+    assert.equal(beginPlayCard(game, shockBlast.instanceId, "base").ok, true);
+    assert.equal(game.pendingChoice?.effect, "declarePlayTarget");
+    assert.equal(chooseEffectOption(game, target.instanceId).ok, true);
+    assert.equal(game.pendingChoice?.effect, "costModifierOrder");
+    const first = game.pendingChoice.options.find((option) => option.label.includes(firstSourceName));
+    assert.ok(first, `the UI exposes ${firstSourceName} as a separate cost modifier`);
+    assert.equal(chooseEffectOption(game, first.id).ok, true);
+    assert.ok(game.pendingPayment);
+    return game.pendingPayment;
+  }
+
+  const researchersFirst = paymentAfterChoosing("Applied Researchers");
+  assert.equal(researchersFirst.energyCost, 0,
+    "the minimum-1 Researchers reduction can be applied before Shock Blast's self reduction");
+  assert.deepEqual(researchersFirst.powerCost, []);
+
+  const shockFirst = paymentAfterChoosing("Shock Blast");
+  assert.equal(shockFirst.energyCost, 1,
+    "applying Shock Blast first leaves the Researchers minimum of 1 in force");
+  assert.deepEqual(shockFirst.powerCost, []);
+});
+
+test("Ki Barrier and Lotus Trap let the unit controller order prevention and doubling", () => {
+  function damageAfterChoosing(order) {
+    const game = createGame({ interactive: true });
+    finishSetup(game);
+    const player = currentPlayer(game);
+    const target = instance({ ...cards.stalwartPoro, might: 20 }, player.id,
+      `ven-damage-order-target-${order}`);
+    const lotus = instance(cards.unl013lotusTrap, player.id, `ven-damage-order-lotus-${order}`);
+    const barrier = instance(cards.ven126kiBarrier, player.id, `ven-damage-order-barrier-${order}`);
+    lotus.declaredPlayTargets = [{ effect: "unleashedUnit", targetId: target.instanceId }];
+    barrier.declaredPlayTargets = [{ effect: "preventNextDamage", targetId: target.instanceId }];
+    player.base = [target];
+
+    resolveEffect(game, player, lotus);
+    assert.equal(target.damageMultiplier, 2);
+    assert.equal(resolveEffect(game, player, barrier), true);
+    assert.equal(game.pendingChoice?.effect, "damageReplacementOrder");
+    assert.equal(game.pendingChoice?.playerId, player.id);
+    assert.equal(chooseEffectOption(game, order).ok, true);
+    return applyDamage(game, player, target, target, 4, { origin: "combat" });
+  }
+
+  assert.equal(damageAfterChoosing("preventThenMultiply"), 0);
+  assert.equal(damageAfterChoosing("multiplyThenPrevent"), 1);
 });

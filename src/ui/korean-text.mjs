@@ -89,7 +89,9 @@ const EXACT_TEXT = new Map([
   ["Choose choices to remake", "다시 정할 선택 지정"],
   ["Keep its existing choices", "기존 선택 유지"],
   ["Confirm choices to remake", "다시 정할 선택 확정"],
-  ["A retained choice is no longer legal. Select it too, then confirm.", "유지하려는 선택 중 더 이상 유효하지 않은 것이 있습니다. 해당 선택도 다시 정하도록 지정한 뒤 확정해 주세요."]
+  ["A retained choice is no longer legal. Select it too, then confirm.", "유지하려는 선택 중 더 이상 유효하지 않은 것이 있습니다. 해당 선택도 다시 정하도록 지정한 뒤 확정해 주세요."],
+  ["Prevent damage first, then double what remains", "피해를 먼저 방지한 뒤 남은 피해를 두 배로 적용"],
+  ["Double damage first, then prevent damage", "피해를 먼저 두 배로 한 뒤 피해 방지 적용"]
 ]);
 
 const TEXT_PATTERNS = [
@@ -119,6 +121,7 @@ const TEXT_PATTERNS = [
   [/^(Body|Calm|Chaos|Fury|Mind|Order) is outside (.+)'s Domain Identity\.$/iu, ([, domain, legend]) => `${koreanDomain(domain)} 도메인은 ${legend}의 도메인 정체성에 맞지 않습니다.`],
   [/^(\d+) cards?$/iu, ([, count]) => `${count}장`],
   [/^Pay Energy (\d+)$/iu, ([, count]) => `에너지 ${count} 지불`],
+  [/^(.+): -(\d+) Energy \(minimum (\d+)\)$/iu, ([, source, reduction, minimum]) => `${source}: 에너지 ${reduction} 감소 (최저 비용 ${minimum})`],
   [/^Spend (\d+) XP$/iu, ([, count]) => `XP ${count} 사용`],
   [/^Do not spend XP$/iu, () => "XP 사용하지 않음"],
   [/^Do not pay (.+)$/iu, ([, cost]) => `${koreanResourceCost(cost)} 지불하지 않음`],

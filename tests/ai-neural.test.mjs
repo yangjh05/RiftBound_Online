@@ -81,6 +81,8 @@ import {
   readActionAuditOptionsHandoff
 } from "../scripts/ai-action-audit-options-handoff.mjs";
 import {
+  EVALUATOR_BOOTSTRAP_STAGE_MAX_ATTEMPTS,
+  evaluatorBootstrapStageAttemptDecision,
   hydrateEvaluatorBootstrapStageRequest,
   serializeEvaluatorBootstrapStageRequest
 } from "../scripts/evaluator-bootstrap-stage-handoff.mjs";
@@ -12154,6 +12156,35 @@ test("evaluator bootstrap stage handoff serializes models without callbacks", ()
     hydrated.collection.model
   );
   assert.notEqual(hydrated.collection.model, model);
+});
+
+test("evaluator bootstrap stage retries only missing result handoffs", () => {
+  assert.equal(EVALUATOR_BOOTSTRAP_STAGE_MAX_ATTEMPTS, 3);
+  assert.equal(evaluatorBootstrapStageAttemptDecision({
+    result: null,
+    attempt: 1
+  }), "retry");
+  assert.equal(evaluatorBootstrapStageAttemptDecision({
+    result: null,
+    attempt: 2
+  }), "retry");
+  assert.equal(evaluatorBootstrapStageAttemptDecision({
+    result: null,
+    attempt: 3
+  }), "failed");
+  assert.equal(evaluatorBootstrapStageAttemptDecision({
+    result: null,
+    attempt: 1,
+    shutdownRequested: true
+  }), "failed");
+  assert.equal(evaluatorBootstrapStageAttemptDecision({
+    result: { ok: false },
+    attempt: 1
+  }), "failed");
+  assert.equal(evaluatorBootstrapStageAttemptDecision({
+    result: { ok: true },
+    attempt: 3
+  }), "complete");
 });
 
 test("advanced deck mutations preserve card count, rune count and unique battlefield count", () => {

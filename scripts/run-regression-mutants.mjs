@@ -126,15 +126,15 @@ const engineMutants = [
   },
   {
     id: "main-deck-recycle-goes-to-actor",
-    search: `    if (card.isToken) continue;
+    search: `    if (isTokenCard(card)) continue;
     const owner = game.players.find((candidate) => candidate.id === card.ownerId) || player;`,
-    replacement: `    if (card.isToken) continue;
+    replacement: `    if (isTokenCard(card)) continue;
     const owner = player;`,
     testName: "Main Deck recycling uses each card owner and recycled tokens cease to exist"
   },
   {
     id: "main-deck-recycled-token-persists",
-    search: "    if (card.isToken) continue;",
+    search: "    if (isTokenCard(card)) continue;",
     replacement: "    if (false) continue;",
     testName: "Main Deck recycling uses each card owner and recycled tokens cease to exist"
   },
@@ -168,21 +168,21 @@ const engineMutants = [
   },
   {
     id: "damage-ignores-prevent",
-    search: `  const validBaseDamage = consumeDamagePrevention(
-    game,
-    target,
-    baseDamageAmount(game, source, target, baseAmount, options),
-    origin
-  );`,
-    replacement: "  const validBaseDamage = baseDamageAmount(game, source, target, baseAmount, options);",
+    search: `    const validBaseDamage = consumeDamagePrevention(
+      game,
+      target,
+      baseDamageAmount(game, source, target, baseAmount, options),
+      origin
+    );`,
+    replacement: "    const validBaseDamage = baseDamageAmount(game, source, target, baseAmount, options);",
     testName: "Prevent applies only to its declared source and retains an unspent remainder"
   },
   {
     id: "bonus-damage-revives-invalid-deal",
-    search: `  let amount = validBaseDamage > 0
-    ? validBaseDamage + bonusDamageAmount(game, player, source, target, options)
-    : 0;`,
-    replacement: "  let amount = validBaseDamage + bonusDamageAmount(game, player, source, target, options);",
+    search: `    amount = validBaseDamage > 0
+      ? validBaseDamage + bonusDamageAmount(game, player, source, target, options)
+      : 0;`,
+    replacement: "    amount = validBaseDamage + bonusDamageAmount(game, player, source, target, options);",
     testName: "Bonus Damage is added only after the underlying Deal action remains valid"
   },
   {
@@ -205,13 +205,19 @@ const engineMutants = [
   },
   {
     id: "combat-healing-is-not-one-simultaneous-heal-event",
-    search: "  healUnits(game, allUnits(game), { reason: \"combat-special-cleanup\" });",
-    replacement: "  for (const unit of allUnits(game)) unit.damage = 0;",
+    search: "  healUnits(game, liveParticipants, { reason: \"combat-special-cleanup\" });",
+    replacement: "  for (const unit of liveParticipants) unit.damage = 0;",
     testName: "combat special cleanup heals an aura survivor before the next normal cleanup"
   },
   {
     id: "combat-result-not-recorded",
-    search: "  const combatResult = recordCombatResultEvent(game, battlefield, process, attackersRemain, defendersRemain);",
+    search: `    const combatResult = recordCombatResultEvent(
+      game,
+      battlefield,
+      process,
+      Boolean(process.resultAttackersRemain),
+      Boolean(process.resultDefendersRemain)
+    );`,
     replacement: "  const combatResult = { unitResults: {} }; // Mutant: omit the required combat result event.",
     testName: "combat special cleanup heals an aura survivor before the next normal cleanup"
   },
@@ -235,8 +241,10 @@ const engineMutants = [
   },
   {
     id: "effect-move-forces-exhausted-state",
-    search: "  if (options.readyAfterMove) readyUnitWithEffects(game, player, source, unit);",
-    replacement: "  unit.exhausted = true;",
+    search: `  removeUnitFromSource(location);
+  if (options.readyAfterMove) readyUnitWithEffects(game, player, source, unit);`,
+    replacement: `  removeUnitFromSource(location);
+  unit.exhausted = true;`,
     testName: "effect Moves use the shared movement event and send controlled units to their controller's base"
   },
   {
@@ -484,7 +492,7 @@ const engineMutants = [
   },
   {
     id: "numeric-keyword-first-instance-only",
-    search: "const printed = printedKeywordValue(card, keyword, fallback);",
+    search: "const printed = card?.attachedToId ? 0 : printedKeywordValue(card, keyword, fallback);",
     replacement: "const printed = keywordListHas(card?.keywords, keyword) ? fallback : 0;",
     testName: "numeric keyword values from separate sources are summed"
   },
@@ -792,6 +800,7 @@ const engineMutants = [
   for (const item of pending) {
     if (item.playOptions?.playProcess) delete item.playOptions.playProcess.privateLogSnapshot;
     item.status = "finalized";
+    recordFinalizedCardPlay(game, item);
     requestCleanup(game, "pending-item-finalized", { itemId: item.id, itemType: item.itemType });
   }
   log(game, \`${"${pending.length}"} chain item${"${pending.length === 1 ? \"\" : \"s\"}"} finalized.\`);
@@ -803,6 +812,7 @@ const engineMutants = [
   for (const item of pending) {
     if (item.playOptions?.playProcess) delete item.playOptions.playProcess.privateLogSnapshot;
     item.status = "pending";
+    recordFinalizedCardPlay(game, item);
     requestCleanup(game, "pending-item-finalized", { itemId: item.id, itemType: item.itemType });
   }
   log(game, \`${"${pending.length}"} chain item${"${pending.length === 1 ? \"\" : \"s\"}"} finalized.\`);
@@ -865,6 +875,7 @@ const engineMutants = [
   for (const item of pending) {
     if (item.playOptions?.playProcess) delete item.playOptions.playProcess.privateLogSnapshot;
     item.status = "finalized";
+    recordFinalizedCardPlay(game, item);
     requestCleanup(game, "pending-item-finalized", { itemId: item.id, itemType: item.itemType });
   }
   log(game, \`${"${pending.length}"} chain item${"${pending.length === 1 ? \"\" : \"s\"}"} finalized.\`);
@@ -876,6 +887,7 @@ const engineMutants = [
   for (const item of pending) {
     if (item.playOptions?.playProcess) delete item.playOptions.playProcess.privateLogSnapshot;
     item.status = "pending";
+    recordFinalizedCardPlay(game, item);
     requestCleanup(game, "pending-item-finalized", { itemId: item.id, itemType: item.itemType });
   }
   log(game, \`${"${pending.length}"} chain item${"${pending.length === 1 ? \"\" : \"s\"}"} finalized.\`);

@@ -79,22 +79,23 @@ export function referenceZone(result, unitId) {
 }
 
 /**
- * Independent model for Core Rules 419.4: a card becomes "played" only when
- * its play process completes by resolution. Countered or resolution-prevented
- * cards do not increment card-play counts and do not emit played events.
+ * Independent model for the Vendetta play-meaning split: turn-history and
+ * Legion count a card once its play is Finalized, while "when you play"
+ * triggers wait for that card to resolve. A countered card therefore remains
+ * in play history but emits no resolved-play trigger.
  */
 export function resolvePlayedReference({
   previousCardsPlayed = 0,
   isCard = true,
   resolution = "resolved"
 } = {}) {
-  const played = resolution === "resolved";
-  const cardPlayed = played && isCard;
+  const played = isCard;
+  const cardPlayed = isCard;
   return {
     played,
     cardPlayed,
     cardsPlayedThisTurn: previousCardsPlayed + (cardPlayed ? 1 : 0),
-    emitPlayedTrigger: cardPlayed
+    emitPlayedTrigger: cardPlayed && resolution === "resolved"
   };
 }
 
@@ -439,11 +440,17 @@ export function resolvePlayLifecycleReference({
   if (enclosingEffect) trace.push("wait-for-enclosing-effect");
   if (outstandingTask) trace.push("wait-for-outstanding-task");
   trace.push("choices", "costs", "legality", "finalized");
-  if (!resolved) return { trace: [...trace, "countered"], played: false, cardOrdinalDelta: 0, zone: "trash" };
+  if (!isToken) trace.push("play-history");
+  if (!resolved) return {
+    trace: [...trace, "countered"],
+    played: !isToken,
+    cardOrdinalDelta: isToken ? 0 : 1,
+    zone: "trash"
+  };
   if (isToken) trace.push("resolve-on-finalize");
   else trace.push("execute", "pass", "resolve");
-  if (objectKind === "spell") trace.push("execute-effect", "owner-trash", "played");
-  else trace.push("enter-board", "played");
+  if (objectKind === "spell") trace.push("execute-effect", "owner-trash", "resolved-play-trigger");
+  else trace.push("enter-board", "resolved-play-trigger");
   return {
     trace,
     played: true,

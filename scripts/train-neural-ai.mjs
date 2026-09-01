@@ -171,6 +171,8 @@ import {
 } from "./evaluator-bootstrap.mjs";
 import { migrateCompatibleEvaluatorBootstrap } from "./migrate-compatible-evaluator-bootstrap.mjs";
 import {
+  EVALUATOR_BOOTSTRAP_STAGE_MAX_ATTEMPTS,
+  evaluatorBootstrapStageAttemptDecision,
   serializeEvaluatorBootstrapStageRequest
 } from "./evaluator-bootstrap-stage-handoff.mjs";
 import {
@@ -5016,77 +5018,109 @@ async function collectEvaluatorBootstrapIsolated(options) {
   const childExecArgv = process.execArgv
     .filter((value) => !value.startsWith("--max-old-space-size"));
   childExecArgv.push("--max-old-space-size=4096");
-  const child = fork(childScript, [requestPath, resultPath], {
-    cwd: process.cwd(),
-    execArgv: childExecArgv,
-    serialization: "json",
-    stdio: ["ignore", "inherit", "inherit", "ipc"]
-  });
-  await writeCheckpoint(ownerPath, {
-    version: 1,
-    stageId,
-    parentProcessId: process.pid,
-    childProcessId: child.pid,
-    stopRequestPath: options.collection?.stopRequestPath || null,
-    startedAt: new Date().toISOString()
-  });
-  let childExited = false;
-  let forcedTerminationTimer = null;
-  let shutdownRequest = null;
-  const requestGracefulStageStop = (signal) => {
-    if (shutdownRequest) return shutdownRequest;
-    shutdownRequest = writeStopRequestIfAbsent(
-      options.collection?.stopRequestPath,
-      {
-        version: 1,
-        requestedAt: new Date().toISOString(),
-        reason: "evaluator-bootstrap-parent-terminating",
-        handoffId: stageId,
-        parentProcessId: process.pid,
-        childProcessId: child.pid,
-        signal
-      }
-    ).catch(() => false);
-    forcedTerminationTimer = setTimeout(() => {
-      if (!childExited) void terminateProcessTree(child.pid);
-    }, 15 * 60 * 1000);
-    return shutdownRequest;
-  };
-  const onSigint = () => { void requestGracefulStageStop("SIGINT"); };
-  const onSigterm = () => { void requestGracefulStageStop("SIGTERM"); };
-  process.once("SIGINT", onSigint);
-  process.once("SIGTERM", onSigterm);
-  const exit = await new Promise((resolve) => {
-    child.on("message", (message) => {
-      if (message?.type === "audit-progress") {
-        options.onAuditProgress?.(message.audit);
-      } else if (message?.type === "stop-requested") {
-        options.collection?.onStopRequested?.(message.stop);
-      } else if (message?.type === "complete" && child.connected) {
-        // The result is already atomically committed before this notification.
-        // Closing the IPC channel also lets older stage children terminate if
-        // they would otherwise remain alive solely because of the channel.
-        child.disconnect();
-      }
+  let result = null;
+  let exit = null;
+  for (let attempt = 1;
+    attempt <= EVALUATOR_BOOTSTRAP_STAGE_MAX_ATTEMPTS;
+    attempt += 1) {
+    const child = fork(childScript, [requestPath, resultPath], {
+      cwd: process.cwd(),
+      execArgv: childExecArgv,
+      serialization: "json",
+      stdio: ["ignore", "inherit", "inherit", "ipc"]
     });
-    child.once("error", (error) => resolve({ code: null, signal: null, error }));
-    child.once("exit", (code, signal) => {
-      childExited = true;
-      resolve({ code, signal, error: null });
+    await writeCheckpoint(ownerPath, {
+      version: 2,
+      stageId,
+      attempt,
+      maximumAttempts: EVALUATOR_BOOTSTRAP_STAGE_MAX_ATTEMPTS,
+      parentProcessId: process.pid,
+      childProcessId: child.pid,
+      stopRequestPath: options.collection?.stopRequestPath || null,
+      startedAt: new Date().toISOString()
     });
-  }).finally(async () => {
-    process.removeListener("SIGINT", onSigint);
-    process.removeListener("SIGTERM", onSigterm);
-    if (forcedTerminationTimer) clearTimeout(forcedTerminationTimer);
-    await unlink(ownerPath).catch((error) => {
-      if (error?.code !== "ENOENT") throw error;
+    let childExited = false;
+    let forcedTerminationTimer = null;
+    let shutdownRequest = null;
+    const requestGracefulStageStop = (signal) => {
+      if (shutdownRequest) return shutdownRequest;
+      shutdownRequest = writeStopRequestIfAbsent(
+        options.collection?.stopRequestPath,
+        {
+          version: 1,
+          requestedAt: new Date().toISOString(),
+          reason: "evaluator-bootstrap-parent-terminating",
+          handoffId: stageId,
+          parentProcessId: process.pid,
+          childProcessId: child.pid,
+          signal
+        }
+      ).catch(() => false);
+      forcedTerminationTimer = setTimeout(() => {
+        if (!childExited) void terminateProcessTree(child.pid);
+      }, 15 * 60 * 1000);
+      return shutdownRequest;
+    };
+    const onSigint = () => { void requestGracefulStageStop("SIGINT"); };
+    const onSigterm = () => { void requestGracefulStageStop("SIGTERM"); };
+    process.once("SIGINT", onSigint);
+    process.once("SIGTERM", onSigterm);
+    exit = await new Promise((resolve) => {
+      child.on("message", (message) => {
+        if (message?.type === "audit-progress") {
+          options.onAuditProgress?.(message.audit);
+        } else if (message?.type === "stop-requested") {
+          options.collection?.onStopRequested?.(message.stop);
+        } else if (message?.type === "complete" && child.connected) {
+          // The result is already atomically committed before this notification.
+          // Closing the IPC channel also lets older stage children terminate if
+          // they would otherwise remain alive solely because of the channel.
+          child.disconnect();
+        }
+      });
+      child.once("error", (error) => resolve({
+        code: null,
+        signal: null,
+        error
+      }));
+      child.once("exit", (code, signal) => {
+        childExited = true;
+        resolve({ code, signal, error: null });
+      });
+    }).finally(async () => {
+      process.removeListener("SIGINT", onSigint);
+      process.removeListener("SIGTERM", onSigterm);
+      if (forcedTerminationTimer) clearTimeout(forcedTerminationTimer);
+      await unlink(ownerPath).catch((error) => {
+        if (error?.code !== "ENOENT") throw error;
+      });
     });
-  });
-  const result = await readCheckpoint(resultPath);
-  if (exit.code !== 0 || result?.ok !== true) {
+    result = await readEvaluatorBootstrapStageResult(resultPath);
+    const decision = evaluatorBootstrapStageAttemptDecision({
+      result,
+      attempt,
+      shutdownRequested: shutdownRequest != null
+    });
+    if (decision === "complete") break;
+    if (decision === "retry") {
+      console.warn(
+        `Evaluator-bootstrap stage exited without a committed result; `
+        + `resuming committed work (attempt ${attempt + 1}/`
+        + `${EVALUATOR_BOOTSTRAP_STAGE_MAX_ATTEMPTS}, `
+        + `exit=${exit.code ?? "null"}, signal=${exit.signal || "none"}).`
+      );
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      continue;
+    }
     const detail = result?.error?.message
       || exit.error?.message
       || `exit=${exit.code ?? "null"}, signal=${exit.signal || "none"}`;
+    throw new Error(`Isolated evaluator-bootstrap stage failed: ${detail}`);
+  }
+  if (result?.ok !== true) {
+    const detail = result?.error?.message
+      || exit?.error?.message
+      || `exit=${exit?.code ?? "null"}, signal=${exit?.signal || "none"}`;
     throw new Error(`Isolated evaluator-bootstrap stage failed: ${detail}`);
   }
   const loaded = await loadEvaluatorBootstrap(
@@ -5105,6 +5139,15 @@ async function collectEvaluatorBootstrapIsolated(options) {
     datasetKey: result.datasetKey,
     audit: result.audit
   };
+}
+
+async function readEvaluatorBootstrapStageResult(filename) {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const result = await readCheckpoint(filename);
+    if (result) return result;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return null;
 }
 
 async function writeStopRequestIfAbsent(filename, value) {

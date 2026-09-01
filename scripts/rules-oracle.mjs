@@ -31,7 +31,7 @@ export const RULE_ORACLE_CHECKS = Object.freeze([
   rule("RB-137.1/RB-423.1.a/RB-729.1.a", "numeric-state", "Might modifiers and public player counters must remain finite and non-negative where the rules require it."),
   rule("RB-460.2.c.5/RB-460.2.c.7/RB-460.2.c.9/RB-815/RB-826", "combat-damage-assignment-priority", "Combat damage choices obey Tank-first, Backline-last, conflicting, and damage-prevention assignment requirements."),
   rule("RB-144.2", "standard-move-cost", "A successful Standard Move exhausts every moved unit as its cost.", "transition"),
-  rule("RB-419.4.a/RB-419.4.b", "resolved-play-accounting", "Only a card whose play process completed by resolution is counted as played.", "transition"),
+  rule("RB-419.4.a/RB-419.4.b", "resolved-play-accounting", "A finalized card enters turn play history even if it is later countered; resolved-play triggers still require resolution.", "transition"),
   rule("RB-413.4/RB-431.2", "burn-out-sequence", "An overdraw recycles trash, awards an opponent a point, and then resumes drawing.", "transition"),
   rule("RB-166/RB-315.4.d/RB-317.2.d", "rune-pool-boundary", "Rune Pools persist between actions and empty only after a Draw Phase and at the end of a turn.", "transition"),
   rule("RB-317.2.b/RB-317.2.c/RB-317.2.d", "turn-expiration", "Ending cleanup heals units, expires every previous 'this turn' modifier, and empties Rune Pools.", "transition")
@@ -192,13 +192,13 @@ export function evaluateRuleTransition(before, game, context = {}) {
   if (action.kind === "cardResolution" && action.playerId) {
     const priorCount = before?.players?.[action.playerId]?.cardsPlayedThisTurn || 0;
     const nextCount = after.players?.[action.playerId]?.cardsPlayedThisTurn || 0;
-    const expectedDelta = action.resolved && !action.countered && !action.resolutionPrevented ? 1 : 0;
+    const expectedDelta = 1;
     const actualDelta = nextCount - priorCount;
     if (actualDelta !== expectedDelta) {
       addViolation(
         violations,
         "resolved-play-accounting",
-        `${action.playerId}'s played-card count changed by ${actualDelta}; the resolved play state requires ${expectedDelta}.`,
+        `${action.playerId}'s played-card count changed by ${actualDelta}; Finalize requires ${expectedDelta} turn-history entry.`,
         { playerId: action.playerId, priorCount, nextCount, expectedDelta, action }
       );
     }

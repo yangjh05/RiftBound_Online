@@ -13353,6 +13353,7 @@
         {
           "timing": "spell",
           "kind": "counterSpell",
+          "enemyOnly": true,
           "includeAbilities": true,
           "requiresChoosingFriendlyUnitOrGear": true
         }
@@ -31547,8 +31548,8 @@
           "abilityKeywords": [
             "Action"
           ],
-          "exhaust": true,
-          "requiresOwnTurn": true
+          "effectRequiresOwnTurn": true,
+          "exhaust": true
         }
       ]
     },
