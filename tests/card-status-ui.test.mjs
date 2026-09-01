@@ -54,6 +54,19 @@ test("permanent and temporary Might are not double-counted", () => {
   assert.equal(statuses.some((status) => status.kind === "lastingMight"), false);
 });
 
+test("card status rendering tolerates malformed optional arrays from older saves", () => {
+  assert.doesNotThrow(() => cardStatusItems({
+    temporaryKeywords: "Shield",
+    damagePreventions: { remaining: 2 },
+    attachments: { name: "Old Gear" }
+  }, { locale: "ko" }));
+  assert.deepEqual(cardStatusItems({
+    temporaryKeywords: "Shield",
+    damagePreventions: { remaining: 2 },
+    attachments: { name: "Old Gear" }
+  }, { locale: "ko" }), []);
+});
+
 test("card selection opens Card Info and keeps an explicit close/toggle path", async () => {
   const source = await readFile(new URL("../src/app.mjs", import.meta.url), "utf8");
   assert.match(source, /function cardStatusBadges\(card,/u);
@@ -65,7 +78,7 @@ test("card selection opens Card Info and keeps an explicit close/toggle path", a
   assert.match(source, /function toggleUiSelectedCard\(cardId\)/u);
   assert.match(source, /if \(kind === "inspector"\) inspectorOpen = true;/u);
   assert.match(source, /data-action="toggle-inspector"/u);
-  assert.match(source, /cardStatusPanel\(card, \{ compact: true \}\)/u);
+  assert.match(source, /cardStatusPanel\(normalizedCard, \{ compact: true \}\)/u);
   assert.match(source, /\$\{cardStatusPanel\(card\)\}/u);
 });
 

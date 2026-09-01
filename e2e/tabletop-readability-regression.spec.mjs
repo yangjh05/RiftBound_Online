@@ -813,6 +813,7 @@ test("inspector, trash, and banished panes never cover the command row or perman
 
 test("an active Chain stays compact, scrolls horizontally, and keeps Card Info available", async ({ page }) => {
   const runtimeFailures = captureRuntimeFailures(page);
+  await page.setViewportSize({ width: 1280, height: 720 });
   await openReadyBoard(page);
   await installReadabilityFixture(page);
   const chain = await installReadableChainFixture(page);
@@ -822,11 +823,33 @@ test("an active Chain stays compact, scrolls horizontally, and keeps Card Info a
   const items = stack.locator(".chain-zone-item");
   await expect(items).toHaveCount(expanded.cardIds.length);
   const item = items.first();
-  await visibleBox(item, "active Chain item");
+  const itemBox = await visibleBox(item, "active Chain item");
   await expect(item.locator(".chain-zone-copy > strong")).not.toBeEmpty();
   await expect(item.locator(".chain-zone-target")).toContainText(/대상|Target/iu);
   await expect(item.locator(".chain-zone-source, .chain-zone-effect, .chain-active-effect-text, .chain-selected-ability")).toHaveCount(0);
   await expect(item).not.toContainText(chain.effectText);
+
+  const artBox = await visibleBox(item.locator(".chain-card-motion-anchor"), "active Chain card art");
+  const copyBox = await visibleBox(item.locator(".chain-zone-copy"), "active Chain card copy");
+  expectContained(artBox, itemBox, "active Chain art inside its card");
+  expectContained(copyBox, itemBox, "active Chain copy inside its card");
+  expectNoVisualOverlap(artBox, copyBox, "active Chain art and copy");
+  const itemReadability = await item.evaluate((element) => {
+    const title = element.querySelector(".chain-zone-copy > strong");
+    const target = element.querySelector(".chain-zone-target");
+    const meta = element.querySelector(".chain-zone-meta");
+    return {
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+      titleFont: Number.parseFloat(getComputedStyle(title).fontSize),
+      targetFont: Number.parseFloat(getComputedStyle(target).fontSize),
+      metaFont: Number.parseFloat(getComputedStyle(meta.querySelector("b")).fontSize)
+    };
+  });
+  expect.soft(itemReadability.scrollHeight, "Chain card content must fit without vertical clipping").toBeLessThanOrEqual(itemReadability.clientHeight + 1);
+  expect.soft(itemReadability.titleFont).toBeGreaterThanOrEqual(12);
+  expect.soft(itemReadability.targetFont).toBeGreaterThanOrEqual(12);
+  expect.soft(itemReadability.metaFont).toBeGreaterThanOrEqual(11);
 
   const track = await stack.evaluate((element) => ({
     clientWidth: element.clientWidth,
@@ -848,6 +871,22 @@ test("an active Chain stays compact, scrolls horizontally, and keeps Card Info a
   await expect(inspector).toBeVisible();
   await expect(page.locator(".chain-context-panel.showing-targets")).toBeVisible();
   await expect(page.locator('.chain-context-panel [data-action="view-chain-card"]')).toBeVisible();
+
+  const inspectorBox = await visibleBox(inspector, "Chain Card Info");
+  const chainBox = await visibleBox(page.locator(".chain-pod"), "Chain panel beside Card Info");
+  const viewport = page.viewportSize();
+  expect.soft(inspectorBox.width, "Card Info must retain a readable desktop width").toBeGreaterThanOrEqual(340);
+  expect.soft(inspectorBox.height, "Card Info must retain a readable desktop height").toBeGreaterThanOrEqual(400);
+  expect.soft(viewport.width - inspectorBox.x - inspectorBox.width, "Card Info must be flush with the right edge").toBeLessThanOrEqual(1);
+  expectNoVisualOverlap(chainBox, inspectorBox, "Chain panel and Card Info");
+  const inspectorArt = inspector.locator(".inspector-card");
+  const inspectorImage = inspectorArt.locator("img");
+  const inspectorArtBox = await visibleBox(inspectorArt, "Chain Card Info art frame");
+  const inspectorImageBox = await visibleBox(inspectorImage, "Chain Card Info image");
+  expectContained(inspectorImageBox, inspectorArtBox, "Chain Card Info image inside art frame");
+  const inspectorTitle = inspector.locator(".inspector-text > h2");
+  const inspectorTitleBox = await visibleBox(inspectorTitle, "Chain Card Info title");
+  expect.soft(inspectorTitleBox.height, "Card Info title must not collapse").toBeGreaterThanOrEqual(19);
 
   const activePassButtons = page.locator('button[data-action="pass-showdown"]:visible:not([disabled])');
   const activePassCount = await activePassButtons.count();
@@ -1074,6 +1113,18 @@ test("Chain and in-board payment keep the playmat, right actions, and direct Run
     await expect(directRune).toHaveClass(/can-pay-power/u);
     await expect(generatedEnergy).toBeVisible();
     await expect(generatedPower).toBeVisible();
+    const runeStack = directRune.locator("xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' rune-card-stack ')][1]");
+    const runeBox = await visibleBox(directRune, `${viewport.width} direct Rune card`);
+    const runeStackBox = await visibleBox(runeStack, `${viewport.width} Rune strip`);
+    expectContained(runeBox, runeStackBox, `${viewport.width} Rune card inside its vertical strip`);
+    const bottomSeat = page.locator(".table-seat.bottom");
+    const runeDeckCard = bottomSeat.locator(".pile-rune-deck .pile-cards");
+    expectContained(
+      await visibleBox(runeDeckCard, `${viewport.width} Rune Deck card`),
+      await visibleBox(bottomSeat, `${viewport.width} player seat`),
+      `${viewport.width} Rune Deck card inside player seat`
+    );
+    await expect(bottomSeat.locator(".resource-zone")).toHaveCSS("overflow", "visible");
     await generatedEnergy.click();
     await expect.poll(() => page.evaluate(() => window.__riftboundGame.pendingPayment.poolEnergyIds.length)).toBe(1);
     await directRune.click();

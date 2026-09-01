@@ -169,6 +169,7 @@ test("Korean card tags and Any power render like localized card metadata", () =>
   const yasuo = byNumber("OGN-076/298");
   const spellThief = byNumber("UNL-192/219");
   assert.deepEqual(translateCardTags(yasuo, "ko"), ["챔피언 유닛", "야스오", "아이오니아"]);
+  assert.deepEqual(translateCardTags({ type: "unit", tags: "legacy-tag" }, "ko"), ["유닛"]);
   assert.equal(translateCostDomain("Any", "ko", yasuo), "평정");
   assert.equal(translateCostDomain("Any", "ko", spellThief), "평정/신체");
 });

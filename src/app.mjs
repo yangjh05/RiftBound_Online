@@ -9539,7 +9539,7 @@ function runeChip(rune, index = 0, total = 1, playerId = "") {
 }
 
 function inspector(card) {
-  if (!card) {
+  if (!card || typeof card !== "object") {
     return `
       <aside class="inspector inspector-panel inspector-empty" data-scroll-key="inspector">
         <div class="inspector-toolbar">
@@ -9553,13 +9553,26 @@ function inspector(card) {
       </aside>
     `;
   }
-  const power = (card.power || []).map((item) => {
-    const domain = translateCostDomain(item.domain, locale(), card);
-    return locale() === LOCALES.KO ? `${item.amount} ${domain} ${t("power", locale())}` : `${item.amount} ${domain}`;
+  const normalizedCard = {
+    ...card,
+    power: Array.isArray(card.power) ? card.power.filter((item) => item && typeof item === "object") : [],
+    keywords: Array.isArray(card.keywords) ? card.keywords.filter(Boolean) : [],
+    tags: Array.isArray(card.tags) ? card.tags.filter(Boolean) : [],
+    temporaryKeywords: Array.isArray(card.temporaryKeywords) ? card.temporaryKeywords.filter(Boolean) : [],
+    damagePreventions: Array.isArray(card.damagePreventions) ? card.damagePreventions.filter(Boolean) : [],
+    attachments: Array.isArray(card.attachments) ? card.attachments.filter((item) => item && typeof item === "object") : []
+  };
+  const power = normalizedCard.power.map((item) => {
+    const domain = translateCostDomain(item.domain, locale(), normalizedCard);
+    const amount = Number.isFinite(Number(item.amount)) ? Number(item.amount) : 0;
+    return locale() === LOCALES.KO ? `${amount} ${domain} ${t("power", locale())}` : `${amount} ${domain}`;
   }).join(", ");
-  const cost = card.type === "rune" ? domainText(card.domain) : `${card.energy ?? "-"}${power ? ` + ${power}` : ""}`;
-  const attachments = Array.isArray(card.attachments) ? card.attachments.filter(Boolean) : [];
-  const rulesText = String(cardText(card) || "").trim();
+  const cost = normalizedCard.type === "rune"
+    ? domainText(normalizedCard.domain)
+    : `${normalizedCard.energy ?? "-"}${power ? ` + ${power}` : ""}`;
+  const attachments = normalizedCard.attachments;
+  const rulesText = String(cardText(normalizedCard) || "").trim();
+  const displayName = cardName(normalizedCard);
   return `
     <aside class="inspector inspector-panel" data-scroll-key="inspector">
       <div class="inspector-toolbar">
@@ -9567,21 +9580,22 @@ function inspector(card) {
         <button type="button" data-action="toggle-inspector">${t("close", locale())}</button>
       </div>
       <div class="inspector-card">
-        ${card.image ? `<img src="${card.image}" alt="${cardName(card)}" />` : ""}
+        <div class="inspector-card-fallback" aria-label="${escapeHtml(displayName)}"><strong>${escapeHtml(displayName)}</strong></div>
+        ${normalizedCard.image ? `<img src="${escapeHtml(normalizedCard.image)}" alt="${escapeHtml(displayName)}" />` : ""}
       </div>
       <div class="inspector-text">
-        <h2>${escapeHtml(cardName(card))}</h2>
-        <span>${escapeHtml(cardTags(card).join(" / "))} / ${escapeHtml(cost)}</span>
-        ${["unit", "gear"].includes(card.type) ? `<strong>${t("might", locale())} ${card.type === "unit" ? inspectorUnitMight(card) : card.might || 0}</strong>` : ""}
+        <h2>${escapeHtml(displayName)}</h2>
+        <span>${escapeHtml(cardTags(normalizedCard).join(" / "))} / ${escapeHtml(cost)}</span>
+        ${["unit", "gear"].includes(normalizedCard.type) ? `<strong>${t("might", locale())} ${normalizedCard.type === "unit" ? inspectorUnitMight(normalizedCard) : normalizedCard.might || 0}</strong>` : ""}
         <p class="inspector-rules-text">${escapeHtml(rulesText)}</p>
-        ${(card.keywords || []).length ? `<small>${escapeHtml(keywordText(card.keywords))}</small>` : ""}
-        ${cardStatusPanel(card, { compact: true })}
+        ${normalizedCard.keywords.length ? `<small>${escapeHtml(keywordText(normalizedCard.keywords))}</small>` : ""}
+        ${cardStatusPanel(normalizedCard, { compact: true })}
         <button class="secondary view-full-card" data-action="view-full-card">${t("viewFullCard", locale())}</button>
         ${attachments.length ? `
-          <button class="secondary attached-gear-toggle" data-action="toggle-attachments" data-card="${card.instanceId}">
-            ${attachmentsOpenCardId === card.instanceId ? t("hideAttachedGear", locale()) : `${t("attachedGear", locale())} ${attachments.length}`}
+          <button class="secondary attached-gear-toggle" data-action="toggle-attachments" data-card="${escapeHtml(normalizedCard.instanceId || "")}">
+            ${attachmentsOpenCardId === normalizedCard.instanceId ? t("hideAttachedGear", locale()) : `${t("attachedGear", locale())} ${attachments.length}`}
           </button>
-          ${attachmentsOpenCardId === card.instanceId ? attachedGearPanel(attachments) : ""}
+          ${attachmentsOpenCardId === normalizedCard.instanceId ? attachedGearPanel(attachments) : ""}
         ` : ""}
       </div>
     </aside>
@@ -9589,8 +9603,12 @@ function inspector(card) {
 }
 
 function inspectorUnitMight(card) {
-  const onBoard = game.players.some((player) => player.base.some((unit) => unit.instanceId === card.instanceId))
-    || game.battlefields.some((field) => field.units.some((unit) => unit.instanceId === card.instanceId));
+  const players = Array.isArray(game?.players) ? game.players : [];
+  const battlefields = Array.isArray(game?.battlefields) ? game.battlefields : [];
+  const onBoard = players.some((player) => (Array.isArray(player?.base) ? player.base : [])
+    .some((unit) => unit?.instanceId === card?.instanceId))
+    || battlefields.some((field) => (Array.isArray(field?.units) ? field.units : [])
+      .some((unit) => unit?.instanceId === card?.instanceId));
   return onBoard ? currentMight(game, card) : effectiveMight(card);
 }
 

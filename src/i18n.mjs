@@ -741,10 +741,11 @@ export function normalizeKoreanCardTerminology(text = "") {
 
 export function translateCardTags(card, locale = LOCALES.EN) {
   const types = Array.isArray(card?.types) && card.types.length ? card.types : [card?.type];
-  if (locale !== LOCALES.KO) return [...types, ...(card.tags || [])].filter(Boolean);
+  const tags = Array.isArray(card?.tags) ? card.tags.filter(Boolean) : [];
+  if (locale !== LOCALES.KO) return [...types, ...tags].filter(Boolean);
   const translated = cardKo(card)?.koTypeLine;
   if (translated) return translated.split(/\s*,\s*/u).filter(Boolean);
-  return [...types.map((type) => translateType(type, locale)), ...(card.tags || []).map((tag) => translateKeyword(tag, locale))].filter(Boolean);
+  return [...types.map((type) => translateType(type, locale)), ...tags.map((tag) => translateKeyword(tag, locale))].filter(Boolean);
 }
 
 export function translateCostDomain(domain, locale = LOCALES.EN, card = null) {

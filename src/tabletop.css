@@ -8175,7 +8175,7 @@
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: thin;
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 .tabletop-layout .choice-stage-actions > button {
@@ -9821,7 +9821,7 @@ body > .board-card-drag-ghost > :not(.card-exhaust-layer) {
 
 /* Authoritative Chain/identity seal. Keep this at physical EOF. */
 .tabletop-layout {
-  --tt-inspector-width: clamp(276px, 18vw, 336px);
+  --tt-inspector-width: clamp(344px, 25vw, 420px);
 }
 
 .tabletop-layout .chain-zone-content[hidden] { display: none !important; }
@@ -9829,8 +9829,9 @@ body > .board-card-drag-ghost > :not(.card-exhaust-layer) {
 .tabletop-layout .chain-zone-content {
   grid-template-columns: minmax(0, 1fr) !important;
   grid-template-rows: auto auto !important;
-  gap: 6px !important;
-  overflow: clip !important;
+  gap: 8px !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
 }
 
 .tabletop-layout .chain-stack {
@@ -9839,13 +9840,13 @@ body > .board-card-drag-ghost > :not(.card-exhaust-layer) {
   display: flex !important;
   flex-flow: row nowrap !important;
   align-items: stretch !important;
-  gap: 7px !important;
+  gap: 10px !important;
   width: 100% !important;
   min-width: 0 !important;
   min-height: 0 !important;
   overflow-x: auto !important;
   overflow-y: hidden !important;
-  padding: 1px 2px 7px !important;
+  padding: 3px 4px 9px !important;
   scroll-snap-type: x proximity;
   overscroll-behavior-x: contain;
   scrollbar-width: thin;
@@ -9853,27 +9854,67 @@ body > .board-card-drag-ghost > :not(.card-exhaust-layer) {
 }
 
 .tabletop-layout .chain-zone-item {
-  flex: 0 0 clamp(188px, 19vw, 232px) !important;
-  grid-template-columns: 42px minmax(0, 1fr) !important;
+  box-sizing: border-box;
+  flex: 0 0 clamp(232px, 22vw, 280px) !important;
+  grid-template-columns: 54px minmax(0, 1fr) !important;
   align-items: center !important;
-  gap: 7px !important;
-  width: clamp(188px, 19vw, 232px) !important;
-  min-width: 188px !important;
-  min-height: 76px !important;
-  max-height: 94px !important;
+  gap: 10px !important;
+  width: clamp(232px, 22vw, 280px) !important;
+  min-width: 232px !important;
+  min-height: 96px !important;
+  max-height: none !important;
   overflow: hidden !important;
-  padding: 6px !important;
+  padding: 8px !important;
   scroll-snap-align: start;
   pointer-events: auto;
 }
 
-.tabletop-layout .chain-zone-copy { gap: 3px !important; overflow: hidden; }
+.tabletop-layout .chain-card-motion-anchor[data-motion-anchor] {
+  grid-column: 1;
+  align-self: center;
+  width: 54px;
+  min-width: 54px;
+  max-width: 54px;
+  height: 76px;
+  max-height: 76px;
+  margin: 0;
+}
+
+.tabletop-layout .chain-zone-copy {
+  grid-column: 2;
+  display: grid !important;
+  align-content: center;
+  gap: 4px !important;
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
+}
+
+.tabletop-layout .chain-zone-meta {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.tabletop-layout .chain-zone-meta > :is(b, em) {
+  position: static;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .tabletop-layout .chain-zone-copy > strong,
 .tabletop-layout .chain-zone-target {
   display: -webkit-box;
   overflow: hidden;
-  line-height: 1.2 !important;
+  font-size: 12px !important;
+  line-height: 1.25 !important;
   white-space: normal;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -9883,9 +9924,9 @@ body > .board-card-drag-ghost > :not(.card-exhaust-layer) {
   position: relative;
   z-index: 3;
   align-content: start !important;
-  max-height: 78px !important;
-  overflow-x: auto !important;
-  overflow-y: hidden !important;
+  max-height: 88px !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
   pointer-events: auto;
 }
 
@@ -9965,6 +10006,16 @@ body > .board-card-drag-ghost > :not(.card-exhaust-layer) {
 }
 
 @media (min-width: 1200px) {
+  .tabletop-layout .chain-zone-content:has(> .chain-context-panel) {
+    grid-template-columns: minmax(0, 1fr) minmax(280px, 320px) !important;
+    grid-template-rows: minmax(0, 1fr) !important;
+    align-items: start;
+  }
+
+  .tabletop-layout .chain-zone-content:has(> .chain-context-panel) .chain-context-panel {
+    max-height: 168px !important;
+  }
+
   .tabletop-layout .table-pile-dock {
     grid-template-columns: repeat(3, var(--tt-shelf-card-width)) !important;
     gap: 4px !important;
@@ -9988,28 +10039,34 @@ body > .board-card-drag-ghost > :not(.card-exhaust-layer) {
     width: auto !important;
     max-width: none !important;
     height: auto !important;
-    max-height: 220px !important;
+    max-height: 248px !important;
     transform: none !important;
   }
 
   .tabletop-layout.inspector-open .chain-pod {
-    right: calc(var(--tt-action-rail) + var(--tt-inspector-width) + 18px) !important;
+    right: calc(var(--tt-inspector-width) + 12px) !important;
   }
 
   .tabletop-layout.inspector-open .floating-panels.has-blocking-decision {
-    right: calc(var(--tt-action-rail) + var(--tt-inspector-width) + 18px) !important;
+    right: calc(var(--tt-inspector-width) + 12px) !important;
   }
 
   .tabletop-layout.inspector-open .table-command-layer {
-    right: calc(var(--tt-action-rail) + var(--tt-inspector-width) + 18px) !important;
+    right: calc(var(--tt-inspector-width) + 12px) !important;
   }
 
   .tabletop-layout.inspector-open .inspector.inspector-panel {
     z-index: 112 !important;
-    right: calc(var(--tt-action-rail) + 8px) !important;
+    top: 66px !important;
+    right: 0 !important;
+    bottom: calc(var(--tt-hand-height) + var(--tt-command-height) + 12px) !important;
     display: grid !important;
+    grid-template-rows: auto clamp(190px, 34dvh, 320px) minmax(0, 1fr) !important;
     width: var(--tt-inspector-width) !important;
     max-width: var(--tt-inspector-width) !important;
+    height: auto !important;
+    max-height: none !important;
+    border-radius: 10px 0 0 10px;
   }
 
   .tabletop-layout:has(.chain-pod.is-collapsed) .chain-pod.is-collapsed,
@@ -10024,6 +10081,125 @@ body > .board-card-drag-ghost > :not(.card-exhaust-layer) {
     max-height: 42px !important;
     padding: 4px 6px !important;
   }
+
+  .tabletop-layout .resource-zone,
+  .tabletop-layout .rune-tabletop > .table-card-pile.pile-rune-deck {
+    overflow: visible !important;
+  }
+
+  .tabletop-layout .table-seat.bottom .rune-play-area {
+    grid-template-rows: minmax(0, 1fr) !important;
+  }
+
+  .tabletop-layout .table-seat.bottom .rune-summary {
+    position: absolute;
+    z-index: 8;
+    top: 0;
+    right: 0;
+    left: 0;
+  }
+
+  .tabletop-layout .table-seat.bottom .resource-row.rune-card-stack {
+    height: 100% !important;
+  }
+}
+
+.tabletop-layout .chain-zone-head {
+  min-height: 34px;
+}
+
+.tabletop-layout .chain-zone-toggle {
+  width: auto !important;
+  height: 32px !important;
+  min-height: 32px !important;
+  padding: 4px 9px !important;
+  font-size: 12px !important;
+}
+
+.tabletop-layout .inspector.inspector-panel .inspector-toolbar {
+  min-height: 34px;
+}
+
+.tabletop-layout .inspector.inspector-panel .inspector-toolbar :is(strong, button) {
+  font-size: 12px !important;
+}
+
+.tabletop-layout .inspector.inspector-panel .inspector-toolbar button {
+  width: auto !important;
+  height: 32px !important;
+  min-height: 32px !important;
+  padding: 4px 9px !important;
+}
+
+.tabletop-layout .inspector.inspector-panel .inspector-card {
+  position: relative;
+  min-height: 0;
+}
+
+.tabletop-layout .inspector.inspector-panel .inspector-card img {
+  position: absolute;
+  z-index: 2;
+  inset: 7px;
+  width: auto !important;
+  max-width: calc(100% - 14px) !important;
+  height: auto !important;
+  max-height: calc(100% - 14px) !important;
+  margin: auto;
+  object-fit: contain;
+}
+
+.tabletop-layout .inspector.inspector-panel .inspector-card-fallback {
+  position: absolute;
+  z-index: 1;
+  inset: 7px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(111, 193, 226, 0.42);
+  border-radius: 7px;
+  padding: 14px;
+  color: #dff6ff;
+  text-align: center;
+  background:
+    linear-gradient(145deg, rgba(13, 43, 62, 0.96), rgba(4, 17, 29, 0.98)),
+    repeating-linear-gradient(45deg, transparent 0 8px, rgba(112, 202, 236, 0.06) 8px 9px);
+}
+
+.tabletop-layout .inspector.inspector-panel .inspector-card-fallback > strong {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  font-size: 16px;
+  line-height: 1.3;
+}
+
+.tabletop-layout .inspector.inspector-panel .inspector-text {
+  display: flex !important;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.tabletop-layout .inspector.inspector-panel .inspector-text > * {
+  flex: 0 0 auto;
+}
+
+.tabletop-layout .inspector.inspector-panel .inspector-text > h2 {
+  min-height: 20px;
+  overflow: visible;
+  font-size: 16px;
+  line-height: 1.25;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.tabletop-layout .inspector.inspector-panel .inspector-text > :is(span, strong, small) {
+  font-size: 12px;
+}
+
+.tabletop-layout .inspector.inspector-panel .inspector-text > p,
+.tabletop-layout .inspector.inspector-panel .inspector-rules-text {
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .tabletop-layout [data-card-drag="champion"] {

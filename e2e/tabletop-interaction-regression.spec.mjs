@@ -1085,6 +1085,7 @@ test("pile choices use the lower drawer and normal piles stay compact and inspec
 
 test("card selection toggles the inspector and preserves long rules text", async ({ page }) => {
   const runtimeFailures = captureRuntimeFailures(page);
+  await page.setViewportSize({ width: 1280, height: 720 });
   await openReadyBoard(page);
   const fixture = await installInteractionFixture(page, "inspector");
 
@@ -1101,14 +1102,37 @@ test("card selection toggles the inspector and preserves long rules text", async
   await expect(rules).toContainText("LONG_RULE_END");
   const layout = await inspector.evaluate((panel) => {
     const toolbar = panel.querySelector(".inspector-toolbar");
+    const art = panel.querySelector(".inspector-card");
+    const image = art.querySelector("img");
+    const fallback = art.querySelector(".inspector-card-fallback");
     const text = panel.querySelector(".inspector-text");
+    const title = text.querySelector("h2");
     const rulesText = panel.querySelector(".inspector-rules-text");
+    const panelRect = panel.getBoundingClientRect();
     const toolbarRect = toolbar.getBoundingClientRect();
+    const artRect = art.getBoundingClientRect();
+    const imageRect = image?.getBoundingClientRect() || { width: 0, height: 0, left: 0, top: 0, right: 0, bottom: 0 };
+    const fallbackRect = fallback.getBoundingClientRect();
     const textRect = text.getBoundingClientRect();
+    const titleRect = title.getBoundingClientRect();
     const rulesStyle = getComputedStyle(rulesText);
     const textStyle = getComputedStyle(text);
     return {
       toolbarBeforeText: toolbarRect.bottom <= textRect.bottom,
+      panelWidth: panelRect.width,
+      panelHeight: panelRect.height,
+      rightGap: window.innerWidth - panelRect.right,
+      imageWidth: imageRect.width,
+      imageHeight: imageRect.height,
+      imageContained: imageRect.width === 0 || (imageRect.left >= artRect.left - 1
+        && imageRect.top >= artRect.top - 1
+        && imageRect.right <= artRect.right + 1
+        && imageRect.bottom <= artRect.bottom + 1),
+      fallbackWidth: fallbackRect.width,
+      fallbackHeight: fallbackRect.height,
+      titleHeight: titleRect.height,
+      titleFont: Number.parseFloat(getComputedStyle(title).fontSize),
+      rulesFont: Number.parseFloat(rulesStyle.fontSize),
       rulesMaxHeight: rulesStyle.maxHeight,
       rulesOverflowY: rulesStyle.overflowY,
       lineClamp: rulesStyle.getPropertyValue("-webkit-line-clamp"),
@@ -1117,6 +1141,15 @@ test("card selection toggles the inspector and preserves long rules text", async
     };
   });
   expect(layout.toolbarBeforeText).toBe(true);
+  expect(layout.panelWidth).toBeGreaterThanOrEqual(340);
+  expect(layout.panelHeight).toBeGreaterThanOrEqual(400);
+  expect(layout.rightGap).toBeLessThanOrEqual(1);
+  expect(Math.max(layout.imageWidth, layout.fallbackWidth)).toBeGreaterThanOrEqual(124);
+  expect(Math.max(layout.imageHeight, layout.fallbackHeight)).toBeGreaterThanOrEqual(174);
+  expect(layout.imageContained).toBe(true);
+  expect(layout.titleHeight).toBeGreaterThanOrEqual(19);
+  expect(layout.titleFont).toBeGreaterThanOrEqual(16);
+  expect(layout.rulesFont).toBeGreaterThanOrEqual(13);
   expect(layout.rulesMaxHeight).toBe("none");
   expect(layout.rulesOverflowY).toBe("visible");
   expect(["none", "unset", ""]).toContain(layout.lineClamp);

@@ -22,7 +22,9 @@ test("processing queue cards render only their title and declared targets", () =
 
 test("processing queue uses a compact horizontal scrolling card track", () => {
   assert.match(tabletopStyles, /\.tabletop-layout \.chain-stack\s*\{[\s\S]*display:\s*flex !important;[\s\S]*flex-flow:\s*row nowrap !important;[\s\S]*overflow-x:\s*auto !important;[\s\S]*overflow-y:\s*hidden !important;/);
-  assert.match(tabletopStyles, /\.tabletop-layout \.chain-zone-item\s*\{[\s\S]*flex:\s*0 0 clamp\(188px, 19vw, 232px\) !important;[\s\S]*max-height:\s*94px !important;/);
+  assert.match(tabletopStyles, /\.tabletop-layout \.chain-zone-item\s*\{[\s\S]*flex:\s*0 0 clamp\(232px, 22vw, 280px\) !important;[\s\S]*grid-template-columns:\s*54px minmax\(0, 1fr\) !important;[\s\S]*min-height:\s*96px !important;[\s\S]*max-height:\s*none !important;/);
+  assert.match(tabletopStyles, /\.tabletop-layout \.chain-card-motion-anchor\[data-motion-anchor\]\s*\{[\s\S]*width:\s*54px;[\s\S]*height:\s*76px;/);
+  assert.match(tabletopStyles, /\.tabletop-layout \.chain-context-panel\s*\{[\s\S]*overflow-y:\s*auto !important;/);
 });
 
 test("Pending hand plays are visible only to their player until Finalize", () => {
