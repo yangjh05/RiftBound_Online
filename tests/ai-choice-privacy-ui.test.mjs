@@ -25,18 +25,21 @@ test("AI opponent payment and choice decisions stay hidden from the human viewer
 });
 
 test("the game panel gates both modal types through decision ownership", () => {
-  assert.match(appSource, /const showPendingPayment = pendingDecisionVisibleToViewer/);
-  assert.match(appSource, /const showPendingChoice = pendingDecisionVisibleToViewer/);
-  assert.match(appSource, /\$\{showPendingPayment \? paymentPanel\(\) : ""\}/);
-  assert.match(appSource, /\$\{showPendingChoice \? choicePanel\(\) : ""\}/);
+  assert.match(appSource, /const showPaymentStage = decisionVisibleToViewer\(game\.pendingPayment\)/);
+  assert.match(appSource, /const showChoiceStage = decisionVisibleToViewer\(game\.pendingChoice\)/);
+  assert.match(appSource, /\$\{showPaymentStage \? paymentPanel\(\) : ""\}/);
+  assert.match(appSource, /const showPendingChoice = decisionVisibleToViewer\(game\.pendingChoice\)/);
+  assert.match(appSource, /\$\{sidePanelChoice \? choicePanel\(\) : ""\}/);
 });
 
-test("AI setup selections render a private waiting panel instead of opponent choices", () => {
+test("private setup choices stay hidden while revealed play-order loadouts remain public", () => {
   assert.match(appSource, /function setupSelectionVisibleToViewer\(playerId\)/);
-  assert.match(appSource, /if \(isChoosing && !setupSelectionVisibleToViewer\(chooser\?\.id\)\) \{\s*return privateFirstPlayerWaitingPanel\(chooser\);/);
+  assert.doesNotMatch(appSource, /if \(isChoosing && !setupSelectionVisibleToViewer\(chooser\?\.id\)\)/);
+  assert.match(appSource, /function firstPlayerLoadout\(player\)/);
+  assert.match(appSource, /data-setup-role="\$\{key\}"/);
   assert.match(appSource, /if \(!setupSelectionVisibleToViewer\(selectingPlayer\?\.id\)\) \{\s*return privateSetupWaitingPanel\(selectingPlayer\);/);
   assert.match(appSource, /return privateSetupWaitingPanel\(selectingPlayer, "champion-setup"\);/);
   assert.match(appSource, /\|\| !setupSelectionVisibleToViewer\(player\?\.id\)\) \{/);
-  assert.match(appSource, /const visiblePlayers = aiMode\s*\? game\.players\.filter\(\(player\) => player\.id === viewerPlayerId\(\)\)/);
+  assert.match(appSource, /const visiblePlayers = game\.players\.filter\(\(player\) => player\.id === viewerPlayerId\(\)\)/);
   assert.match(appSource, /function privateSetupWaitingPanel\(player, panelClass = ""\)/);
 });

@@ -452,6 +452,36 @@ async function installInteractionFixture(page, scenario) {
       fixture = { ...fixture, runeId: rune.instanceId };
     }
 
+    if (name === "rune-action-layout") {
+      const rune = player.runes.at(-1) || player.runeDeck.pop();
+      if (!rune) throw new Error("rune-action-layout fixture requires a Rune");
+      if (!player.runes.some((candidate) => candidate.instanceId === rune.instanceId)) player.runes.push(rune);
+      rune.type = "rune";
+      rune.exhausted = false;
+      rune.effects = [
+        {
+          timing: "activated",
+          kind: "addEnergy",
+          abilityId: "e2e-rune-energy",
+          amount: 1,
+          exhaust: true,
+          abilityKeywords: ["Reaction"]
+        },
+        {
+          timing: "activated",
+          kind: "addPower",
+          abilityId: "e2e-rune-power",
+          amount: 1,
+          domain: rune.domain || "Body",
+          exhaust: false,
+          recycleSelfCost: true,
+          abilityKeywords: ["Reaction"]
+        }
+      ];
+      game.selectedCardId = rune.instanceId;
+      fixture = { ...fixture, runeId: rune.instanceId };
+    }
+
     if (name === "rune-payment-overflow") {
       const runeSource = player.runes[0] || player.runeDeck[0];
       const paymentCard = player.hand[0] || player.mainDeck.shift();
@@ -876,10 +906,13 @@ test("collapsed Chain card choices use the wide drawer and confirm the exact opt
 
   await expect(page.locator('.action-window-toggle[data-action="toggle-hand"]')).toHaveCount(0);
   const inspectedItem = chain.locator(`.chain-zone-item[data-card-id="${fixture.exactCardId}"]`);
+  const inspectedTitle = (await inspectedItem.locator(".chain-zone-copy > strong").textContent())?.trim() || "";
+  const selectedBeforeInspection = await page.evaluate(() => window.__riftboundGame.selectedCardId);
   await inspectedItem.click();
   const inspector = page.locator(".inspector.inspector-panel");
   await expect(inspector).toBeVisible();
-  await expect.poll(() => page.evaluate(() => window.__riftboundGame.selectedCardId)).toBe(fixture.exactCardId);
+  await expect(inspector.locator(".inspector-text > h2")).toHaveText(inspectedTitle);
+  await expect.poll(() => page.evaluate(() => window.__riftboundGame.selectedCardId)).toBe(selectedBeforeInspection);
 
   await inspector.locator('[data-action="toggle-inspector"]').click();
   await expect(inspector).toHaveCount(0);
@@ -1176,16 +1209,19 @@ test("reaction and pass controls form one priority decision group", async ({ pag
 
   await installInteractionFixture(page, "action-command");
   const actionDock = page.locator(".context-action-dock");
-  const actionRail = actionDock.locator(":scope > .table-action-rail");
-  const openActionWindow = actionRail.locator('[data-action="toggle-hand"]');
+  const actionRail = page.locator(".table-action-rail");
+  const commandList = actionDock.locator(":scope > .right-action-command-list");
+  const openActionWindow = commandList.locator('[data-action="toggle-hand"]');
   if (await openActionWindow.getByText(/패 숨기기|Hide hand/iu).count()) await openActionWindow.click();
   await expect(actionDock.locator(":scope > .action-context button")).toHaveCount(0);
-  await expect(actionRail.locator(".action-command-list")).toHaveCount(1);
-  await expect(actionRail.locator('[data-action="toggle-hand"]')).toContainText(/행동 사용|Play Action/iu);
+  await expect(actionRail).toHaveCount(1);
+  await expect(commandList).toHaveCount(1);
+  await expect(commandList.locator('[data-action="toggle-hand"]')).toContainText(/행동 사용|Play Action/iu);
+  await expect(actionRail.locator('.action-command-list, [data-action="toggle-hand"], [data-action="pass-showdown"]')).toHaveCount(0);
 
   const reactionFixture = await installInteractionFixture(page, "reaction");
 
-  const group = page.locator('.context-action-dock > .table-action-rail .action-command-list > .priority-response-controls[role="group"]');
+  const group = page.locator('.context-action-dock > .right-action-command-list > .priority-response-controls[role="group"]');
   await expect(group).toBeVisible();
   await expect(group).toHaveAttribute("aria-label", /반응 또는 패스|React or pass/iu);
   await expect(group.locator('[data-action="toggle-hand"]')).toHaveCount(0);
@@ -1193,12 +1229,65 @@ test("reaction and pass controls form one priority decision group", async ({ pag
   await expect(reactionAction).toHaveCount(1);
   await expect(reactionAction).toContainText(/반응|Reaction/iu);
   await expect(group.locator('[data-action="pass-showdown"]')).toHaveCount(1);
-  await expect(page.locator('.table-action-rail [data-action="pass-showdown"]')).toHaveCount(1);
+  await expect(page.locator('.table-action-rail [data-action="pass-showdown"]')).toHaveCount(0);
   await expect(page.locator('.action-context [data-action="toggle-hand"], .action-context [data-action="pass-showdown"]')).toHaveCount(0);
   await expect(page.locator('[data-action="pass-showdown"]')).toHaveCount(1);
 
   await page.locator('.priority-response-controls [data-action="pass-showdown"]:enabled').click();
   await expect.poll(() => page.evaluate(() => window.__riftboundGame.actionChain?.consecutivePasses)).toBe(1);
+  await assertRuntimeHealthy(page, runtimeFailures);
+});
+
+test("Rune abilities stay readable at the right edge of the command bar even with Card Info open", async ({ page }) => {
+  const runtimeFailures = captureRuntimeFailures(page);
+  await openReadyBoard(page);
+  const fixture = await installInteractionFixture(page, "rune-action-layout");
+
+  const rune = page.locator(`.table-seat[data-player-id="${fixture.playerId}"] [data-rune-card][data-card-id="${fixture.runeId}"]`);
+  await rune.click();
+  await expect(page.locator(".inspector.inspector-panel")).toBeVisible();
+
+  const dock = page.locator(".context-action-dock");
+  const list = dock.locator(":scope > .right-action-command-list");
+  const runeActions = list.locator(".rune-action");
+  await expect(runeActions).toHaveCount(2);
+  await expect(page.locator(".table-action-rail .rune-action")).toHaveCount(0);
+
+  const geometry = await dock.evaluate((dockNode) => {
+    const listNode = dockNode.querySelector(":scope > .right-action-command-list");
+    const buttons = [...(listNode?.querySelectorAll(".rune-action") || [])];
+    if (!(listNode instanceof HTMLElement) || buttons.length !== 2) return null;
+    const dockRect = dockNode.getBoundingClientRect();
+    const listRect = listNode.getBoundingClientRect();
+    const buttonMetrics = buttons.map((button) => {
+      const rect = button.getBoundingClientRect();
+      return {
+        width: rect.width,
+        centerY: rect.top + rect.height / 2,
+        clippedX: button.scrollWidth > button.clientWidth + 1,
+        clippedY: button.scrollHeight > button.clientHeight + 1
+      };
+    });
+    return {
+      dock: { left: dockRect.left, right: dockRect.right, top: dockRect.top, bottom: dockRect.bottom },
+      list: { left: listRect.left, right: listRect.right, top: listRect.top, bottom: listRect.bottom },
+      position: getComputedStyle(listNode).position,
+      buttonMetrics
+    };
+  });
+  expect(geometry).not.toBeNull();
+  expect(geometry.list.left).toBeGreaterThanOrEqual(geometry.dock.left - 1);
+  expect(geometry.list.right).toBeLessThanOrEqual(geometry.dock.right + 1);
+  expect(geometry.list.top).toBeGreaterThanOrEqual(geometry.dock.top - 1);
+  expect(geometry.list.bottom).toBeLessThanOrEqual(geometry.dock.bottom + 1);
+  expect(geometry.dock.right - geometry.list.right).toBeLessThanOrEqual(10);
+  expect(geometry.position).not.toBe("fixed");
+  expect(Math.abs(geometry.buttonMetrics[0].centerY - geometry.buttonMetrics[1].centerY)).toBeLessThanOrEqual(2);
+  for (const metrics of geometry.buttonMetrics) {
+    expect(metrics.width).toBeGreaterThanOrEqual(169);
+    expect(metrics.clippedX).toBe(false);
+    expect(metrics.clippedY).toBe(false);
+  }
   await assertRuntimeHealthy(page, runtimeFailures);
 });
 
@@ -1455,8 +1544,9 @@ test("hand drag exposes only legal destinations and rejects a forged drop target
   await assertRuntimeHealthy(page, runtimeFailures);
 });
 
-test("the selected Champion drags to a legal destination and starts beginPlayChampion", async ({ page }) => {
+test("the selected Champion really drags without Card Info overlapping the board", async ({ page }) => {
   const runtimeFailures = captureRuntimeFailures(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
   await openReadyBoard(page);
   const fixture = await installInteractionFixture(page, "champion-drag");
 
@@ -1475,14 +1565,28 @@ test("the selected Champion drags to a legal destination and starts beginPlayCha
   const legalBase = page.locator(
     `.table-seat[data-player-id="${fixture.playerId}"] [data-zone="base"] [data-play-destination="base"]`
   );
-  await champion.dispatchEvent("dragstart");
-  await expect(page.locator("#app")).toHaveClass(/is-dragging-card/u);
-  await expect(page.locator("#app")).toHaveClass(/is-dragging-champion/u);
-  await expect(champion).toHaveClass(/drag-source-active/u);
-  await expect(legalBase).toHaveClass(/is-legal-drop/u);
-  await legalBase.dispatchEvent("dragover");
-  await expect(legalBase).toHaveClass(/drag-over|drop-target-active/u);
-  await legalBase.dispatchEvent("drop");
+  await champion.click();
+  const inspector = page.locator(".inspector.inspector-panel");
+  const board = page.locator(".board-panel");
+  await expect(inspector).toBeVisible();
+  await expect(page.locator(".tabletop-layout")).toHaveClass(/inspector-open/u);
+  await expect.poll(() => page.evaluate(() => window.__riftboundGame.selectedCardId)).toBe(fixture.championId);
+
+  const [inspectorBox, boardBox, championBox, baseBox] = await Promise.all([
+    inspector.boundingBox(),
+    board.boundingBox(),
+    champion.boundingBox(),
+    legalBase.boundingBox()
+  ]);
+  expect(inspectorBox).not.toBeNull();
+  expect(boardBox).not.toBeNull();
+  expect(championBox).not.toBeNull();
+  expect(baseBox).not.toBeNull();
+  expect(boardBox.x + boardBox.width).toBeLessThanOrEqual(inspectorBox.x + 1);
+  expect(championBox.x + championBox.width).toBeLessThanOrEqual(inspectorBox.x + 1);
+  expect(baseBox.x + baseBox.width).toBeLessThanOrEqual(inspectorBox.x + 1);
+
+  await champion.dragTo(legalBase);
 
   const started = await page.evaluate(({ playerId, championId }) => {
     const game = window.__riftboundGame;

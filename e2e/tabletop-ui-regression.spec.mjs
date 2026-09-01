@@ -1474,12 +1474,27 @@ test("Gear-only generated Power is enabled only for Gear and unknown restriction
   await assertNoRuntimeOrUndefinedErrors(page, runtimeFailures);
 });
 
-test("a deployed Champion stays as a labeled reference and is physical only in its actual zone", async ({ page }) => {
+test("a selected Champion appears only while physically in the Champion zone", async ({ page }) => {
   const runtimeFailures = captureRuntimeFailures(page);
   await openReadyBoard(page);
   await installRichBoardFixture(page);
   const bottomPlayerId = await page.locator('.table-seat[data-side="bottom"]').getAttribute("data-player-id");
   const champion = await page.evaluate((playerId) => {
+    const game = window.__riftboundGame;
+    const player = game.players.find((candidate) => candidate.id === playerId);
+    const card = player.champion;
+    return { id: card.instanceId, playerId };
+  }, bottomPlayerId);
+
+  const seat = page.locator(`.table-seat[data-player-id="${champion.playerId}"]`);
+  const championSlot = seat.locator('[data-zone="champion"]');
+  const championCard = championSlot.locator(`.identity-button[data-card-id="${champion.id}"]`);
+  await expect(championSlot).toHaveAttribute("data-count", "1");
+  await expect(championSlot).not.toHaveAttribute("data-reference-zone", /.+/u);
+  await expect(championCard).toBeVisible();
+  await expect(championCard.locator("img")).toBeVisible();
+
+  await page.evaluate(({ playerId, championId }) => {
     const game = window.__riftboundGame;
     const player = game.players.find((candidate) => candidate.id === playerId);
     const card = player.champion;
@@ -1492,14 +1507,11 @@ test("a deployed Champion stays as a labeled reference and is physical only in i
     player.championPlayed = true;
     player.trash.push(card);
     window.__riftboundRender();
-    return { id: card.instanceId, playerId };
-  }, bottomPlayerId);
+  }, { playerId: champion.playerId, championId: champion.id });
 
-  const seat = page.locator(`.table-seat[data-player-id="${champion.playerId}"]`);
-  const championSlot = seat.locator('[data-zone="champion"]');
   await expect(championSlot).toHaveAttribute("data-count", "0");
   await expect(championSlot).toHaveAttribute("data-reference-zone", "trash");
-  await expect(championSlot.locator('.champion-away-reference')).toContainText(/폐기|Trash/iu);
+  await expect(championSlot.locator("img, .identity-button, .champion-away-reference")).toHaveCount(0);
   await expect(championSlot.locator(`[data-card-id="${champion.id}"]`)).toHaveCount(0);
 
   await seat.locator('[data-action="toggle-graveyard"]').click();
@@ -1511,24 +1523,15 @@ test("a deployed Champion stays as a labeled reference and is physical only in i
     const player = game.players.find((candidate) => candidate.id === playerId);
     const card = player.champion;
     player.trash = player.trash.filter((candidate) => candidate.instanceId !== championId);
-    card.zone = "chain";
-    game.actionChain = {
-      playerId,
-      turnPlayerId: game.currentPlayerId,
-      priorityPlayerId: playerId,
-      playerIds: game.players.map((candidate) => candidate.id),
-      consecutivePasses: 0,
-      chainSequence: 1,
-      chainOpenedBy: "e2e-champion-reference",
-      chain: [{ id: "e2e-champion-chain-item", itemType: "card", playerId, card, destination: "base", status: "pending" }]
-    };
+    card.zone = "champion";
+    player.championPlayed = false;
     window.__riftboundRender();
   }, { playerId: champion.playerId, championId: champion.id });
 
-  await expect(championSlot).toHaveAttribute("data-reference-zone", "chain");
-  await expect(championSlot.locator('.champion-away-reference')).toContainText(/체인|Chain/iu);
-  await expect(championSlot.locator(`[data-card-id="${champion.id}"]`)).toHaveCount(0);
-  await expect(page.locator(`.chain-zone-item[data-card-id="${champion.id}"]`)).toBeVisible();
+  await expect(championSlot).toHaveAttribute("data-count", "1");
+  await expect(championSlot).not.toHaveAttribute("data-reference-zone", /.+/u);
+  await expect(championCard).toBeVisible();
+  await expect(championCard.locator("img")).toBeVisible();
   await assertNoRuntimeOrUndefinedErrors(page, runtimeFailures);
 });
 

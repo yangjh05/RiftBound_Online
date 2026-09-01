@@ -666,6 +666,15 @@ test("official best-of-three UI follows first-game and prior-loser setup order",
   const hostErrors = capturePageErrors(host);
   const guestErrors = capturePageErrors(guest);
   const pages = [host, guest];
+  const expectPublicSetupLoadouts = async () => {
+    for (const page of pages) {
+      const screen = page.locator(".first-player-screen");
+      for (const role of ["legend", "champion", "battlefield"]) {
+        await expect(screen.locator(`[data-setup-role="${role}"].revealed`)).toHaveCount(2);
+      }
+      await expect(screen.locator(".first-player-loadout-card.unavailable, .private-setup-waiting")).toHaveCount(0);
+    }
+  };
 
   try {
     await host.route("**/build-info.json", (route) => route.fulfill({ status: 404, body: "Not found" }));
@@ -695,6 +704,7 @@ test("official best-of-three UI follows first-game and prior-loser setup order",
 
     await expect(host.locator(".first-player-screen")).toBeVisible();
     await expect(guest.locator(".first-player-screen")).toBeVisible();
+    await expectPublicSetupLoadouts();
     const beforePlayOrder = await host.evaluate(() => ({
       phase: window.__riftboundGame.phase,
       battlefieldCount: window.__riftboundGame.battlefields.length,
@@ -778,6 +788,7 @@ test("official best-of-three UI follows first-game and prior-loser setup order",
 
     await expect(host.locator(".first-player-screen")).toBeVisible();
     await expect(guest.locator(".first-player-screen")).toBeVisible();
+    await expectPublicSetupLoadouts();
     const nextDecision = await host.evaluate(() => ({
       method: window.__riftboundGame.firstPlayerDecision?.method,
       chooserId: window.__riftboundGame.firstPlayerDecision?.chooserId,

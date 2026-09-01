@@ -295,11 +295,17 @@ async function installReadableChainFixture(page) {
           abilityId: "score",
           amount: 1
         }],
+        targetIds: [defender.legend.instanceId],
         status: "pending"
       }]
     };
     window.__riftboundRender();
-    return { cardId: card.instanceId, effectText: card.translations.ko.text, selectedAbility: "Score" };
+    return {
+      cardId: card.instanceId,
+      effectText: card.translations.ko.text,
+      selectedAbility: "Score",
+      targetCardId: defender.legend.instanceId
+    };
   });
 }
 
@@ -825,6 +831,7 @@ test("an active Chain stays compact, scrolls horizontally, and keeps Card Info a
   const item = items.first();
   const itemBox = await visibleBox(item, "active Chain item");
   await expect(item.locator(".chain-zone-copy > strong")).not.toBeEmpty();
+  const sourceTitle = (await item.locator(".chain-zone-copy > strong").textContent())?.trim() || "";
   await expect(item.locator(".chain-zone-target")).toContainText(/대상|Target/iu);
   await expect(item.locator(".chain-zone-source, .chain-zone-effect, .chain-active-effect-text, .chain-selected-ability")).toHaveCount(0);
   await expect(item).not.toContainText(chain.effectText);
@@ -869,8 +876,17 @@ test("an active Chain stays compact, scrolls horizontally, and keeps Card Info a
   await item.click();
   const inspector = page.locator(".inspector.inspector-panel");
   await expect(inspector).toBeVisible();
+  const inspectedSourceTitle = (await inspector.locator(".inspector-text > h2").textContent())?.trim() || "";
+  expect(sourceTitle).toContain(inspectedSourceTitle);
   await expect(page.locator(".chain-context-panel.showing-targets")).toBeVisible();
   await expect(page.locator('.chain-context-panel [data-action="view-chain-card"]')).toBeVisible();
+  const selectedBeforeTargetPreview = await page.evaluate(() => window.__riftboundGame.selectedCardId);
+  const targetPreview = page.locator(`.chain-target-card[data-card-id="${chain.targetCardId}"]`);
+  const targetTitle = (await targetPreview.locator("strong").textContent())?.trim() || "";
+  await targetPreview.click();
+  await expect(inspector.locator(".inspector-text > h2")).toHaveText(targetTitle);
+  await expect(page.locator(".chain-context-panel.showing-targets")).toBeVisible();
+  expect(await page.evaluate(() => window.__riftboundGame.selectedCardId)).toBe(selectedBeforeTargetPreview);
 
   const inspectorBox = await visibleBox(inspector, "Chain Card Info");
   const chainBox = await visibleBox(page.locator(".chain-pod"), "Chain panel beside Card Info");
@@ -1042,6 +1058,38 @@ test("a Chain item stays visible through a resolving card choice and clears only
   const resolving = page.locator(`.chain-zone-item.status-resolving[data-card-id="${chain.cardId}"]`);
   await expect(resolving).toBeVisible();
   await expect(resolving.locator(".chain-zone-copy > strong")).toContainText("체인 효과 가독성 검증 카드");
+
+  const selectedBeforeInspection = await page.evaluate(() => window.__riftboundGame.selectedCardId);
+  await resolving.click();
+  const inspector = page.locator(".inspector.inspector-panel");
+  const cardInfoButton = page.locator('.table-action-rail [data-action="toggle-inspector"]');
+  await expect(inspector).toBeVisible();
+  await expect(inspector.locator(".inspector-text > h2")).toContainText("체인 효과 가독성 검증 카드");
+  await expect(cardInfoButton).toBeVisible();
+  await expect(cardInfoButton).toBeEnabled();
+  const blockingChoice = page.locator(".floating-panels.has-blocking-decision > .choice-panel");
+  await expect(blockingChoice).toBeVisible();
+  const resolvingChainBox = await visibleBox(page.locator(".chain-pod"), "resolving Chain");
+  const blockingChoiceBox = await visibleBox(blockingChoice, "resolving blocking choice");
+  const resolvingInspectorBox = await visibleBox(inspector, "resolving Card Info");
+  expectNoVisualOverlap(resolvingChainBox, blockingChoiceBox, "resolving Chain and blocking choice");
+  expectNoVisualOverlap(resolvingChainBox, resolvingInspectorBox, "resolving Chain and Card Info");
+  expectNoVisualOverlap(blockingChoiceBox, resolvingInspectorBox, "blocking choice and Card Info");
+  expect(await page.evaluate(() => window.__riftboundGame.selectedCardId)).toBe(selectedBeforeInspection);
+  const cardInfoMetrics = await cardInfoButton.evaluate((button) => ({
+    clientWidth: button.clientWidth,
+    scrollWidth: button.scrollWidth,
+    clientHeight: button.clientHeight,
+    scrollHeight: button.scrollHeight
+  }));
+  expect(cardInfoMetrics.scrollWidth).toBeLessThanOrEqual(cardInfoMetrics.clientWidth + 1);
+  expect(cardInfoMetrics.scrollHeight).toBeLessThanOrEqual(cardInfoMetrics.clientHeight + 1);
+
+  await cardInfoButton.click();
+  await expect(inspector).toHaveCount(0);
+  await cardInfoButton.click();
+  await expect(inspector).toBeVisible();
+  await expect(inspector.locator(".inspector-text > h2")).toContainText("체인 효과 가독성 검증 카드");
 
   await page.evaluate(() => {
     const game = window.__riftboundGame;

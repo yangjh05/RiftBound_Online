@@ -220,6 +220,7 @@ let banishedOpenPlayerId = null;
 let intelOpenPlayerId = null;
 let fullCardOpen = false;
 let fullCardPreviewCard = null;
+let inspectorPreviewCard = null;
 let attachmentsOpenCardId = null;
 let inspectorOpen = false;
 let stagedChoiceKey = null;
@@ -227,6 +228,7 @@ let stagedChoiceOptionId = null;
 let choiceDrawerCollapsed = false;
 let draggingCardSession = null;
 let pointerCardDrag = null;
+let cardDragRenderPending = false;
 let pointerRuneScroll = null;
 let suppressCardClickUntil = 0;
 let suppressRuneClickUntil = 0;
@@ -439,7 +441,11 @@ function localizedCommandFailure(message) {
 }
 
 function render() {
-  if (draggingCardSession || pointerCardDrag) clearCardDragPresentation();
+  if (draggingCardSession || pointerCardDrag) {
+    cardDragRenderPending = true;
+    return;
+  }
+  cardDragRenderPending = false;
   clearRuneScrollGesture();
   const previousGeometry = captureTabletopGeometry();
   const previousFocus = captureFocusState();
@@ -1974,6 +1980,7 @@ function renderApp() {
     onlineSelectedCardId = null;
     handOpen = false;
     attachmentsOpenCardId = null;
+    inspectorPreviewCard = null;
     inspectedChainItemId = null;
     inspectedChainTargetIds.clear();
     moveSelection.clear();
@@ -2000,9 +2007,10 @@ function renderApp() {
   const presentationUpdate = updateGamePresentation();
   const interaction = interactionStatus();
   const utilitySheetOpen = Boolean(graveyardOpenPlayerId || banishedOpenPlayerId || intelOpenPlayerId || logOpen);
+  const inspectorCard = inspectedCard();
   const inspectorVisible = Boolean(
     inspectorOpen
-    && uiSelectedCard()
+    && inspectorCard
     && (!pendingChoiceVisible || chainDecisionVisible)
     && !utilitySheetOpen
   );
@@ -2033,10 +2041,10 @@ function renderApp() {
         ${["first-player", "champion-select", "battlefield-select", "mulligan"].includes(game.phase) ? "" : gameFloatingPanels()}
         ${tutorialPanel()}
         ${cinematicImpactOverlay()}
-        ${inspectorVisible && !["first-player", "champion-select", "mulligan"].includes(game.phase) ? inspector(uiSelectedCard()) : ""}
+        ${inspectorVisible && !["first-player", "champion-select", "mulligan"].includes(game.phase) ? inspector(inspectorCard) : ""}
         ${pendingGameExit ? gameExitConfirmModal() : ""}
         ${isTutorialGame() ? "" : gameResultModal()}
-        ${fullCardOpen ? fullCardModal(fullCardPreviewCard || uiSelectedCard()) : ""}
+        ${fullCardOpen ? fullCardModal(fullCardPreviewCard || inspectorCard) : ""}
         ${!blockingDecisionVisible && logOpen ? logDrawer() : ""}
         ${replayMode ? replayPlaybackControls() : ""}
       </div>
@@ -2674,17 +2682,15 @@ function handleReplayGameClick(event) {
   if (action === "close-banished") { banishedOpenPlayerId = null; return; }
   if (action === "close-intel") { intelOpenPlayerId = null; return; }
   if (action === "close-full-card") { fullCardOpen = false; fullCardPreviewCard = null; return; }
-  if (action === "view-full-card") { fullCardPreviewCard = uiSelectedCard(); fullCardOpen = Boolean(fullCardPreviewCard); return; }
-  if (action === "view-chain-card") { fullCardPreviewCard = findVisibleCard(button.dataset.cardId); fullCardOpen = Boolean(fullCardPreviewCard); return; }
+  if (action === "view-full-card") { fullCardPreviewCard = inspectedCard(); fullCardOpen = Boolean(fullCardPreviewCard); return; }
+  if (action === "view-chain-card") { fullCardPreviewCard = chainPreviewCard(button.dataset.cardId); fullCardOpen = Boolean(fullCardPreviewCard); return; }
   if (action === "toggle-attachments") { attachmentsOpenCardId = attachmentsOpenCardId === button.dataset.card ? null : button.dataset.card; return; }
   if (action === "toggle-chain-zone") { chainZoneCollapsed = !chainZoneCollapsed; return; }
   if (action === "inspect-chain-effect") {
-    inspectedChainItemId = inspectedChainItemId === button.dataset.chainItemId ? null : button.dataset.chainItemId;
-    if (inspectedChainItemId && button.dataset.cardId) setUiSelectedCard(button.dataset.cardId, { openInspector: true });
-    syncInspectedChainTargets();
+    toggleInspectedChainItem(button.dataset.chainItemId);
     return;
   }
-  if (action === "focus-chain-target") { setUiSelectedCard(button.dataset.cardId); return; }
+  if (action === "focus-chain-target") { focusChainTarget(button.dataset.cardId); return; }
   const cardNode = event.target.closest("[data-card-id]");
   if (cardNode) setUiSelectedCard(cardNode.dataset.cardId);
 }
@@ -2712,6 +2718,7 @@ function applyReplayFrame(requestedIndex) {
   game.selectedCardId = null;
   fullCardOpen = false;
   fullCardPreviewCard = null;
+  inspectorPreviewCard = null;
   attachmentsOpenCardId = null;
   graveyardOpenPlayerId = null;
   banishedOpenPlayerId = null;
@@ -3893,6 +3900,9 @@ function setUiSelectedCard(cardId, { openInspector = true } = {}) {
   const before = game.selectedCardId;
   selectCard(game, cardId);
   if (game.selectedCardId !== before || game.selectedCardId === cardId) {
+    inspectorPreviewCard = null;
+    inspectedChainItemId = null;
+    inspectedChainTargetIds.clear();
     if (isOnlineGame()) onlineSelectedCardId = game.selectedCardId;
     if (openInspector && game.selectedCardId === cardId) {
       inspectorOpen = true;
@@ -3907,6 +3917,9 @@ function toggleUiSelectedCard(cardId) {
     game.selectedCardId = null;
     onlineSelectedCardId = null;
     inspectorOpen = false;
+    inspectorPreviewCard = null;
+    inspectedChainItemId = null;
+    inspectedChainTargetIds.clear();
     attachmentsOpenCardId = null;
     actionRejection = null;
     return;
@@ -4258,6 +4271,7 @@ function resetGameUiState() {
   intelOpenPlayerId = null;
   fullCardOpen = false;
   fullCardPreviewCard = null;
+  inspectorPreviewCard = null;
   attachmentsOpenCardId = null;
   inspectorOpen = false;
   stagedChoiceKey = null;
@@ -4265,6 +4279,7 @@ function resetGameUiState() {
   choiceDrawerCollapsed = false;
   draggingCardSession = null;
   pointerCardDrag = null;
+  cardDragRenderPending = false;
   pointerRuneScroll = null;
   suppressCardClickUntil = 0;
   suppressRuneClickUntil = 0;
@@ -5223,15 +5238,15 @@ function firstPlayerPanel() {
               : t("decidedBeforeSetup", locale())}</span>
           </div>
         </div>
-        <div class="first-player-result">
-          <div class="first-seat first">
-            ${imageCard(first.legend, "select-only")}
+        <div class="first-player-result setup-loadout-result">
+          <div class="first-seat first" data-player-id="${escapeHtml(first.id)}">
+            ${firstPlayerLoadout(first)}
             <strong>${t("first", locale())}</strong>
             <span>${playerName(first)}</span>
           </div>
           <div class="versus">${locale() === LOCALES.KO ? "대" : "VS"}</div>
-          <div class="first-seat second">
-            ${imageCard(second.legend, "select-only")}
+          <div class="first-seat second" data-player-id="${escapeHtml(second.id)}">
+            ${firstPlayerLoadout(second)}
             <strong>${t("second", locale())}</strong>
             <span>${playerName(second)}</span>
           </div>
@@ -5245,9 +5260,6 @@ function firstPlayerPanel() {
 function firstPlayerRollPanel(decision) {
   const chooser = game.players.find((player) => player.id === decision.chooserId);
   const isChoosing = decision.status === "choosing";
-  if (isChoosing && !setupSelectionVisibleToViewer(chooser?.id)) {
-    return privateFirstPlayerWaitingPanel(chooser);
-  }
   const canUseDecisionControl = viewerCanAct();
   const notice = isChoosing
     ? (canUseDecisionControl
@@ -5266,7 +5278,7 @@ function firstPlayerRollPanel(decision) {
           </div>
         </div>
         <p class="dice-order-notice">${notice}</p>
-        <div class="first-player-result dice-results">
+        <div class="first-player-result setup-loadout-result dice-results">
           ${game.players.map((player, index) => firstPlayerDieSeat(player, decision, index)).join(`<div class="versus">${locale() === LOCALES.KO ? "대" : "VS"}</div>`)}
         </div>
         ${isChoosing ? `
@@ -5304,11 +5316,40 @@ function firstPlayerDieSeat(player, decision, index) {
   const active = decision.status === "rolling" && decision.rollerId === player.id;
   const winner = decision.winnerId === player.id;
   return `
-    <div class="first-seat dice-seat ${active ? "active" : ""} ${winner ? "roll-winner" : ""}" data-player-index="${index}">
-      ${imageCard(player.legend, "select-only")}
+    <div class="first-seat dice-seat ${active ? "active" : ""} ${winner ? "roll-winner" : ""}" data-player-index="${index}" data-player-id="${escapeHtml(player.id)}">
+      ${firstPlayerLoadout(player)}
       <span class="die-face ${displayValue == null ? "pending" : ""}" aria-label="${displayValue == null ? t("waitingForRoll", locale()) : t("rolledNumber", locale(), { n: displayValue })}">${displayValue ?? "?"}</span>
       <strong>${displayValue == null ? t("waitingForRoll", locale()) : t("rolledNumber", locale(), { n: displayValue })}</strong>
       <span>${playerName(player)}</span>
+    </div>
+  `;
+}
+
+function selectedSetupBattlefield(player) {
+  if (!player) return null;
+  const battlefields = Array.isArray(game?.battlefields) ? game.battlefields : [];
+  return battlefields.find((field) => field
+    && (field.ownerId === player.id
+      || (player.selectedBattlefieldId && field.instanceId === player.selectedBattlefieldId))) || null;
+}
+
+function firstPlayerLoadout(player) {
+  if (!player) return "";
+  const roles = [
+    { key: "legend", label: t("legend", locale()), card: player.legend },
+    { key: "champion", label: t("champion", locale()), card: player.champion },
+    { key: "battlefield", label: t("battlefield", locale()), card: selectedSetupBattlefield(player) }
+  ];
+  return `
+    <div class="first-player-loadout" aria-label="${escapeHtml(`${playerName(player)} ${locale() === LOCALES.KO ? "공개 구성" : "revealed setup"}`)}">
+      ${roles.map(({ key, label, card }) => `
+        <div class="first-player-loadout-card ${card && !card.redacted ? "revealed" : "unavailable"}" data-setup-role="${key}">
+          <small>${escapeHtml(label)}</small>
+          ${card && !card.redacted
+            ? `${imageCard(card, "select-only")}<span>${escapeHtml(cardName(card))}</span>`
+            : `<div class="setup-card-placeholder" aria-label="${escapeHtml(`${label} ${t("waiting", locale())}`)}"><b>?</b></div><span>${t("waiting", locale())}</span>`}
+        </div>
+      `).join("")}
     </div>
   `;
 }
@@ -5486,18 +5527,17 @@ function gamePanel(player) {
         </div>
       </section>
       <div class="table-command-layer">
-        ${moveBatchBar(player)}
         ${showPaymentStage ? paymentPanel() : ""}
         ${showPaymentStage ? "" : commandChoice ? commandChoiceSurface(game.pendingChoice) : actionBar(player, selected)}
         ${handDrawer(player)}
       </div>
+      ${tableUtilityRail(inspectedCard() || selected)}
     </div>
   `;
 }
 
 function designatedFirstPlayerPanel(decision) {
   const chooser = game.players.find((player) => player.id === decision.chooserId);
-  if (!setupSelectionVisibleToViewer(chooser?.id)) return privateFirstPlayerWaitingPanel(chooser);
   const canChoose = Boolean(chooser && viewerCanAct());
   return `
     <section class="first-player-screen">
@@ -5511,11 +5551,11 @@ function designatedFirstPlayerPanel(decision) {
         <p class="dice-order-notice">${locale() === LOCALES.KO
           ? `${escapeHtml(playerName(chooser))}님이 이번 게임의 선공 플레이어를 선택합니다.`
           : `${escapeHtml(playerName(chooser))} chooses who plays first this game.`}</p>
-        <div class="first-player-result">
+        <div class="first-player-result setup-loadout-result">
           ${game.players.map((player, index) => `
             ${index ? `<div class="versus">${locale() === LOCALES.KO ? "대" : "VS"}</div>` : ""}
-            <div class="first-seat">
-              ${imageCard(player.legend, "select-only")}
+            <div class="first-seat" data-player-id="${escapeHtml(player.id)}">
+              ${firstPlayerLoadout(player)}
               <strong>${escapeHtml(playerName(player))}</strong>
               <span>${locale() === LOCALES.KO ? "선공 후보" : "First-player candidate"}</span>
             </div>
@@ -5548,6 +5588,7 @@ function gameFloatingPanels() {
 function closeTabletopSheets(keep = "") {
   if (keep !== "inspector") {
     inspectorOpen = false;
+    inspectorPreviewCard = null;
     attachmentsOpenCardId = null;
   }
   if (keep !== "graveyard") graveyardOpenPlayerId = null;
@@ -5579,6 +5620,52 @@ function toggleTabletopSheet(kind, value = true) {
 
 function uiSelectedCard() {
   return game.selectedCardId ? getSelectedCard(game) : null;
+}
+
+function inspectedChainCard() {
+  if (!inspectedChainItemId) return null;
+  const item = currentChainTreeItems().find((candidate) => candidate?.id === inspectedChainItemId);
+  const snapshot = chainItemSourceCard(item);
+  if (!snapshot || snapshot.redacted) return null;
+  return findVisibleCard(snapshot.instanceId || snapshot.id) || snapshot;
+}
+
+function inspectedCard() {
+  return inspectorPreviewCard || inspectedChainCard() || uiSelectedCard();
+}
+
+function chainPreviewCard(cardId) {
+  const previewId = String(cardId || "");
+  const item = currentChainTreeItems().find((candidate) => {
+    const source = chainItemSourceCard(candidate);
+    return source?.instanceId === previewId
+      || source?.id === previewId
+      || candidate?.trigger?.sourceCardId === previewId;
+  });
+  return findVisibleCard(previewId) || chainItemSourceCard(item) || null;
+}
+
+function toggleInspectedChainItem(chainItemId) {
+  const requestedId = String(chainItemId || "");
+  inspectedChainItemId = requestedId && inspectedChainItemId !== requestedId ? requestedId : null;
+  inspectorPreviewCard = null;
+  fullCardOpen = false;
+  fullCardPreviewCard = null;
+  syncInspectedChainTargets();
+  if (inspectedChainItemId && inspectedChainCard()) {
+    inspectorOpen = true;
+    closeTabletopSheets("inspector");
+  } else if (!inspectedChainItemId) {
+    inspectorOpen = false;
+  }
+}
+
+function focusChainTarget(cardId) {
+  const preview = findVisibleCard(String(cardId || ""));
+  if (!preview || preview.redacted || !cardVisibleToCurrentViewer(preview)) return;
+  inspectorPreviewCard = preview;
+  inspectorOpen = true;
+  closeTabletopSheets("inspector");
 }
 
 function handDrawer(player) {
@@ -5621,12 +5708,12 @@ function opponentHandFan(player) {
   `;
 }
 
-function moveBatchBar(player) {
+function moveBatchCommandGroup(player) {
   const units = [...moveSelection].map((unitId) => findVisibleCard(unitId)).filter(Boolean);
   if (game.phase !== "action" || game.pendingPayment || game.pendingChoice || units.length < 2) return "";
   const destinations = batchMoveDestinations(units);
   return `
-    <section class="move-batch-bar">
+    <div class="move-batch-command-group" role="group" aria-label="${escapeHtml(`${t("standardMove", locale())}: ${units.length} ${t("units", locale())}`)}">
       <span>${t("standardMove", locale())}: ${units.length} ${t("units", locale())}</span>
       <div class="actions inline">
         ${destinations.map((destination) => `
@@ -5634,7 +5721,7 @@ function moveBatchBar(player) {
         `).join("") || `<button disabled>${t("noSharedDestination", locale())}</button>`}
         <button data-action="clear-move-selection">${t("clear", locale())}</button>
       </div>
-    </section>
+    </div>
   `;
 }
 
@@ -8265,18 +8352,10 @@ function championIdentityReference(player, champion) {
   else if (!inChain && inHidden) zone = "hidden";
   else if (!inChain && inBattlefield) zone = "battlefield";
   else if (!inChain && inBase) zone = "base";
-  const location = sourceZoneLabel(zone);
-  const title = `${cardName(champion)} · ${location}`;
   return {
     physical: false,
     zone,
-    markup: `
-      <button class="identity-button champion-away-reference zone-${escapeHtml(zone)} ${cardStatusClassNames(champion)}" data-action="select-card" data-card="${escapeHtml(champion.instanceId || "")}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">
-        ${champion.image ? `<img src="${escapeHtml(champion.image)}" alt="" loading="lazy" />` : `<span class="identity-card-fallback">${escapeHtml(cardName(champion))}</span>`}
-        ${identityEmpoweredMarker(champion)}
-        <span>${location}</span>
-      </button>
-    `
+    markup: ""
   };
 }
 
@@ -8345,15 +8424,22 @@ function cardVisibleToCurrentViewer(cardOrId) {
 
 function sanitizeViewerUiState() {
   if (intelOpenPlayerId && !canViewPrivateInfo(viewerPlayerId(), intelOpenPlayerId)) intelOpenPlayerId = null;
+  if (inspectorPreviewCard) {
+    const previewId = inspectorPreviewCard.instanceId || inspectorPreviewCard.id;
+    const livePreview = previewId ? findVisibleCard(previewId) : null;
+    if (!livePreview || !cardVisibleToCurrentViewer(livePreview)) inspectorPreviewCard = null;
+    else inspectorPreviewCard = livePreview;
+  }
   if (game.selectedCardId && !cardVisibleToCurrentViewer(game.selectedCardId)) {
     game.selectedCardId = null;
     onlineSelectedCardId = null;
-    inspectorOpen = false;
+    if (!inspectedChainCard()) inspectorOpen = false;
     attachmentsOpenCardId = null;
   }
+  if (inspectorOpen && !inspectedCard()) inspectorOpen = false;
   if (attachmentsOpenCardId && !cardVisibleToCurrentViewer(attachmentsOpenCardId)) attachmentsOpenCardId = null;
   if (fullCardOpen) {
-    const preview = fullCardPreviewCard || uiSelectedCard();
+    const preview = fullCardPreviewCard || inspectedCard();
     if (!preview || !cardVisibleToCurrentViewer(preview)) {
       fullCardOpen = false;
       fullCardPreviewCard = null;
@@ -8411,26 +8497,6 @@ function actingPlayerClass() {
   if (!id) return "";
   if (id === viewerPlayerId()) return "acting-bottom";
   return game.players.some((player) => player.id === id) ? "acting-top" : "";
-}
-
-function championCard(player) {
-  if (!player.champion) return "";
-  if (!["champion", "played"].includes(player.champion.zone)) return "";
-  if (player.championPlayed || player.champion.zone === "played") {
-    return `
-      <article class="champion-zone-slot champion-zone-used" aria-label="${locale() === LOCALES.KO ? `${cardName(player.champion)} 챔피언을 사용했습니다` : `${player.champion.name} has been played`}">
-        <span class="zone-label">${t("championZone", locale())}</span>
-        ${cardImage(player.champion)}
-        <span class="status-line">${t("deployed", locale())}</span>
-      </article>
-    `;
-  }
-  return `
-    <article class="${imageCardClass(player.champion, `champion-zone ${motionCardClass(player.champion, "hand")}`)}" data-card-id="${player.champion.instanceId}">
-      <span class="zone-label">${t("championZone", locale())}</span>
-      ${cardImage(player.champion)}
-    </article>
-  `;
 }
 
 function handCard(card, index = 0, total = 1) {
@@ -8616,6 +8682,11 @@ function clearCardDragPresentation() {
     // Pointer capture may already have been released by the browser.
   }
   draggingCardSession = null;
+  if (cardDragRenderPending) {
+    queueMicrotask(() => {
+      if (cardDragRenderPending && !draggingCardSession && !pointerCardDrag) render();
+    });
+  }
 }
 
 function createPointerDragGhost(sourceNode) {
@@ -9114,6 +9185,36 @@ function passControlButton({ disabled = false } = {}) {
   `;
 }
 
+function actionWindowCommandButton(cardCount) {
+  if (!actionUseWindowAvailable()) return "";
+  return `<button class="primary action-window-toggle" data-action="toggle-hand" title="${escapeHtml(`${t("hand", locale())} ${cardCount}`)}">${handOpen ? t("hideHand", locale()) : playWindowControlLabel()}</button>`;
+}
+
+function actionCommandList(markup, scrollKey) {
+  if (!String(markup || "").trim()) return "";
+  return `
+    <div class="actions inline action-command-list right-action-command-list" data-scroll-key="${escapeHtml(scrollKey)}">
+      ${markup}
+    </div>
+  `;
+}
+
+function tableUtilityRail(card) {
+  const chainActive = Boolean(game?.actionChain || (game?.phase === "showdown" && game?.showdown));
+  const waiting = isOnlineGame() && !viewerCanAct();
+  const disabled = Boolean(game?.pendingPayment || game?.pendingChoice);
+  const standaloneChoice = Boolean(
+    decisionVisibleToViewer(game?.pendingChoice)
+    && !pendingChoiceSharesChainSurface(game.pendingChoice)
+  );
+  return `
+    <div class="bar-controls table-action-rail" aria-label="${escapeHtml(locale() === LOCALES.KO ? "보조 기능" : "Table utilities")}">
+      <button data-action="toggle-inspector" ${card && !standaloneChoice ? "" : "disabled"}>${t("cardInfo", locale())}</button>
+      ${chainActive ? "" : `<button data-action="end-turn" ${game.phase !== "action" || waiting || disabled || !viewerCanAct() ? "disabled" : ""}>${t("endTurn", locale())}</button>`}
+    </div>
+  `;
+}
+
 function actionBar(player, card) {
   if (game.phase === "first-player" || game.phase === "champion-select" || game.phase === "battlefield-select" || game.phase === "mulligan") return "";
   const disabled = Boolean(game?.pendingPayment || game?.pendingChoice);
@@ -9126,11 +9227,14 @@ function actionBar(player, card) {
   const rejection = !waiting && !disabled ? actionRejection : null;
   if (!card || disabled || waiting) {
     const quickActions = globalActionButtons(player);
+    const directCommands = `${quickActions.join("")}${chainSummary ? "" : moveBatchCommandGroup(player)}${!chainSummary && !responseInfo ? actionWindowCommandButton(cardCount) : ""}`;
     const commandMarkup = waiting
-      ? ""
+      ? (chainSummary ? priorityResponseControls() : "")
       : responseInfo
-        ? priorityResponseControls()
-        : quickActions.join("");
+        ? priorityResponseControls(quickActions.join(""))
+        : chainSummary
+          ? priorityResponseControls(quickActions.join(""))
+          : directCommands;
     return `
       <section class="action-bar context-action-dock ${chainSummary ? "showdown-action-bar" : ""} ${rejection ? "action-rejected" : ""}">
         <div class="action-context">
@@ -9138,24 +9242,18 @@ function actionBar(player, card) {
           <strong>${waiting ? t("waitingForOpponent", locale()) : rejection?.title || responseInfo?.title || chainSummary?.title || (disabled ? t("resolvingStep", locale()) : t("noAction", locale()))}</strong>
           <span>${waiting ? t("waitingForOpponent", locale()) : rejection?.detail || responseInfo?.detail || chainSummary?.detail || (disabled ? t("finishDialog", locale()) : t("selectCardHint", locale()))}</span>
         </div>
-        <div class="bar-controls table-action-rail">
-          <div class="actions inline action-command-list right-action-command-list" data-scroll-key="action-${escapeHtml(card?.instanceId || "global")}">
-            ${commandMarkup}
-          </div>
-          <button data-action="toggle-inspector" ${card ? "" : "disabled"}>${t("cardInfo", locale())}</button>
-          ${!chainSummary && !responseInfo && actionUseWindowAvailable() ? `<button class="primary action-window-toggle" data-action="toggle-hand" title="${escapeHtml(`${t("hand", locale())} ${cardCount}`)}">${handOpen ? t("hideHand", locale()) : playWindowControlLabel()}</button>` : ""}
-          ${chainSummary
-            ? (responseInfo ? "" : passControlButton({ disabled: waiting || disabled }))
-            : `<button data-action="end-turn" ${game.phase !== "action" || waiting || disabled ? "disabled" : ""}>${t("endTurn", locale())}</button>`}
-        </div>
+        ${actionCommandList(commandMarkup, `action-${card?.instanceId || "global"}`)}
       </section>
     `;
   }
   const context = selectedContext(card.instanceId);
   const actions = mergeActionButtons(selectedActions(card, context), globalActionButtons(player, card));
+  const directCommands = `${actions.join("")}${chainSummary ? "" : moveBatchCommandGroup(player)}${!chainSummary && !responseInfo ? actionWindowCommandButton(cardCount) : ""}`;
   const commandMarkup = responseInfo
     ? priorityResponseControls(actions.join(""))
-    : actions.join("");
+    : chainSummary
+      ? priorityResponseControls(actions.join(""))
+      : directCommands;
   return `
     <section class="action-bar context-action-dock ${chainSummary ? "showdown-action-bar" : ""} ${rejection ? "action-rejected" : ""}">
       <div class="action-context">
@@ -9163,16 +9261,7 @@ function actionBar(player, card) {
           <strong>${rejection?.title || responseInfo?.title || chainSummary?.title || cardName(card)}</strong>
         <span>${rejection?.detail || (responseInfo ? `${responseInfo.detail} / ${t("selected", locale())}: ${cardName(card)}` : chainSummary ? `${chainSummary.detail} / ${t("selected", locale())}: ${cardName(card)}` : actionHint(card, context, actions))}</span>
       </div>
-      <div class="bar-controls table-action-rail">
-        <div class="actions inline action-command-list right-action-command-list" data-scroll-key="action-${escapeHtml(card.instanceId || "selected")}">
-          ${commandMarkup}
-        </div>
-        <button data-action="toggle-inspector">${t("cardInfo", locale())}</button>
-        ${!chainSummary && !responseInfo && actionUseWindowAvailable() ? `<button class="primary action-window-toggle" data-action="toggle-hand" title="${escapeHtml(`${t("hand", locale())} ${cardCount}`)}">${handOpen ? t("hideHand", locale()) : playWindowControlLabel()}</button>` : ""}
-        ${chainSummary
-          ? (responseInfo ? "" : passControlButton({ disabled }))
-          : `<button data-action="end-turn" ${game.phase !== "action" || !viewerCanAct() ? "disabled" : ""}>${t("endTurn", locale())}</button>`}
-      </div>
+      ${actionCommandList(commandMarkup, `action-${card.instanceId || "selected"}`)}
     </section>
   `;
 }
@@ -9293,11 +9382,11 @@ function activatedActions(card) {
       const amount = ability.amount;
       if (ability.kind === "addEnergy") {
         const label = locale() === LOCALES.KO ? `탈진 → 에너지 +${amount}` : `Exhaust → +${amount} Energy`;
-        return [`<button class="rune-action rune-action-energy" data-action="activate-card" data-card="${card.instanceId}" data-ability="${ability.id}"><strong>${label}</strong><small>${locale() === LOCALES.KO ? "룬은 탈진 상태가 됩니다" : "This Rune becomes exhausted"}</small></button>`];
+        return [`<button class="rune-action rune-action-energy" data-action="activate-card" data-card="${card.instanceId}" data-ability="${ability.id}"><strong>${label}</strong></button>`];
       }
       const domain = domainText(ability.domain);
       const label = locale() === LOCALES.KO ? `재활용 → ${domain} 힘 +${amount}` : `Recycle → +${amount} ${domain} Power`;
-      return [`<button class="rune-action rune-action-power" data-action="activate-card" data-card="${card.instanceId}" data-ability="${ability.id}"><strong>${label}</strong><small>${locale() === LOCALES.KO ? "룬 덱 맨 아래로 되돌아갑니다" : "Return this Rune to the bottom of the Rune Deck"}</small></button>`];
+      return [`<button class="rune-action rune-action-power" data-action="activate-card" data-card="${card.instanceId}" data-ability="${ability.id}"><strong>${label}</strong></button>`];
     });
   }
   const baseLabel = card.type === "legend" ? t("useLegend", locale()) : t("activateCard", locale(), { name: cardName(card) });
@@ -9710,6 +9799,7 @@ function dismissTopUiLayer() {
   }
   if (inspectorOpen) {
     inspectorOpen = false;
+    inspectorPreviewCard = null;
     return true;
   }
   if (inspectedChainItemId) {
@@ -9922,7 +10012,7 @@ app.addEventListener("pointerup", (event) => {
   const session = pointerCardDrag;
   if (!session || session.pointerId !== event.pointerId) return;
   if (!session.dragging) {
-    pointerCardDrag = null;
+    clearCardDragPresentation();
     return;
   }
   event.preventDefault();
@@ -9995,26 +10085,18 @@ function handlePendingChoiceClick(event) {
     return true;
   }
   if (action === "inspect-chain-effect") {
-    inspectedChainItemId = inspectedChainItemId === button.dataset.chainItemId ? null : button.dataset.chainItemId;
-    const previewId = String(button.dataset.cardId || "");
-    if (previewId && inspectedChainItemId) setUiSelectedCard(previewId, { openInspector: true });
-    syncInspectedChainTargets();
+    toggleInspectedChainItem(button.dataset.chainItemId);
     render();
     return true;
   }
   if (action === "view-chain-card") {
-    const previewId = String(button.dataset.cardId || "");
-    const snapshotItem = currentChainTreeItems().find((item) => {
-      const source = chainItemSourceCard(item);
-      return source?.instanceId === previewId || item?.trigger?.sourceCardId === previewId;
-    });
-    fullCardPreviewCard = findVisibleCard(previewId) || chainItemSourceCard(snapshotItem);
+    fullCardPreviewCard = chainPreviewCard(button.dataset.cardId);
     fullCardOpen = Boolean(fullCardPreviewCard);
     render();
     return true;
   }
   if (action === "focus-chain-target") {
-    setUiSelectedCard(button.dataset.cardId, { openInspector: true });
+    focusChainTarget(button.dataset.cardId);
     render();
     return true;
   }
@@ -10220,13 +10302,9 @@ app.addEventListener("click", (event) => {
     if (action === "toggle-inspector") toggleTabletopSheet("inspector");
     if (action === "toggle-chain-zone") chainZoneCollapsed = !chainZoneCollapsed;
     if (action === "inspect-chain-effect") {
-      inspectedChainItemId = inspectedChainItemId === button.dataset.chainItemId ? null : button.dataset.chainItemId;
-      fullCardOpen = false;
-      fullCardPreviewCard = null;
-      if (inspectedChainItemId && button.dataset.cardId) setUiSelectedCard(button.dataset.cardId, { openInspector: true });
-      syncInspectedChainTargets();
+      toggleInspectedChainItem(button.dataset.chainItemId);
     }
-    if (action === "focus-chain-target") setUiSelectedCard(button.dataset.cardId);
+    if (action === "focus-chain-target") focusChainTarget(button.dataset.cardId);
     if (action === "confirm-first-player") dispatchGameCommand({ kind: "confirmFirstPlayer" }, () => confirmFirstPlayer(game));
     if (action === "roll-first-player") dispatchGameCommand({ kind: "rollFirstPlayer" }, () => rollFirstPlayer(game, activePlayerId()));
     if (action === "choose-first-player") dispatchGameCommand({ kind: "chooseFirstPlayer", playerId: player }, () => chooseFirstPlayer(game, activePlayerId(), player));
@@ -10235,7 +10313,7 @@ app.addEventListener("click", (event) => {
     if (action === "toggle-banished") toggleTabletopSheet("banished", player);
     if (action === "toggle-intel") toggleTabletopSheet("intel", player);
     if (action === "view-full-card") {
-      fullCardPreviewCard = uiSelectedCard();
+      fullCardPreviewCard = inspectedCard();
       fullCardOpen = Boolean(fullCardPreviewCard);
     }
     if (action === "view-choice-card") {
@@ -10243,12 +10321,7 @@ app.addEventListener("click", (event) => {
       fullCardOpen = Boolean(fullCardPreviewCard);
     }
     if (action === "view-chain-card") {
-      const previewId = String(button.dataset.cardId || "");
-      const snapshotItem = currentChainTreeItems().find((item) => {
-        const source = chainItemSourceCard(item);
-        return source?.instanceId === previewId || item?.trigger?.sourceCardId === previewId;
-      });
-      fullCardPreviewCard = findVisibleCard(previewId) || chainItemSourceCard(snapshotItem);
+      fullCardPreviewCard = chainPreviewCard(button.dataset.cardId);
       fullCardOpen = Boolean(fullCardPreviewCard);
     }
     if (action === "close-full-card") {

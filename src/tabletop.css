@@ -3507,8 +3507,8 @@
   }
 
   .tabletop-layout .battlefield.location-column {
-    width: calc(100% - 12px) !important;
-    max-width: calc(100% - 12px) !important;
+    width: calc(100% - 16px) !important;
+    max-width: calc(100% - 16px) !important;
   }
 
   .tabletop-layout .field-lane-track > .unit-token.field-token {
@@ -9350,79 +9350,226 @@ body > .hand-card-drag-ghost .card-art {
    preserving every Rune hit target, and giving complex rule decisions the
    width their existing information model requires. */
 
-/* Selected-card copy stays in the command strip. Every actual command now
-   lives in the same right-side rail as Pass and End Turn. */
+/* Selected-card copy and every playable command share the horizontal strip
+   directly above the hand. The fixed viewport rail remains a small utility
+   area for Card Info and End Turn only. */
 .tabletop-layout .context-action-dock {
-  grid-template-columns: minmax(0, 1fr) !important;
+  grid-template-columns: minmax(clamp(82px, 20vw, 220px), 0.72fr) minmax(0, 1.28fr) !important;
 }
 
 .tabletop-layout .context-action-dock > .action-context {
-  grid-column: 1 / -1;
+  grid-column: 1;
   width: 100%;
   min-width: 0;
+}
+
+.tabletop-layout .context-action-dock:not(:has(> .right-action-command-list)) {
+  grid-template-columns: minmax(0, 1fr) !important;
 }
 
 .tabletop-layout .table-action-rail {
   align-content: end;
   max-height: calc(100dvh - 82px);
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  overflow: visible;
+}
+
+.tabletop-layout .context-action-dock > .right-action-command-list {
+  grid-column: 2;
+  display: flex !important;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0 2px 2px 0;
+  overscroll-behavior-x: contain;
   scrollbar-width: thin;
 }
 
-.tabletop-layout .table-action-rail .right-action-command-list {
-  display: grid !important;
-  grid-template-columns: minmax(0, 1fr);
+.tabletop-layout .context-action-dock > .right-action-command-list > :first-child {
+  margin-left: auto;
+}
+
+.tabletop-layout .context-action-dock > .right-action-command-list > button,
+.tabletop-layout .context-action-dock > .right-action-command-list .priority-response-controls > button,
+.tabletop-layout .context-action-dock > .right-action-command-list .priority-card-actions > button {
+  flex: 0 0 auto;
+  width: auto;
+  margin: 0;
+  white-space: normal;
+}
+
+.tabletop-layout .context-action-dock > .right-action-command-list .priority-response-controls,
+.tabletop-layout .context-action-dock > .right-action-command-list .priority-card-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
   align-items: stretch;
-  justify-content: stretch;
   gap: 6px;
-  width: 100%;
-  min-width: 0;
-  height: auto;
-  overflow: visible;
-  padding-bottom: 2px;
-  border-bottom: 1px solid rgba(116, 184, 216, 0.32);
-}
-
-.tabletop-layout .table-action-rail .right-action-command-list:empty {
-  display: none !important;
-}
-
-.tabletop-layout .table-action-rail .right-action-command-list > button,
-.tabletop-layout .table-action-rail .priority-response-controls > button {
-  width: 100%;
-  min-width: 0;
-  margin: 0;
-  white-space: normal;
-}
-
-.tabletop-layout .table-action-rail .priority-response-controls {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 6px;
-  width: 100%;
-}
-
-.tabletop-layout .table-action-rail .priority-card-actions {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 6px;
-  width: 100%;
   min-width: 0;
 }
 
-.tabletop-layout .table-action-rail .priority-card-actions > button {
-  width: 100%;
-  min-width: 0;
-  margin: 0;
-  white-space: normal;
+.tabletop-layout .context-action-dock > .right-action-command-list .rune-action {
+  flex: 0 0 170px;
+  width: auto;
+  min-width: 170px;
+  max-width: 220px;
 }
 
-.tabletop-layout .table-action-rail .pass-control small {
+.tabletop-layout .context-action-dock > .right-action-command-list .pass-control small {
   display: block;
   font-size: 9px;
   line-height: 1.05;
+}
+
+.tabletop-layout .move-batch-command-group {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  min-width: max-content;
+  border-right: 1px solid rgba(116, 184, 216, 0.32);
+  padding-right: 7px;
+}
+
+.tabletop-layout .move-batch-command-group > span {
+  color: #ffd866;
+  font-size: var(--tt-font-meta);
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.tabletop-layout .move-batch-command-group > .actions {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  gap: 5px;
+}
+
+/* Play-order decisions happen after both Battlefields are revealed in an
+   official Match. Keep each player's Legend, chosen Champion, and Battlefield
+   visible together so the decision never hides established public state. */
+.tabletop-layout.phase-first-player .first-player-card {
+  width: min(1240px, calc(100% - 32px));
+  max-height: 100%;
+  overflow: hidden;
+  padding: clamp(14px, 2.4dvh, 28px) clamp(18px, 3vw, 44px);
+}
+
+.tabletop-layout.phase-first-player .first-player-result.setup-loadout-result {
+  grid-template-columns: minmax(300px, 1fr) auto minmax(300px, 1fr);
+  width: 100%;
+  max-width: 1040px;
+  gap: clamp(12px, 2.2vw, 28px);
+  margin-bottom: clamp(8px, 2dvh, 22px);
+}
+
+.tabletop-layout.phase-first-player .setup-loadout-result > .first-seat {
+  width: 100%;
+  min-width: 0;
+}
+
+.tabletop-layout.phase-first-player .first-player-loadout {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: start;
+  gap: clamp(4px, 0.8vw, 9px);
+  width: 100%;
+  min-width: 0;
+}
+
+.tabletop-layout.phase-first-player .first-player-loadout-card {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  justify-items: center;
+  gap: 4px;
+  min-width: 0;
+  border: 1px solid rgba(116, 184, 216, 0.28);
+  border-radius: 9px;
+  padding: 5px;
+  background: rgba(4, 18, 31, 0.72);
+}
+
+.tabletop-layout.phase-first-player .first-player-loadout-card > small {
+  color: #8fcce4;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+
+.tabletop-layout.phase-first-player .first-player-loadout-card > .image-card {
+  width: min(100%, 118px);
+  min-width: 0;
+  max-width: 118px;
+  margin: 0;
+}
+
+.tabletop-layout.phase-first-player .first-player-loadout-card > span {
+  display: -webkit-box;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  color: #eefaff;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.15;
+  text-align: center;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.tabletop-layout.phase-first-player .setup-card-placeholder {
+  display: grid;
+  place-items: center;
+  width: min(100%, 118px);
+  aspect-ratio: 0.714;
+  border: 1px dashed rgba(143, 204, 228, 0.35);
+  border-radius: 7px;
+  color: rgba(143, 204, 228, 0.55);
+  background: rgba(2, 13, 24, 0.72);
+}
+
+.tabletop-layout.phase-first-player .dice-seat .die-face {
+  position: relative;
+  z-index: 3;
+}
+
+@media (max-width: 760px), (max-height: 600px) {
+  .tabletop-layout.phase-first-player .first-player-card {
+    width: 100%;
+    padding: 5px 8px;
+  }
+
+  .tabletop-layout.phase-first-player .first-player-result.setup-loadout-result {
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    gap: 5px;
+    margin-bottom: 3px;
+  }
+
+  .tabletop-layout.phase-first-player .first-player-loadout {
+    gap: 3px;
+  }
+
+  .tabletop-layout.phase-first-player .first-player-loadout-card {
+    gap: 2px;
+    border-radius: 5px;
+    padding: 2px;
+  }
+
+  .tabletop-layout.phase-first-player .first-player-loadout-card > small,
+  .tabletop-layout.phase-first-player .first-player-loadout-card > span {
+    font-size: 8px;
+  }
+
+  .tabletop-layout.phase-first-player .first-player-loadout-card > .image-card,
+  .tabletop-layout.phase-first-player .setup-card-placeholder {
+    width: min(100%, 86px);
+    max-width: 86px;
+  }
 }
 
 /* Every Rune remains physically reachable. Dragging the strip pans it; a
@@ -9822,6 +9969,8 @@ body > .board-card-drag-ghost > :not(.card-exhaust-layer) {
 /* Authoritative Chain/identity seal. Keep this at physical EOF. */
 .tabletop-layout {
   --tt-inspector-width: clamp(344px, 25vw, 420px);
+  --tt-utility-sheet-width: clamp(252px, 18vw, 336px);
+  --tt-chain-decision-height: clamp(116px, 19dvh, 172px);
 }
 
 .tabletop-layout .chain-zone-content[hidden] { display: none !important; }
@@ -10006,6 +10155,14 @@ body > .board-card-drag-ghost > :not(.card-exhaust-layer) {
 }
 
 @media (min-width: 1200px) {
+  .tabletop-layout.inspector-open {
+    --tt-sheet-reserve: var(--tt-inspector-width) !important;
+  }
+
+  .tabletop-layout.inspector-open .board-panel {
+    right: var(--tt-inspector-width) !important;
+  }
+
   .tabletop-layout .chain-zone-content:has(> .chain-context-panel) {
     grid-template-columns: minmax(0, 1fr) minmax(280px, 320px) !important;
     grid-template-rows: minmax(0, 1fr) !important;
@@ -10033,7 +10190,7 @@ body > .board-card-drag-ghost > :not(.card-exhaust-layer) {
     position: absolute !important;
     z-index: 98 !important;
     top: calc(var(--tt-opponent-row) + 8px) !important;
-    right: calc(var(--tt-action-rail) + 10px) !important;
+    right: 10px !important;
     bottom: auto !important;
     left: 10px !important;
     width: auto !important;
@@ -10044,15 +10201,18 @@ body > .board-card-drag-ghost > :not(.card-exhaust-layer) {
   }
 
   .tabletop-layout.inspector-open .chain-pod {
-    right: calc(var(--tt-inspector-width) + 12px) !important;
+    right: 12px !important;
   }
 
   .tabletop-layout.inspector-open .floating-panels.has-blocking-decision {
     right: calc(var(--tt-inspector-width) + 12px) !important;
   }
 
-  .tabletop-layout.inspector-open .table-command-layer {
-    right: calc(var(--tt-inspector-width) + 12px) !important;
+  .tabletop-layout .table-command-layer,
+  .tabletop-layout:has(.payment-stage-banner) .table-command-layer,
+  .tabletop-layout.inspector-open .table-command-layer,
+  .tabletop-layout.inspector-open:has(.payment-stage-banner) .table-command-layer {
+    right: var(--tt-action-rail) !important;
   }
 
   .tabletop-layout.inspector-open .inspector.inspector-panel {
@@ -10072,7 +10232,7 @@ body > .board-card-drag-ghost > :not(.card-exhaust-layer) {
   .tabletop-layout:has(.chain-pod.is-collapsed) .chain-pod.is-collapsed,
   .tabletop-layout .chain-pod.is-collapsed,
   .tabletop-layout.inspector-open .chain-pod.is-collapsed {
-    right: calc(var(--tt-action-rail) + 10px) !important;
+    right: 10px !important;
     left: auto !important;
     width: clamp(208px, 16vw, 248px) !important;
     max-width: clamp(208px, 16vw, 248px) !important;
@@ -10080,6 +10240,50 @@ body > .board-card-drag-ghost > :not(.card-exhaust-layer) {
     min-height: 0 !important;
     max-height: 42px !important;
     padding: 4px 6px !important;
+  }
+
+  .tabletop-layout.inspector-open .chain-pod.is-collapsed {
+    right: 12px !important;
+  }
+
+  .tabletop-layout:has(.floating-panels > :is(.graveyard-panel, .banished-panel, .intel-panel)),
+  .tabletop-layout:has(.log-drawer),
+  .tabletop-layout:has(.chain-pod):has(.floating-panels > :is(.graveyard-panel, .banished-panel, .intel-panel)),
+  .tabletop-layout:has(.chain-pod):has(.log-drawer) {
+    --tt-sheet-reserve: var(--tt-utility-sheet-width) !important;
+  }
+
+  .tabletop-layout:has(.floating-panels > :is(.graveyard-panel, .banished-panel, .intel-panel)) .board-panel,
+  .tabletop-layout:has(.log-drawer) .board-panel {
+    right: calc(var(--tt-action-rail) + var(--tt-utility-sheet-width)) !important;
+  }
+
+  .tabletop-layout:has(.floating-panels > :is(.graveyard-panel, .banished-panel, .intel-panel)) .table-command-layer,
+  .tabletop-layout:has(.log-drawer) .table-command-layer {
+    right: calc(var(--tt-action-rail) + var(--tt-utility-sheet-width)) !important;
+  }
+
+  .tabletop-layout .floating-panels > :is(.graveyard-panel, .banished-panel, .intel-panel),
+  .tabletop-layout .log-drawer {
+    right: var(--tt-action-rail) !important;
+    width: var(--tt-utility-sheet-width) !important;
+    max-width: var(--tt-utility-sheet-width) !important;
+  }
+
+  .tabletop-layout:has(.chain-pod):has(.floating-panels.has-blocking-decision) .chain-pod {
+    max-height: var(--tt-chain-decision-height) !important;
+  }
+
+  .tabletop-layout:has(.chain-pod):has(.floating-panels.has-blocking-decision) .floating-panels.has-blocking-decision {
+    top: calc(var(--tt-opponent-row) + var(--tt-chain-decision-height) + 18px) !important;
+    right: var(--tt-action-rail) !important;
+    bottom: calc(var(--tt-hand-height) + var(--tt-command-height)) !important;
+    left: 0 !important;
+    place-items: start center !important;
+  }
+
+  .tabletop-layout.inspector-open:has(.chain-pod):has(.floating-panels.has-blocking-decision) .floating-panels.has-blocking-decision {
+    right: var(--tt-inspector-width) !important;
   }
 
   .tabletop-layout .resource-zone,
