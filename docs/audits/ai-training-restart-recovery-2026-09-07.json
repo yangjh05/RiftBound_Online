@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "checkedAt": "2026-09-06T18:14:00.224Z",
+  "state": "restarted-and-training",
+  "processId": 7232,
+  "restartedAt": "2026-09-07T03:09:57.6732204+09:00",
+  "failedAt": "2026-09-06T08:02:43.2701548+09:00",
+  "cause": "restart validation depended on temporary evaluator request removed by clean shutdown",
+  "preservedPpoGames": 80,
+  "preservedEvaluatorGames": 373,
+  "maximumWorkers": 16,
+  "hardTaskDeadlineMs": 0,
+  "stage": "evaluator-development-gate-evaluation",
+  "sequence": 30,
+  "stageUpdatedAt": "2026-09-06T18:13:59.397Z",
+  "durableRestartPreflight": {
+    "version": 1,
+    "sourceDatasetKey": "856e331a8d795dd67eb8a3e594f8df9dc39a55d930f36c5002e0cff9b717d128",
+    "sourceEngineFingerprint": "sha256:fa68b3fd39f2af33d7e6adcae17423e2460f7689af66d8ba09aebdd3b4474ac6",
+    "targetDatasetKey": "856e331a8d795dd67eb8a3e594f8df9dc39a55d930f36c5002e0cff9b717d128",
+    "targetEngineFingerprint": "sha256:fa68b3fd39f2af33d7e6adcae17423e2460f7689af66d8ba09aebdd3b4474ac6",
+    "migrationRequired": false,
+    "sourceCommittedGames": 373,
+    "sourceAcceptedGames": 373,
+    "sourceAllocationStatus": "collecting",
+    "requestPath": null,
+    "restartContractPath": "C:\\Users\\USER\\Documents\\RiftBound_Online\\data\\ai\\retrain-run-c-20260905-051719\\evaluator-bootstrap\\856e331a8d795dd67eb8a3e594f8df9dc39a55d930f36c5002e0cff9b717d128\\restart-contract.json",
+    "requestStageId": "bootstrap-7232-1788718281457-19e12a6786596",
+    "requestParentMatched": true,
+    "requestResolvedViaMigration": false,
+    "targetStateExists": true,
+    "targetCompatibilityMigration": {
+      "version": 2,
+      "migratedAt": "2026-09-06T18:11:21.255Z",
+      "fromDatasetKey": "99a06a5ae5ee23a0537616f2f35770b95d572120837cce93148a8127684d56f9",
+      "toDatasetKey": "856e331a8d795dd67eb8a3e594f8df9dc39a55d930f36c5002e0cff9b717d128",
+      "fromEngineFingerprint": "sha256:7d8531a04a7de71881869771ef13fc86eea4c216e48aaee7e2e792a9349f572d",
+      "toEngineFingerprint": "sha256:fa68b3fd39f2af33d7e6adcae17423e2460f7689af66d8ba09aebdd3b4474ac6",
+      "migratedGames": 373,
+      "migratedTrajectories": 373,
+      "policyReturnsPreserved": true,
+      "holdoutRolePolicy": "preserve-v1",
+      "roleReassignments": {
+        "unassigned->unassigned": 215,
+        "training->training": 158
+      },
+      "holdoutIndependence": null
+    },
+    "targetAcceptedGames": 0
+  },
+  "tests": {
+    "restart": 7,
+    "stageHandoff": 3
+  },
+  "sourceBackup": "C:\\Users\\USER\\Documents\\RiftBound_Online\\data\\ai\\retrain-run-c-20260905-051719\\efficiency-source-backup-20260907-030955"
+}

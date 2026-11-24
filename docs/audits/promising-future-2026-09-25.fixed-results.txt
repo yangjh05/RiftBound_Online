@@ -1,0 +1,20 @@
+PF / Whirlwind verification — 2026-09-25
+
+PF regression: 15/15 passed
+Whirlwind regression: 4/4 passed
+Non-AI regressions after Whirlwind: 1235 passed; 1 ENOENT from concurrent temporary mutant file deletion.
+The affected rule-ledger test passed on rerun after mutation workers finished.
+
+check-no-ai.log
+✔ turn and cleanup workstream ledger assigns every official leaf exactly once (168.5832ms)
+  215 passed (19.3m)
+
+remaining-checks.log
+Killed 170 regression mutants covering duel rules, effect text, deck legality, and published card costs.
+Effect mutants: killed 685/685 executed; 0 survived and 0 lack executable evidence. Report: artifacts\effect-mutation-report.json
+Passed 992 synthesized interaction scenarios across 31 on-move cards and 4 payloads; observed 16 action-to-state transitions in 333 active-effect contexts.
+Fuzzed 50 games across 16 decks (seed 20260714); semantically checked 131 card/effect paths across 1254 choices; evaluated 33 Core Rules checks 230038 times; observed 257 action-to-state transitions in 8942 active-effect contexts.
+Passed 32 generated scenarios covering 16 decks in both seats, 5 choice policies, and both first-player positions (18.0s).
+
+rule-ledger-recheck.log
+✔ turn and cleanup workstream ledger assigns every official leaf exactly once (72.4381ms)

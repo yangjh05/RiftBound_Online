@@ -58,13 +58,13 @@ test("draw, death, Might, and counter cues are connected to animations lasting a
 });
 
 test("board Might presentation uses live static-effect calculations", () => {
-  assert.match(appSource, /might:\s*currentMight\(game, card\)/);
-  assert.match(appSource, /const raw = showdownUnitStats\(card, location\) \|\| unitDamageState\(game, card\)/);
+  assert.match(appSource, /const might = currentMight\(game, card\)/);
+  assert.match(appSource, /const raw = showdownUnitStats\(card, location\) \|\| unitDamageState\(game, card, \{ might: uiCurrentMight\(card\) \}\)/);
   assert.match(appSource, /data-current-might="\$\{stats\.might\}"/);
   assert.match(appSource, /boardCardCornerOverlay\(card, stats\)/);
   assert.match(appSource, /const damageState = unitDamageState\(game, card, \{ battlefield, role \}\)/);
-  assert.match(appSource, /const items = \[`\$\{t\("might", locale\(\)\)\} \$\{currentMight\(game, card\)\}`\]/);
-  assert.match(appSource, /snapshotPresentationGame\(game, \(card\) => currentMight\(game, card\), viewerPlayerId\(\)\)/);
+  assert.match(appSource, /const items = \[`\$\{t\("might", locale\(\)\)\} \$\{uiCurrentMight\(card\)\}`\]/);
+  assert.match(appSource, /snapshotPresentationGame\(game, \(card\) => uiCurrentMight\(card\), viewerPlayerId\(\)\)/);
 });
 
 function snapshot({ players = [], boardUnits = [], trash = [], chainItems = [], logHead = "", effectMessage = "" } = {}) {

@@ -551,7 +551,7 @@ function totalPower(costs = []) {
 }
 
 function functionalVariantSource(cardNumber, officialByNumber) {
-  const match = /^(OGN-\d+)[bs]\/298$/i.exec(cardNumber || "");
+  const match = /^(OGN-\d+)[abs]\/298$/i.exec(cardNumber || "");
   if (!match) return null;
   const sourceNumber = `${match[1]}/298`;
   return officialByNumber.has(sourceNumber) ? sourceNumber : null;

@@ -1598,6 +1598,75 @@ test("ready Temporary Sprite tokens die at their controller's next Beginning Pha
   assert.equal(player.trash.some((card) => card.instanceId === sprite.instanceId), false);
 });
 
+test("turn boundaries prune stale engine event evidence without dropping recent or unidentified rules events", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const retainedTurnSequence = game.turnSequence;
+  const staleTurnSequence = Math.max(0, retainedTurnSequence - 1);
+  const eventKeys = [
+    "attachmentEvents",
+    "empowerEvents",
+    "damageEvents",
+    "discardEvents",
+    "exhaustEvents",
+    "readyEvents",
+    "banishEvents",
+    "revealEvents",
+    "combatResultEvents",
+    "killEvents",
+    "healEvents",
+    "moveEvents",
+    "channelEvents",
+    "drawEvents",
+    "burnEvents"
+  ];
+  for (const key of eventKeys) {
+    game[key] = [
+      { marker: "stale", turnSequence: staleTurnSequence },
+      { marker: "recent", turnSequence: retainedTurnSequence },
+      { marker: "legacy-without-turn" }
+    ];
+  }
+  game.operations = [
+    { id: "old-completed", status: "completed", startedAtTurnSequence: staleTurnSequence },
+    { id: "still-pending", status: "pending", startedAtTurnSequence: staleTurnSequence }
+  ];
+  game.lifecycleEvents = [
+    { marker: "legacy-without-turn" },
+    { marker: "stale", turnSequence: staleTurnSequence },
+    { marker: "recent", turnSequence: retainedTurnSequence }
+  ];
+
+  startTurn(game);
+
+  for (const key of eventKeys) {
+    assert.equal(game[key].some((event) => event.marker === "stale"), false, key);
+    assert.equal(game[key].some((event) => event.marker === "recent"), true, key);
+    assert.equal(game[key].some((event) => event.marker === "legacy-without-turn"), true, key);
+  }
+  assert.deepEqual(game.operations.map((operation) => operation.id), ["still-pending"]);
+  assert.deepEqual(game.lifecycleEvents.map((event) => event.marker), ["recent"]);
+});
+
+test("completed movement operations release their cloned continuation payload immediately", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const field = game.battlefields.find((candidate) => !candidate.controlledBy) || game.battlefields[0];
+  const unit = instance({ ...cards.lonelyPoro, effects: [], keywords: [] }, player.id, "operation-release-unit");
+  player.base.push(unit);
+
+  assert.equal(moveUnit(game, unit.instanceId, field.instanceId).ok, true);
+  assert.deepEqual(game.operations, []);
+  assert.deepEqual(
+    game.lifecycleEvents.slice(-2).map((event) => ({ event: event.event, turnSequence: event.turnSequence })),
+    [
+      { event: "started", turnSequence: game.turnSequence },
+      { event: "completed", turnSequence: game.turnSequence }
+    ]
+  );
+});
+
 function finishSetup(game) {
   game.setupRandomValues = game.players.map(() => 0);
   finishChampionSelection(game);
@@ -5238,9 +5307,6 @@ test("disarming rake does not trigger when there is no legal gear target", () =>
   }
   assert.equal(togglePaymentRune(game, "targetless-rake-r0", "power").ok, true);
   assert.equal(confirmPayment(game).ok, true);
-  assert.equal(game.pendingChoice.effect, "declareOptionalTrigger");
-  assert.equal(chooseEffectOption(game, "use-optional-trigger").ok, true);
-
   assert.equal(game.pendingChoice, null);
   assert.equal(game.actionChain, null);
   assert.equal(player.base.some((card) => card.instanceId === "targetless-rake"), true);
@@ -9141,6 +9207,73 @@ test("tideturner can swap its location with another controlled unit when played"
   assert.equal(swapMoveEvents.every((event) => event.responsiblePlayerId === player.id), true);
 });
 
+test("optional triggers with no legal required target never ask to be placed on the Chain", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const tideturner = instance(cards.tideturner, player.id, "targetless-tideturner");
+  player.base = [];
+  player.hand = [tideturner];
+  player.runes = [
+    rune(DOMAINS.CHAOS, player.id, "targetless-tideturner-r1"),
+    rune(DOMAINS.CHAOS, player.id, "targetless-tideturner-r2")
+  ];
+
+  assert.equal(playCard(game, tideturner.instanceId, "base").ok, true);
+  assert.equal(game.pendingChoice, null, "Tideturner does not ask whether to use an impossible swap");
+  assert.equal(game.actionChain, null);
+  assert.equal((game.triggerQueue || []).length, 0);
+  assert.equal(player.base.some((card) => card.instanceId === tideturner.instanceId), true);
+});
+
+test("mandatory and optional high-Energy triggers are omitted when the spell spent too little Energy", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const revna = instance(cards.unl005revnaTheLorekeeper, player.id, "low-energy-revna");
+  const virtuoso = instance(cards.unl181virtuoso, player.id, "low-energy-virtuoso");
+  const spell = instance({
+    ...cards.stackedDeck,
+    name: "Low Energy Trigger Spell",
+    energy: 1,
+    power: [],
+    effects: []
+  }, player.id, "low-energy-trigger-spell");
+  revna.exhausted = true;
+  player.legend = virtuoso;
+  player.base = [revna];
+  player.hand = [spell];
+  player.runes = [rune(DOMAINS.MIND, player.id, "low-energy-trigger-rune")];
+
+  assert.equal(playCard(game, spell.instanceId, "base").ok, true);
+  assert.equal(game.pendingChoice, null, "Virtuoso does not offer its optional trigger below Energy 4");
+  assert.equal(game.actionChain, null, "Revna does not put its mandatory trigger on the Chain below Energy 4");
+  assert.equal((game.triggerQueue || []).length, 0);
+  assert.equal(revna.exhausted, true, "the ineligible mandatory trigger never resolves");
+});
+
+test("Virtuoso still offers its optional trigger after a spell spends at least four Energy", () => {
+  const game = createGame({ interactive: true });
+  finishSetup(game);
+  const player = currentPlayer(game);
+  const virtuoso = instance(cards.unl181virtuoso, player.id, "high-energy-virtuoso");
+  const spell = instance({
+    ...cards.stackedDeck,
+    name: "High Energy Trigger Spell",
+    energy: 4,
+    power: [],
+    effects: []
+  }, player.id, "high-energy-trigger-spell");
+  player.legend = virtuoso;
+  player.hand = [spell];
+  player.runes = Array.from({ length: 4 }, (_, index) =>
+    rune(DOMAINS.MIND, player.id, `high-energy-trigger-rune-${index}`));
+
+  assert.equal(playCard(game, spell.instanceId, "base").ok, true);
+  assert.equal(game.pendingChoice?.effect, "declareOptionalTrigger");
+  assert.equal(game.pendingChoice?.card?.instanceId, virtuoso.instanceId);
+});
+
 test("vex cheerless modifies showdown spell costs for both players", () => {
   const game = createGame({ interactive: true });
   finishSetup(game);
@@ -11155,6 +11288,46 @@ test("a simultaneous replacement event can be declined without consuming its sou
   assert.equal(game.deathReplacementPreference, undefined);
 });
 
+for (const finalChoice of ["decline", "save"]) {
+  test(`simultaneous opposing death replacements retain the first decline when the second player chooses ${finalChoice}`, () => {
+    const game = createGame({ interactive: true });
+    finishSetup(game);
+    const player = currentPlayer(game);
+    const opponent = game.players.find((candidate) => candidate.id !== player.id);
+    const field = game.battlefields[0];
+    const first = instance({ ...cards.lonelyPoro, might: 1, effects: [] }, player.id, "opposing-death-first");
+    const second = instance({ ...cards.lonelyPoro, might: 1, effects: [] }, opponent.id, "opposing-death-second");
+    first.buffs = second.buffs = 1;
+    field.units = [first, second];
+    for (const owner of [player, opponent]) {
+      owner.legend = instance(cards.settTheBoss, owner.id, `opposing-death-legend-${owner.id}`);
+      owner.runes = [rune(DOMAINS.BODY, owner.id, `opposing-death-rune-${owner.id}`)];
+    }
+    player.hand = [instance({ ...cards.uncheckedPower, energy: 0, power: [] }, player.id, "opposing-death-wipe")];
+
+    assert.equal(playCard(game, "opposing-death-wipe", "base").ok, true);
+    assert.equal(game.pendingChoice?.data?.unitId, first.instanceId);
+    assert.equal(chooseEffectOption(game, "decline").ok, true);
+    assert.equal(game.pendingChoice?.data?.unitId, second.instanceId);
+    // Browser/network snapshots must preserve the suspended cleanup decisions.
+    const resumed = JSON.parse(JSON.stringify(game));
+    const optionId = finalChoice === "save" ? `card:${opponent.legend.instanceId}` : "decline";
+    assert.equal(chooseEffectOption(resumed, optionId).ok, true);
+    assert.equal(resumed.pendingChoice, null, "the first death must not reopen its declined replacement");
+    const firstOwner = resumed.players.find((p) => p.id === player.id);
+    const secondOwner = resumed.players.find((p) => p.id === opponent.id);
+    assert.equal(firstOwner.trash.filter((c) => c.instanceId === first.instanceId).length, 1);
+    assert.equal(firstOwner.legend.exhausted, false);
+    assert.equal(secondOwner.trash.some((c) => c.instanceId === second.instanceId), finalChoice === "decline");
+    assert.equal(secondOwner.base.some((c) => c.instanceId === second.instanceId), finalChoice === "save");
+    assert.equal(secondOwner.legend.exhausted, finalChoice === "save");
+    assert.equal(resumed.unitsDiedThisTurn, finalChoice === "save" ? 1 : 2);
+    assert.equal(resumed.killEvents.filter((event) => event.targetId === first.instanceId).length, 1,
+      "suspending cleanup must not duplicate the kill attribution");
+    assert.equal(resumed.cleanupDeathReplacementBatch, undefined);
+  });
+}
+
 test("a direct Kill resumes its owning spell after an optional death replacement choice", () => {
   const game = createGame({ interactive: true });
   finishSetup(game);
@@ -12165,16 +12338,9 @@ test("akshan weaponmaster returns temporarily controlled enemy equipment when he
   assert.equal(togglePaymentRune(game, "akshan-r5", "power").ok, true);
   assert.equal(confirmPayment(game).ok, true);
   const akshan = player.base.find((card) => card.instanceId === "explicit-akshan");
-  assert.equal(game.pendingChoice.effect, "triggerOrder");
-  const stealTrigger = game.pendingChoice.options.find((option) => option.effectKind === "stealEnemyGear" && option.cardId === akshan.instanceId);
-  assert.ok(stealTrigger);
-  selectAndConfirmTriggerOrder(game, [
-    ...game.pendingChoice.options
-      .filter((option) => !option.confirmTriggerOrder && option.id !== stealTrigger.id)
-      .map((option) => option.id),
-    stealTrigger.id
-  ]);
   assert.equal(game.pendingChoice.effect, "stealEnemyGear");
+  assert.equal(game.pendingChoice.options.some((option) => option.effectKind === "weaponmaster"), false,
+    "Weaponmaster is not placed without Equipment already controlled at trigger finalization");
   assert.deepEqual(game.pendingChoice.options.map((option) => option.cardId), ["enemy-equipment"]);
 
   assert.equal(chooseEffectOption(game, "enemy-equipment").ok, true);
@@ -12941,32 +13107,51 @@ test("multiplayer batch movement accepts the explicitly selected unit set in any
   assert.deepEqual(target.units.map((unit) => unit.instanceId).sort(), [...selectedIds].sort());
 });
 
-test("the candlelit sanctum recycles selected top deck cards after conquest", () => {
-  const game = createGame({ interactive: true });
-  finishSetup(game);
-  const player = currentPlayer(game);
-  const opponent = game.players[1];
-  const unit = instance(cards.lonelyPoro, player.id, "sanctum-unit");
-  const top = instance(cards.charm, player.id, "sanctum-top");
-  const second = instance(cards.gust, player.id, "sanctum-second");
-  const third = instance(cards.flash, player.id, "sanctum-third");
-  const field = {
-    ...instance(cards.theCandlelitSanctum, opponent.id, "explicit-sanctum"),
-    controlledBy: opponent.id,
-    hidden: [],
-    units: []
-  };
-  game.battlefields[0] = field;
-  player.base = [unit];
-  player.mainDeck = [top, second, third];
+test("the candlelit sanctum supports both top-deck orders and every recycle choice after conquest", () => {
+  for (const optionId of ["keep", "swap", "recycle-0", "recycle-1", "recycle-all"]) {
+    const game = createGame({ interactive: true });
+    finishSetup(game);
+    const player = currentPlayer(game);
+    const opponent = game.players[1];
+    const unit = instance(cards.lonelyPoro, player.id, "sanctum-unit");
+    const top = instance(cards.charm, player.id, "sanctum-top");
+    const second = instance(cards.gust, player.id, "sanctum-second");
+    const third = instance(cards.flash, player.id, "sanctum-third");
+    const field = {
+      ...instance(cards.theCandlelitSanctum, opponent.id, "explicit-sanctum"),
+      controlledBy: opponent.id,
+      hidden: [],
+      units: []
+    };
+    game.battlefields[0] = field;
+    player.base = [unit];
+    player.mainDeck = [top, second, third];
 
-  assert.equal(moveUnit(game, "sanctum-unit", "explicit-sanctum").ok, true);
-  assert.equal(passShowdown(game, game.showdown.priorityPlayerId).ok, true);
-  assert.equal(passShowdown(game, game.showdown.priorityPlayerId).ok, true);
-  assert.equal(game.pendingChoice.effect, "recycleTopDeck");
+    assert.equal(moveUnit(game, "sanctum-unit", "explicit-sanctum").ok, true);
+    assert.equal(passShowdown(game, game.showdown.priorityPlayerId).ok, true);
+    assert.equal(passShowdown(game, game.showdown.priorityPlayerId).ok, true);
+    assert.equal(game.pendingChoice.effect, "recycleTopDeck");
+    assert.deepEqual(game.pendingChoice.data.lookedIds, [top.instanceId, second.instanceId]);
+    assert.deepEqual(game.pendingChoice.options.map((option) => option.id),
+      ["keep", "swap", "recycle-0", "recycle-1", "recycle-all"]);
 
-  assert.equal(chooseEffectOption(game, "recycle-0").ok, true);
-  assert.deepEqual(player.mainDeck.map((card) => card.instanceId), ["sanctum-second", "sanctum-third", "sanctum-top"]);
+    assert.equal(chooseEffectOption(game, optionId).ok, true);
+    const deckIds = player.mainDeck.map((card) => card.instanceId);
+    if (optionId === "recycle-all") {
+      assert.equal(deckIds[0], third.instanceId);
+      assert.deepEqual(deckIds.slice(1).sort(), [top.instanceId, second.instanceId].sort());
+    } else {
+      const expected = {
+        keep: [top, second, third],
+        swap: [second, top, third],
+        "recycle-0": [second, third, top],
+        "recycle-1": [top, third, second]
+      };
+      assert.deepEqual(deckIds, expected[optionId].map((card) => card.instanceId));
+    }
+    assert.equal(game.pendingChoice, null);
+    assert.equal(game.showdown, null, "conquest continues after the choice");
+  }
 });
 
 test("the syren pays one energy and recalls a friendly battlefield unit", () => {

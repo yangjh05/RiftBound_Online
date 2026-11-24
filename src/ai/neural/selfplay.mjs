@@ -1,11 +1,14 @@
+import {needsPaymentOptionDecision} from '../payment-options.mjs';
 import { Worker } from "node:worker_threads";
 import { createHash } from "node:crypto";
-import { createGame } from "../../engine.mjs";
+import { createGame, currentMight } from "../../engine.mjs";
 import { championMatchesLegend } from "../../engine/setup.mjs";
-import { activeActorId, applyAiAction, auditDecisionBoundary, auditRecordedDecisionSafety, createAiDecisionCycleGuard, enumerateAiPolicyActions, actionKey, cloneGame } from "../actions.mjs";
+import { activeActorId, applyAiAction, auditDecisionBoundary, auditRecordedDecisionSafety, createAiDecisionCycleGuard, enumerateAiPolicyActions, actionKey, cloneGame, planPaymentActions } from "../actions.mjs";
+import { reviewCombatContinuations, hasCombatSacrificePayoff } from "../combat-safety.mjs";
+import { recommendPublicTacticalAction } from "../tactical-baseline.mjs";
 import { updateDeckLearning } from "../deckbuilding.mjs";
 import { DEFAULT_AI_MODEL, scoreActions } from "../policy.mjs";
-import { encodeOpponentDeckTarget } from "./encoding.mjs";
+import { ACTION_DIM, encodeOpponentDeckTarget } from "./encoding.mjs";
 import {
   NEURAL_HIDDEN_SIZE,
   createNeuralSession,
@@ -20,6 +23,8 @@ import {
   TEACHER_LABEL_VERSION
 } from "./teacher.mjs";
 import { mulliganPlanProfile } from "../mulligan.mjs";
+import { NATURAL_MIXTURE_SELECTION, naturalLeafSamplingChannel,
+  naturalLeafMixtureSamplingFrame } from "./natural-leaf-sampling.mjs";
 import { tacticalActionProfile } from "../action-tactics.mjs";
 import { appendSpectatorReplayFrame, createSpectatorReplay, finalizeSpectatorReplay } from "../spectator-replay.mjs";
 import {
@@ -57,7 +62,7 @@ import {
   normalizeEvaluatorAuditStratum
 } from "./audit-strata.mjs";
 
-export const NEURAL_LEARNING_TARGET_VERSION = 8;
+export const NEURAL_LEARNING_TARGET_VERSION = 9;
 
 export function teacherAuditCollectionBudgetExhausted(options = {}) {
   const actionExhausted =
@@ -358,7 +363,9 @@ function stableSelfPlayHash(value) {
 export function playNeuralSelfPlayGame(options) {
   const { decks, model, maxActions = 600, random = Math.random, firstPlayerId = "p1" } = options;
   const shapingWeight = Math.max(0, Number(options.shapingWeight) || 0);
-  const game = createGame({ decks, firstPlayerId, interactive: true, manualActionChainPriority: true, decisionSafety: "strict", random, randomSeed: options.randomSeed });
+  const game = createGame({ decks,
+    ...(options.learnFirstPlayerChoice ? {firstPlayerChooserId:firstPlayerId} : {firstPlayerId}),
+    interactive: true, manualActionChainPriority: true, decisionSafety: "strict", random, randomSeed: options.randomSeed });
   const spectatorReplay = options.captureReplay ? createSpectatorReplay(game, options.replayMetadata) : null;
   const models = options.models || [model, model];
   const teacherEvaluatorMode = options.teacherEvaluatorMode || "certified-neural-ensemble";
@@ -414,6 +421,12 @@ export function playNeuralSelfPlayGame(options) {
   let teacherLeafAuditAttempts = 0;
   let naturalLeafAuditEligibleDecisions = 0;
   let naturalLeafAuditReservoir = null;
+  const naturalMixture = options.evidenceSamplingFrame?.candidateSelection
+    === NATURAL_MIXTURE_SELECTION;
+  const naturalChannel = naturalMixture
+    ? naturalLeafSamplingChannel(options.evidenceSamplingFrame.taskManifestHash)
+    : "population";
+  const naturalPhaseCounts = { mulligan: 0, early: 0, mid: 0, late: 0, unknown: 0 };
   const teacherActionAuditDiagnosticCounts = {};
   const teacherActionAuditFailureReasons = {};
   const teacherActionAuditKeys = new Set();
@@ -462,6 +475,28 @@ export function playNeuralSelfPlayGame(options) {
   const detachedIndependentActionAudit =
     deferIndependentActionAudit
     && options.detachedIndependentActionAudit === true;
+  const deferredLeafAuditCandidates = [];
+  const retainDeferredLeafAudit = (teacher, candidate) => {
+    if (!teacher?.deferredLeafAuditCandidate) return;
+    deferredLeafAuditCandidates.push({
+      ...serializeDeferredActionAuditCandidate({
+        ...candidate, descriptor: teacher.deferredLeafAuditCandidate,
+        engineFingerprint: options.engineFingerprint
+      }),
+      deckId: candidate.deckId, seat: candidate.seat,
+      stratum: { phaseBand: candidate.phaseBand || normalizeEvaluatorAuditStratum({
+        game: candidate.game, deckId: candidate.deckId, seat: candidate.seat
+      }).phaseBand },
+      legalActions: structuredClone(candidate.legalActions),
+      // The recorded locator owns the only destination for a later label.
+      recordedStepLocator: {
+        actorId: candidate.actorId,
+        stepIndex: trajectories.get(candidate.actorId).indexOf(candidate.recordedStep),
+        informationSetHash: candidate.recordedStep.informationSetHash,
+        selectedIndex: candidate.recordedStep.selectedIndex
+      }
+    });
+  };
   const teacherActionAuditCandidatePoolSize = Math.max(
     4,
     Math.min(
@@ -520,7 +555,7 @@ export function playNeuralSelfPlayGame(options) {
   while (game.phase !== "complete" && actionCount < maxActions) {
     const decisionCycle = decisionCycleGuard.inspect(game);
     if (decisionCycle) throw createSelfPlayError("AI decision cycle detected.", game, decisionCycle);
-    if (game.pendingPayment) {
+    if (game.pendingPayment && !needsPaymentOptionDecision(game)) {
       const payment = resolvePlannedPayment(game, neuralPaymentOptions(models[game.players.findIndex((player) => player.id === game.pendingPayment.playerId)]));
       if (!payment?.ok) throw createSelfPlayError("AI payment planner could not complete a legal payment.", game, {
         kind: "payment-plan-failed", stage: "payment", actionCount, actorId: game.pendingPayment?.playerId || null
@@ -544,7 +579,7 @@ export function playNeuralSelfPlayGame(options) {
     observeHandOpportunityWindow(handOpportunityTrackers.get(actorId), game, legal, actionCount);
     const decision = sessions[seat].decide(game, actorId, legal, { temperature: options.temperature || 0.8, random });
     const legalActionKeys = trainableSeats.has(seat)
-      ? legal.map(actionKey)
+      ? decision.legalActions.map(actionKey)
       : null;
     const decisionInformationSetHash = trainableSeats.has(seat)
       ? createInformationSetHash({
@@ -556,13 +591,12 @@ export function playNeuralSelfPlayGame(options) {
       : null;
     const naturalLeafSamplingFrame =
       options.evidenceSamplingFrame?.distribution === "natural-distribution"
-      && options.evidenceSamplingFrame?.candidateSelection
-        === "hash-priority-reservoir-policy-decision-v1"
+      && (naturalMixture || options.evidenceSamplingFrame?.candidateSelection
+        === "hash-priority-reservoir-policy-decision-v1")
         ? options.evidenceSamplingFrame
         : null;
-    // Natural collection commits one uniform hash-priority reservoir item
-    // after observing the complete game's eligible decisions. No expensive
-    // teacher call is made while the reservoir is still changing.
+    // One reservoir for the precommitted channel; no teacher call until the
+    // game is complete. Population counts include ALL eligible decisions.
     const naturalLeafAuditSelected = false;
     let proof = null;
     if (trainableSeats.has(seat)) {
@@ -642,6 +676,7 @@ export function playNeuralSelfPlayGame(options) {
       && decisionInformationSetHash
       && auditPhaseFocusAllowsTeacherQuery) {
       naturalLeafAuditEligibleDecisions += 1;
+      naturalPhaseCounts[currentAuditPhaseBand] += 1;
     }
     const actionAuditQuerySchedule = deferIndependentActionAudit
       ? actionAuditTeacherQuerySchedule({
@@ -695,6 +730,9 @@ export function playNeuralSelfPlayGame(options) {
           || uncertaintyQuery
           || random() < actionAuditQuerySchedule.queryFraction
         ))))) {
+      const baselineReview = models[seat]?.metadata?.tacticalBaseline
+        ? recommendPublicTacticalAction(game,actorId,decision.legalActions) : null;
+      if (baselineReview) criticalDecision.tacticalBaselineReview = baselineReview;
       teacher = simulationTeacherDecision(game, actorId, decision.legalActions, {
         model: DEFAULT_AI_MODEL,
         neuralModel: teacherUsesNeuralEvaluation ? models[seat] : null,
@@ -708,7 +746,8 @@ export function playNeuralSelfPlayGame(options) {
         initialMemories: { [actorId]: sessions[seat].memory(actorId) },
         neuralBelief: decision.belief,
         requiredAction: decision.action,
-        requiredActions: criticalDecision.requiredActions,
+        requiredActions: [...(baselineReview ? [baselineReview.action,baselineReview.hold] : []),
+          ...criticalDecision.requiredActions],
         policyProbabilities: decision.probabilities,
         proposalValues: decision.teacherProposalValues,
         informationSetHash: decisionInformationSetHash,
@@ -720,7 +759,8 @@ export function playNeuralSelfPlayGame(options) {
         depth: options.teacherDepth || 10,
         maxCandidates: options.teacherCandidates || 6,
         leafAuditSimulations:
-          options.teacherLeafAuditSimulations ?? 8,
+          options.teacherLeafAuditSimulations ?? 128,
+        detachedIndependentLeafAudit: options.detachedIndependentLeafAudit === true,
         captureProductionLeafAudit:
           options.captureProductionLeafAudit === true,
         captureIndependentLeafAudit:
@@ -753,7 +793,7 @@ export function playNeuralSelfPlayGame(options) {
           : teacherActionAuditAttempts < teacherActionAuditBudget,
         actionAuditExistingKeys: [...teacherActionAuditKeys],
         actionAuditMaximumSteps:
-          Math.max(192, Number(options.teacherActionAuditMaximumSteps) || 1200),
+          Math.max(1, Number(options.teacherActionAuditMaximumSteps) || 1200),
         evidenceProtocolManifest:
           options.evidenceProtocolManifest || null,
         evidenceSamplingFrame:
@@ -821,10 +861,10 @@ export function playNeuralSelfPlayGame(options) {
         teacherMacroDemonstrationSteps += teacher.macroDemonstration?.steps?.length || 0;
       }
     }
-    const beforePotential = shapingWeight > 0
+    const beforePotential = trainableSeats.has(seat) && shapingWeight > 0
       ? trainingShapingPotential(game, actorId)
       : 0;
-    const beliefTarget = encodeOpponentDeckTarget(game, actorId);
+    const beliefTarget = trainableSeats.has(seat) ? encodeOpponentDeckTarget(game, actorId) : null;
     const beforeScoreLead = scoreLead(game, actorId);
     const selectedTactics = tacticalActionProfile(game, actorId, decision.action);
     resolveResourceReservations();
@@ -852,7 +892,7 @@ export function playNeuralSelfPlayGame(options) {
       recordedStep = {
         actionCount,
         state: decision.stateEncoding,
-        actions: decision.actionEncoding,
+        actions: decision.actionEncoding.slice(0, decision.legalCount * ACTION_DIM),
         selectedIndex: decision.selectedIndex,
         legalCount: decision.legalCount,
         oldLogProbability: decision.logProbability,
@@ -900,6 +940,8 @@ export function playNeuralSelfPlayGame(options) {
         behaviorActionKey: actionKey(decision.action),
         recommendedActionKey: teacher?.action ? actionKey(teacher.action) : null,
         legalActionKeys,
+        actionManifestVersion: 2,
+        originalLegalActionKeys: legal.map(actionKey),
         originalLegalCount: legal.length,
         selectedActionValue: decision.selectedActionValue,
         fullHeuristicEvaluatorVersion: fullHeuristicScores ? 1 : null,
@@ -974,6 +1016,9 @@ export function playNeuralSelfPlayGame(options) {
         criticalDecisionTypes: criticalDecision.types,
         criticalDecisionUrgent: criticalDecision.urgent,
         criticalAlternativeActionKeys: criticalDecision.requiredActions.map(actionKey),
+        combatContinuationReview: criticalDecision.combatContinuationReview || null,
+        tacticalBaselineReview: criticalDecision.tacticalBaselineReview || null,
+        combatSacrificePossible: criticalDecision.combatSacrificePossible || false,
         teacherSearch: teacher?.search || null,
         teacherAlternatives: teacher?.alternatives?.map((alternative) => ({
           actionKey: actionKey(alternative.action),
@@ -1008,17 +1053,23 @@ export function playNeuralSelfPlayGame(options) {
         selectedMulliganCardNumbers: selectedMulliganPlan?.selectedCardNumbers ?? null,
         tacticalProfile: compactTacticalProfile(selectedTactics),
         scoreLeadBefore: beforeScoreLead,
+        shapingPotential: beforePotential,
         shapedReward: 0
       };
-      if (naturalLeafSamplingFrame && auditPhaseFocusAllowsTeacherQuery) {
-        const priority = stableSelfPlayHash(
-          `${naturalLeafSamplingFrame.taskManifestHash}`
-          + `:reservoir:${decisionInformationSetHash}`
-        );
+      if (naturalLeafSamplingFrame && auditPhaseFocusAllowsTeacherQuery
+        && (naturalChannel === "population" || naturalChannel === currentAuditPhaseBand)) {
+        const priority = naturalMixture
+          ? createHash("sha256").update(
+            `${naturalLeafSamplingFrame.taskManifestHash}:mixture-reservoir:`
+            + `${actionCount}:${decisionInformationSetHash}`
+          ).digest("hex")
+          : stableSelfPlayHash(`${naturalLeafSamplingFrame.taskManifestHash}`
+            + `:reservoir:${decisionInformationSetHash}`);
         if (!naturalLeafAuditReservoir
           || priority < naturalLeafAuditReservoir.priority) {
           naturalLeafAuditReservoir = {
             priority,
+            phaseBand: currentAuditPhaseBand,
             game: cloneGame(game),
             actorId,
             seat,
@@ -1051,6 +1102,12 @@ export function playNeuralSelfPlayGame(options) {
         recordedStep.fulfillsResourceReservationId = existingReservation.reservation.id;
       }
       trajectories.get(actorId).push(recordedStep);
+      retainDeferredLeafAudit(teacher, {
+        game, actorId, seat, deckId: decks[seat]?.id, recordedStep,
+        legalActions: decision.legalActions,
+        initialMemories: { [actorId]: sessions[seat].memory(actorId) },
+        neuralBelief: decision.belief
+      });
       if (teacher?.deferredActionAuditCandidate) {
         const descriptor = teacher.deferredActionAuditCandidate;
         const candidate = {
@@ -1157,7 +1214,7 @@ export function playNeuralSelfPlayGame(options) {
       action: structuredClone(decision.action)
     });
     engineActionCount += 1;
-    if (game.pendingPayment) {
+    if (game.pendingPayment && !needsPaymentOptionDecision(game)) {
       const payment = resolvePlannedPayment(game, neuralPaymentOptions(models[seat]));
       if (!payment?.ok) throw createSelfPlayError("AI payment planner could not complete a selected action's payment.", game, {
         kind: "payment-plan-failed", stage: "after-strategic-action", actionCount, actorId,
@@ -1178,11 +1235,6 @@ export function playNeuralSelfPlayGame(options) {
     });
     if (spectatorReplay) appendSpectatorReplayFrame(spectatorReplay, game, actorId, decision.action);
     if (recordedStep) {
-      if (shapingWeight > 0) {
-        recordedStep.shapedReward = (options.gamma || 0.997)
-          * trainingShapingPotential(game, actorId)
-          - beforePotential;
-      }
       recordedStep.scoreLeadAfter = scoreLead(game, actorId);
       recordedStep.turningPoint = highestPriorityTurningPoint([
         recordedStep.turningPoint,
@@ -1223,11 +1275,17 @@ export function playNeuralSelfPlayGame(options) {
       distribution: "natural-distribution",
       candidateSelection: "hash-priority-reservoir-policy-decision-v1",
       parentTaskManifestHash: candidate.samplingFrame.taskManifestHash,
+      ...(candidate.samplingFrame.plannedFinalSimulations != null ? {
+        plannedFinalSimulations: candidate.samplingFrame.plannedFinalSimulations
+      } : {}),
       eligibleDecisions: naturalLeafAuditEligibleDecisions,
       selectionProbability,
       weighting: "inverse-propensity-per-decision-v1"
     };
-    const samplingFrame = {
+    const samplingFrame = naturalMixture
+      ? naturalLeafMixtureSamplingFrame(candidate.samplingFrame,
+        naturalPhaseCounts, candidate.phaseBand)
+      : {
       ...committedSamplingFrame,
       taskManifestHash: createHash("sha256")
         .update(JSON.stringify(committedSamplingFrame))
@@ -1262,7 +1320,8 @@ export function playNeuralSelfPlayGame(options) {
           options.teacherConfirmationMaxSimulations ?? 32,
         depth: options.teacherDepth || 10,
         maxCandidates: options.teacherCandidates || 6,
-        leafAuditSimulations: options.teacherLeafAuditSimulations ?? 8,
+        leafAuditSimulations: options.teacherLeafAuditSimulations ?? 128,
+        detachedIndependentLeafAudit: options.detachedIndependentLeafAudit === true,
         captureProductionLeafAudit:
           options.captureProductionLeafAudit === true,
         captureIndependentLeafAudit: true,
@@ -1277,19 +1336,22 @@ export function playNeuralSelfPlayGame(options) {
         )
       }
     );
+    retainDeferredLeafAudit(auditTeacher, candidate);
     if (auditTeacher?.independentLeafAuditAttempted === true) {
       teacherLeafAuditAttempts += 1;
     }
     teacherLeafAuditPairs +=
       auditTeacher?.independentLeafValuePairs?.length || 0;
     candidate.recordedStep.naturalLeafAuditSamplingObservation = {
-      version: 2,
-      contract: "natural-leaf-audit-sampling-observation-v2",
+      version: naturalMixture ? 3 : 2,
+      contract: naturalMixture ? "natural-leaf-audit-sampling-observation-v3"
+        : "natural-leaf-audit-sampling-observation-v2",
       samplingFrame,
       status: auditTeacher?.independentLeafActionEffectComparison
         ? "audited"
-        : auditTeacher
-          && auditTeacher.selectedIndex === candidate.decision.selectedIndex
+        : candidate.legalActions.length === 1
+          || (auditTeacher
+            && auditTeacher.selectedIndex === candidate.decision.selectedIndex)
           ? "identical-action-zero-regret"
           : "audit-unavailable"
     };
@@ -1418,12 +1480,14 @@ export function playNeuralSelfPlayGame(options) {
       options.shapingWeight || 0,
       options.diagnosticWeight ?? 0,
       {
-        longLambda: options.longHorizonLambda ?? 0.985,
+        longLambda: options.longHorizonLambda ?? 1,
         longWeight: options.longHorizonWeight ?? 0.6
       }
     );
     outputTrajectories.push({
       playerId: player.id,
+      ...(options.evidenceSamplingFrame?.distribution === "natural-distribution"
+        ? { leafAuditSamplingDistribution: "natural-distribution" } : {}),
       completed: true,
       learningTargetVersion: NEURAL_LEARNING_TARGET_VERSION,
       engineFingerprint: options.engineFingerprint || null,
@@ -1442,6 +1506,9 @@ export function playNeuralSelfPlayGame(options) {
   }
   return {
     trajectories: outputTrajectories,
+    pendingLeafAudit: completed && deferredLeafAuditCandidates.length
+      ? { version: 1, contract: "detached-leaf-audit-state-bank-v1",
+        candidates: deferredLeafAuditCandidates } : null,
     pendingActionAudit:
       completed
       && detachedIndependentActionAudit
@@ -1626,6 +1693,8 @@ export function playNeuralBestOfThree(options) {
         models,
         trainableSeats: [...trainableSeats],
         firstPlayerId,
+        // Later games already have a loser-selected play order below.
+        learnFirstPlayerChoice: gameNumber === 1 && Boolean(options.learnFirstPlayerChoice),
         random
       });
     } catch (error) {
@@ -1710,7 +1779,7 @@ export function playNeuralBestOfThree(options) {
       options.shapingWeight || 0,
       options.diagnosticWeight ?? 0,
       {
-        longLambda: options.longHorizonLambda ?? 0.985,
+        longLambda: options.longHorizonLambda ?? 1,
         longWeight: options.longHorizonWeight ?? 0.6
       }
     );
@@ -1829,6 +1898,8 @@ export function sideboardSwapPreservesStartingChampion(deck, outCardNumber, inCa
 }
 
 export function evaluateNeuralModels(candidate, champion, decks, options = {}) {
+  if(Boolean(options.decisionReviewHash)!==(typeof options.reviewDecision==='function'))
+    throw new Error('Evaluation reviewer and identity must be supplied together.');
   const evaluationMode = options.evaluationMode || "same-deck-mirror-v2";
   const evaluationBlockSize = evaluationMode === "same-deck-mirror-v3" ? 8 : 4;
   const games = Math.max(evaluationBlockSize,
@@ -1863,7 +1934,8 @@ export function evaluateNeuralModels(candidate, champion, decks, options = {}) {
       gameSeed,
       evaluationMode,
       streamAssignment,
-      deckIds: pair.map((deck) => deck.id)
+      deckIds: pair.map((deck) => deck.id),
+      ...(options.decisionReviewHash ? {decisionReviewHash:options.decisionReviewHash} : {})
     };
     const reusable = reusableEvaluationSummary(options.resumedSummaries?.[gameIndex], expected);
     let summary = reusable;
@@ -1872,7 +1944,10 @@ export function evaluateNeuralModels(candidate, champion, decks, options = {}) {
         ? pairedEvaluationPlayerSeeds(gameSeed, candidateSeat, streamAssignment)
         : null;
       const game = createGame({ decks: pair, firstPlayerId, interactive: true, manualActionChainPriority: true, decisionSafety: "strict", random: seededRandom(gameSeed), randomSeed: gameSeed, playerRandomSeeds });
-      const sessions = [createNeuralSession(candidateSeat === 0 ? candidate : champion), createNeuralSession(candidateSeat === 1 ? candidate : champion)];
+      // Evaluation consumes only the selected action. The lean path retains
+      // policy + action-Q logits and recurrent memory, omitting unused heads.
+      const sessionOptions = { lean: options.fullInference !== true, maxHistory: 0 };
+      const sessions = [createNeuralSession(candidateSeat === 0 ? candidate : champion, sessionOptions), createNeuralSession(candidateSeat === 1 ? candidate : champion, sessionOptions)];
       const decisionCycleGuard = createAiDecisionCycleGuard();
       const decisionSeeds = pairedEvaluationDecisionSeeds(
         gameSeed,
@@ -1885,13 +1960,14 @@ export function evaluateNeuralModels(candidate, champion, decks, options = {}) {
       ];
       let actionCount = 0;
       let invalid = null;
+      const reviewStats=options.reviewDecision?[0,1].map(()=>({decisions:0,changed:0,previews:0,budgetExceeded:0,errors:0,reasons:{}})):null;
       for (; actionCount < (options.maxActions || 600) && game.phase !== "complete"; actionCount += 1) {
         const decisionCycle = decisionCycleGuard.inspect(game);
         if (decisionCycle) {
           invalid = { ...decisionCycle, message: "AI decision cycle detected during evaluation." };
           break;
         }
-        if (game.pendingPayment) {
+        if (game.pendingPayment && !needsPaymentOptionDecision(game)) {
           const paymentSeat = game.players.findIndex((player) => player.id === game.pendingPayment.playerId);
           const paymentModel = paymentSeat === candidateSeat ? candidate : champion;
           if (!resolvePlannedPayment(game, neuralPaymentOptions(paymentModel))?.ok) {
@@ -1908,11 +1984,21 @@ export function evaluateNeuralModels(candidate, champion, decks, options = {}) {
           break;
         }
         const seat = game.players.findIndex((player) => player.id === actorId);
-        const selected = sessions[seat].decide(game, actorId, legal, {
+        let selected = sessions[seat].decide(game, actorId, legal, {
           greedy: options.greedy !== false,
           temperature: options.temperature ?? 0.05,
           random: decisionRandoms[seat]
         });
+        if(options.reviewDecision && selected){
+          const reviewed=options.reviewDecision(game,actorId,selected,legal),diagnostic=reviewed?.review,stats=reviewStats[seat];
+          stats.decisions++;stats.changed+=Number(diagnostic?.applied===true);stats.previews+=diagnostic?.previews||0;
+          stats.budgetExceeded+=Number(diagnostic?.budgetExceeded===true);
+          const reason=diagnostic?.reason||'missing-review';stats.reasons[reason]=(stats.reasons[reason]||0)+1;
+          if(!reviewed?.selection || !diagnostic || diagnostic.reason==='review-error'){
+            stats.errors++;invalid={kind:'evaluation-review-failed',actorId,error:diagnostic?.error||reason};break;
+          }
+          selected=reviewed.selection;
+        }
         if (!selected || !applyAiAction(game, selected.action, actorId)?.ok) {
           invalid = { kind: "illegal-or-missing-policy-action", actorId, legalActions: legal.length };
           break;
@@ -1935,7 +2021,8 @@ export function evaluateNeuralModels(candidate, champion, decks, options = {}) {
         winnerId: game.winnerId || adjudication?.winnerId || null,
         ...expected,
         scores: game.players.map((player) => player.score),
-        actions: actionCount
+        actions: actionCount,
+        ...(reviewStats?{decisionReviewStats:reviewStats}:{})
       };
     }
     summary.aiSeats ||= candidateSeat === 0
@@ -2166,7 +2253,7 @@ export function evaluateNeuralAgainstHeuristic(candidate, decks, options = {}) {
           invalid = { ...decisionCycle, message: "AI decision cycle detected during evaluation." };
           break;
         }
-        if (game.pendingPayment) {
+        if (game.pendingPayment && !needsPaymentOptionDecision(game)) {
           const paymentSeat = game.players.findIndex((player) => player.id === game.pendingPayment.playerId);
           const paymentModel = paymentSeat === candidateSeat ? candidate : (options.baseline || DEFAULT_AI_MODEL);
           if (!resolvePlannedPayment(game, neuralPaymentOptions(paymentModel))?.ok) {
@@ -2296,7 +2383,7 @@ export async function collectParallelSelfPlay(options) {
           diagnosticWeight: options.diagnosticWeight ?? 0,
           gamma: options.gamma ?? 0.997,
           gaeLambda: options.gaeLambda ?? 0.95,
-          longHorizonLambda: options.longHorizonLambda ?? 0.985,
+          longHorizonLambda: options.longHorizonLambda ?? 1,
           longHorizonWeight: options.longHorizonWeight ?? 0.6,
           engineFingerprint: options.engineFingerprint || null,
           decks: options.decks,
@@ -2314,12 +2401,14 @@ export async function collectParallelSelfPlay(options) {
           teacherDepth: options.teacherDepth || 10,
           teacherCandidates: options.teacherCandidates || 6,
           teacherLeafAuditSimulations:
-            options.teacherLeafAuditSimulations ?? 8,
+            options.teacherLeafAuditSimulations ?? 128,
           teacherEvaluatorMode: options.teacherEvaluatorMode || "certified-neural-ensemble",
           captureProductionLeafAudit:
             options.captureProductionLeafAudit === true,
           captureIndependentLeafAudit:
             options.captureIndependentLeafAudit !== false,
+          detachedIndependentLeafAudit:
+            options.detachedIndependentLeafAudit === true,
           captureIndependentActionAudit:
             options.captureIndependentActionAudit === true,
           deferIndependentActionAudit:
@@ -2506,7 +2595,8 @@ export async function collectSequential(options) {
         captureReplay
       });
       result.summary.aiSeats = models.map((model, seat) => summarizeAiModel(model, trainedSeat == null || seat === trainedSeat ? "learner" : "league"));
-      result.summary.firstPlayerId = firstPlayerId;
+      result.summary.firstPlayerId = result.game?.firstPlayerId || firstPlayerId;
+      result.summary.firstPlayerChooserId = options.learnFirstPlayerChoice ? firstPlayerId : null;
       result.summary.gameSeed = gameSeed;
       result.summary.scores ||= result.game?.players?.map((player) => player.score) || null;
       result.summary.comparisonBlock = schedule.comparisonBlock;
@@ -2525,7 +2615,7 @@ export async function collectSequential(options) {
       };
       result.summary.learnerSeat = trainedSeat;
       result.summary.learnerPlayerId = trainedSeat == null ? null : `p${trainedSeat + 1}`;
-      result.summary.learnerWentFirst = trainedSeat == null ? null : firstPlayerId === `p${trainedSeat + 1}`;
+      result.summary.learnerWentFirst = trainedSeat == null ? null : result.summary.firstPlayerId === `p${trainedSeat + 1}`;
     } catch (error) {
       throw enrichSelfPlayError(error, {
         collection: {
@@ -2572,7 +2662,7 @@ export async function collectSequential(options) {
       trajectory.matchupType = decks[0]?.id === decks[1]?.id ? "mirror" : "cross-deck";
       trajectory.collectionMode = pairing.mode;
       trajectory.playerSeat = seat;
-      trajectory.wentFirst = firstPlayerId === `p${seat + 1}`;
+      trajectory.wentFirst = result.summary.firstPlayerId === `p${seat + 1}`;
       trajectory.condition = `seat-${seat}-${trajectory.wentFirst ? "first" : "second"}`;
       trajectory.opponentGeneration = models[1 - seat]?.generation ?? null;
       trajectory.won = winnerSeat >= 0 ? winnerSeat === seat : null;
@@ -2599,7 +2689,8 @@ export async function collectSequential(options) {
         summaries: [result.summary],
         deckLearning: gameLearning,
         spectatorReplays,
-        pendingActionAudit: result.pendingActionAudit || null
+        pendingActionAudit: result.pendingActionAudit || null,
+        pendingLeafAudit: result.pendingLeafAudit || null
       }
     });
   }
@@ -3016,7 +3107,7 @@ function sideboardStep(decision, game, playerId) {
   return {
     action: structuredClone(decision.action),
     state: decision.stateEncoding,
-    actions: decision.actionEncoding,
+    actions: decision.actionEncoding.slice(0, decision.legalCount * ACTION_DIM),
     selectedIndex: decision.selectedIndex,
     legalCount: decision.legalCount,
     oldLogProbability: decision.logProbability,
@@ -3032,7 +3123,8 @@ function sideboardStep(decision, game, playerId) {
     originalLegalCount: decision.legalActions.length,
     selectedActionValue: decision.selectedActionValue,
     stopActionValue: stopActionValue(decision),
-    decisionType: "sideboard"
+    decisionType: "sideboard",
+    shapingPotential: 0
   };
 }
 
@@ -3394,6 +3486,23 @@ export function criticalTacticalDecisionProfile(game, actorId, decision) {
     if (action) required.set(actionKey(action), action);
   };
   const selected = decision.action;
+  // Always keep an explicit resource-reserve alternative in tactical reviews.
+  // A lost response exchange is not itself a label that the initiating move
+  // was wrong; the existing paired, shared-world comparison tests the hold.
+  const reserve = relevant.find(action => action.kind === 'endTurn' || action.kind === 'passShowdown');
+  if (reserve && ['beginPlayCard','beginPlayChampion','activateCard','moveUnit','moveUnits'].includes(selected?.kind)) {
+    types.add('tactical-action-versus-reserve');
+    addRequired(reserve);
+  }
+  const combatSacrificePossible = ["moveUnit", "moveUnits", "passShowdown"].includes(selected?.kind)
+    && hasCombatSacrificePayoff(game, actorId, game.battlefields.flatMap(field => field.units));
+  const combatContinuationReview = selected?.kind === "passShowdown"
+    ? reviewCombatContinuations(game, actorId, relevant, { cloneGame, applyAiAction, planPaymentActions })
+    : null;
+  if (combatContinuationReview) {
+    types.add("combat-response-versus-reserve");
+    for (const action of combatContinuationReview.requiredActions) addRequired(action);
+  }
   if (["moveUnit", "moveUnits"].includes(selected?.kind)) {
     const selectedProfile = tacticalActionProfile(game, actorId, selected);
     const paired = movementEntries
@@ -3420,6 +3529,14 @@ export function criticalTacticalDecisionProfile(game, actorId, decision) {
       .map((action) => ({ action, profile: tacticalActionProfile(game, actorId, action) }));
     const alignments = choices.map(({ profile }) => profile.targetAlignment);
     const bestAligned = choices.sort((left, right) => effectChoiceScore(right.profile) - effectChoiceScore(left.profile))[0] || null;
+    const enemyTargets = choices.filter(({profile}) => profile.targetRelation === 'enemy' && profile.targetContext);
+    if (enemyTargets.length > 1) {
+      // Equally legal enemy targets can have very different combat, scoring,
+      // death-trigger and response outcomes. Send all of them to the existing
+      // paired shared-world teacher, including the policy's selected target.
+      types.add('enemy-target-opportunity-comparison');
+      for (const {action} of enemyTargets) addRequired(action);
+    }
     if (alignments.length > 1 && Math.max(...alignments) > Math.min(...alignments)) {
       types.add("effect-target-comparison");
       addRequired(bestAligned?.action);
@@ -3451,6 +3568,8 @@ export function criticalTacticalDecisionProfile(game, actorId, decision) {
     critical: types.size > 0,
     urgent,
     types: [...types],
+    combatContinuationReview,
+    combatSacrificePossible,
     requiredActions: [...required.values()]
   };
 }
@@ -3577,6 +3696,7 @@ function sampleLeagueOpponent(pool, fullLeague, configuredWeights, random) {
   if (!(total > 0)) return pool[Math.floor(random() * pool.length)];
   let roll = random() * total;
   for (let index = 0; index < pool.length; index += 1) {
+    if (!(weights[index] > 0)) continue;
     roll -= weights[index];
     if (roll <= 0) return pool[index];
   }
@@ -3584,6 +3704,8 @@ function sampleLeagueOpponent(pool, fullLeague, configuredWeights, random) {
 }
 
 function reusableEvaluationSummary(summary, expected) {
+  if(summary && (summary.decisionReviewHash||null)!==(expected.decisionReviewHash||null))
+    throw new Error('Saved evaluation decision review changed.');
   if (summary?.invalid) return null;
   if (!summary || summary.gameSeed !== expected.gameSeed || summary.candidateSeat !== expected.candidateSeat || summary.firstPlayerId !== expected.firstPlayerId) return null;
   if (summary.evaluationMode !== expected.evaluationMode) return null;
@@ -3736,6 +3858,12 @@ export function applyGeneralizedAdvantageEstimation(
   const longWeight = Math.max(0, Math.min(1, Number(horizon.longWeight) || 0));
   for (let index = steps.length - 1; index >= 0; index -= 1) {
     const terminal = index === steps.length - 1;
+    // A trajectory advances between decisions of the same player, including
+    // the opponent's intervening actions. Terminal potential is always zero.
+    if (Number.isFinite(steps[index].shapingPotential)) {
+      const nextPotential = terminal ? 0 : Number(steps[index + 1].shapingPotential) || 0;
+      steps[index].shapedReward = gamma * nextPotential - steps[index].shapingPotential;
+    }
     const diagnosticReward = (Number(steps[index].resourceReservationDiagnosticReward) || 0)
       + (Number(steps[index].handOpportunityDiagnosticReward) || 0);
     const reward = (terminal ? terminalReward : 0)
@@ -3760,10 +3888,10 @@ export function trainingShapingPotential(game, viewerId) {
   if (!self || !opponent) return 0;
   const boardMight = (playerId) => game.battlefields.flatMap((field) => field.units)
     .filter((unit) => unit.controllerId === playerId)
-    .reduce((sum, unit) => sum + Math.max(0, (unit.might || 0) - (unit.damage || 0)), 0);
+    .reduce((sum, unit) => sum + currentMight(game, unit), 0);
   const baseMight = (player) => (player.base || [])
     .filter((unit) => (unit.controllerId || player.id) === player.id && Number(unit.might) > 0)
-    .reduce((sum, unit) => sum + Math.max(0, (unit.might || 0) - (unit.damage || 0)), 0);
+    .reduce((sum, unit) => sum + currentMight(game, unit), 0);
   const controlledFields = (playerId) => game.battlefields.filter((field) => field.controlledBy === playerId).length;
   const curveReadiness = (player) => {
     const cards = [...(player.mainDeck || []), ...(player.hand || [])].filter((card) => Number(card.energy) > 0);
@@ -3780,9 +3908,9 @@ export function trainingShapingPotential(game, viewerId) {
   const demand = averageEnergy([...self.mainDeck, ...self.hand]) / 12;
   const battlefieldCommitment = game.battlefields.reduce((total, field) => {
     const friendly = field.units.filter((unit) => unit.controllerId === self.id)
-      .reduce((sum, unit) => sum + Math.max(0, (unit.might || 0) + (unit.mightModifier || 0) + (unit.buffs || 0) - (unit.damage || 0)), 0);
+      .reduce((sum, unit) => sum + currentMight(game, unit), 0);
     const enemy = field.units.filter((unit) => unit.controllerId === opponent.id)
-      .reduce((sum, unit) => sum + Math.max(0, (unit.might || 0) + (unit.mightModifier || 0) + (unit.buffs || 0) - (unit.damage || 0)), 0);
+      .reduce((sum, unit) => sum + currentMight(game, unit), 0);
     if (!friendly) return total;
     if (enemy >= friendly + 3 && friendly < enemy * 0.72) return total - Math.min(1, friendly / 12);
     if (friendly > enemy) return total + Math.min(0.5, (friendly - enemy) / 16);
@@ -3810,10 +3938,13 @@ function compactTacticalProfile(profile) {
     incomingDamage: profile.incomingDamage,
     savesFromLethal: profile.savesFromLethal,
     targetImpact: profile.targetImpact,
+    targetContext: profile.targetContext,
+    responseContext: profile.responseContext,
     destinationId: profile.destinationId,
     isMovement: profile.isMovement,
     movingUnitCount: profile.movingUnitCount,
     movingMight: profile.movingMight,
+    movementTriggersUnresolved: Boolean(profile.movementTriggersUnresolved),
     attackingMight: profile.attackingMight,
     defendingMight: profile.defendingMight,
     enemyLethalThreshold: profile.enemyLethalThreshold,

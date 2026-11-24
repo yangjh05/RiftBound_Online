@@ -1,0 +1,257 @@
+{
+  "date": "2026-09-05",
+  "backend": "tensorflow",
+  "checks": {
+    "scoringHistory": {
+      "stateDifferences": 0,
+      "actionDifferences": 0,
+      "withoutOtherFieldScored": {
+        "score": 7,
+        "winner": null
+      },
+      "withOtherFieldScored": {
+        "score": 8,
+        "winner": "p1"
+      }
+    },
+    "damageMight": {
+      "actualCombatMight": 6,
+      "encodedAggregateMight": 1.0000000149011612,
+      "individualObservedMight": 6
+    },
+    "fourUnitMove": {
+      "engineAllowsFourReadyUnits": true,
+      "readyUnits": 4,
+      "exhaustedUnits": 1,
+      "attackingMight": 8,
+      "defenderMight": 7,
+      "availablePolicyAttacks": 0
+    },
+    "actionIndexAfterCap": {
+      "original": 352,
+      "encoded": 192,
+      "mismatchedSlots": 159,
+      "firstMismatch": 33,
+      "recordedKey": "{\"destinationId\":\"audit-field-1\",\"kind\":\"moveUnits\",\"unitIds\":[\"wide-0\",\"wide-3\",\"wide-4\"]}",
+      "actualEncodedKey": "{\"destinationId\":\"audit-field-0\",\"kind\":\"moveUnits\",\"unitIds\":[\"wide-0\",\"wide-3\",\"wide-5\"]}"
+    },
+    "emptyHand": {
+      "handCount": 0,
+      "nonzeroCardProbabilities": 33,
+      "maximumCardProbability": 0.07499999999999996,
+      "response": {
+        "responseProbability": 0.18593450927734378,
+        "expectedSeverity": 0.10287500000000001,
+        "expectedThreat": 0.019128012641906743,
+        "affordableResponses": 5,
+        "candidateResponses": 5,
+        "confidence": "medium",
+        "observedPasses": 0,
+        "recentPasses": 0,
+        "passEvidenceStrength": 0,
+        "topResponses": [
+          {
+            "cardNumber": "OGN-058/298",
+            "probability": 0.0625,
+            "handProbability": 0.0625,
+            "payable": true,
+            "energyCost": 2,
+            "powerCost": 0,
+            "severity": 0.7,
+            "requiredPowerDomains": []
+          },
+          {
+            "cardNumber": "OGN-045/298",
+            "probability": 0.07499999999999996,
+            "handProbability": 0.07499999999999996,
+            "payable": true,
+            "energyCost": 1,
+            "powerCost": 1,
+            "severity": 0.43,
+            "requiredPowerDomains": [
+              "Any"
+            ]
+          },
+          {
+            "cardNumber": "OGN-046/298",
+            "probability": 0.025000000000000022,
+            "handProbability": 0.025000000000000022,
+            "payable": true,
+            "energyCost": 1,
+            "powerCost": 0,
+            "severity": 0.43,
+            "requiredPowerDomains": []
+          },
+          {
+            "cardNumber": "OGN-048/298",
+            "probability": 0.025000000000000022,
+            "handProbability": 0.025000000000000022,
+            "payable": true,
+            "energyCost": 2,
+            "powerCost": 0,
+            "severity": 0.43,
+            "requiredPowerDomains": []
+          },
+          {
+            "cardNumber": "OGN-064/298",
+            "probability": 0.012500000000000011,
+            "handProbability": 0.012500000000000011,
+            "payable": true,
+            "energyCost": 3,
+            "powerCost": 2,
+            "severity": 0.43,
+            "requiredPowerDomains": [
+              "Any"
+            ]
+          }
+        ]
+      }
+    },
+    "revealedHand": {
+      "observed": 4,
+      "hidden": {
+        "complete": true,
+        "reason": null,
+        "deckId": "proving-grounds-master-yi",
+        "requiredPrivateCards": 39,
+        "availablePrivateCards": 40
+      },
+      "revealed": {
+        "complete": false,
+        "reason": "insufficient-belief-cards",
+        "deckId": "proving-grounds-master-yi",
+        "requiredPrivateCards": 39,
+        "availablePrivateCards": 36
+      }
+    },
+    "deckTargetZones": {
+      "card": "OGN-043/298",
+      "before": 1,
+      "during": 0.6666666865348816,
+      "after": 1
+    },
+    "vocabulary": {
+      "registered": 989,
+      "vocabulary": 414,
+      "unknown": 576,
+      "unknownBySet": {
+        "OGN": 0,
+        "OGS": 0,
+        "SFD": 209,
+        "UNL": 201
+      },
+      "examples": [
+        "SFD-001/221",
+        "SFD-002/221",
+        "SFD-003/221",
+        "SFD-004/221",
+        "SFD-005/221",
+        "SFD-006/221",
+        "SFD-007/221",
+        "SFD-008/221"
+      ]
+    },
+    "zeroOptions": {
+      "teacherFraction": {
+        "requested": 0,
+        "actual": 0.12
+      },
+      "teacherBudget": {
+        "requested": 0,
+        "actual": 16
+      },
+      "teacherCriticalBudget": {
+        "requested": 0,
+        "actual": 8
+      },
+      "teacherActionAuditBudget": {
+        "requested": 0,
+        "actual": 4
+      },
+      "anchorCoefficient": {
+        "requested": 0,
+        "actual": 0.03
+      },
+      "turningPointReplayFraction": {
+        "requested": 0,
+        "actual": 0.3
+      },
+      "turningPointReplayLimit": {
+        "requested": 0,
+        "actual": 256
+      }
+    },
+    "gaeHorizon": {
+      "1": {
+        "initialReturn": 1,
+        "terminalDiscountOnly": 1
+      },
+      "10": {
+        "initialReturn": 0.7550966170426103,
+        "terminalDiscountOnly": 0.9733217421754431
+      },
+      "50": {
+        "initialReturn": 0.2749015017900806,
+        "terminalDiscountOnly": 0.863103260592444
+      },
+      "100": {
+        "initialReturn": 0.10165795466519603,
+        "terminalDiscountOnly": 0.7427123967299725
+      },
+      "200": {
+        "initialReturn": 0.01631224674228193,
+        "terminalDiscountOnly": 0.549966839143611
+      }
+    },
+    "duplicateEvaluator": {
+      "valueCalls": 2,
+      "distinctInputs": 1,
+      "validSimulations": null
+    },
+    "padding": {
+      "legalActions": 1,
+      "computedActions": 192,
+      "equivalentOutputs": true,
+      "medianOneMs": 3.5282000303268433,
+      "medianPaddedMs": 4.599300026893616,
+      "batch4Sequence128ActionsBytes": 182452224,
+      "actionDim": 464,
+      "stateDim": 3704
+    },
+    "actionValueSeparability": [
+      {
+        "state": -1,
+        "actionA": 0,
+        "actionB": -0.9640275835990906
+      },
+      {
+        "state": 1,
+        "actionA": 0.9640275835990906,
+        "actionB": 0
+      }
+    ]
+  },
+  "checkpoint": {
+    "version": 4,
+    "generation": 0,
+    "gamesTrained": 256,
+    "algorithm": "recurrent-ppo-belief",
+    "evaluatorArchitecture": null,
+    "cardPool": null
+  },
+  "controls": {
+    "privateHandReplacementStateDifferences": 0,
+    "gaeLambdaOneReturn": 0.9733217421754434,
+    "gaeLambdaOneExpected": 0.9733217421754431
+  },
+  "sourceSha256": {
+    "src/ai/actions.mjs": "e38f19efd33e7a599a53794378df95f0a6d8aa898100f018c499917e0d0a1d9f",
+    "src/ai/belief.mjs": "387a9e8173d0bbc1e6ef1e9cff5f515ac3d3eb3309ab5e8c164ca9df2d4d0a98",
+    "src/ai/rollout.mjs": "63a2161e001da8d20034639539959e1df1558032386c2aab60ae878c134dffda",
+    "src/ai/observation.mjs": "f6bf26c759a02a2ea83ea708f5601218bc84e093f7a5045596fb1ce103bfa381",
+    "src/ai/neural/encoding.mjs": "41c5a181b9b0703f1ae33a33b6278fa20ede05a365dd28407e23a23132601050",
+    "src/ai/neural/model.mjs": "cf16ea2110346a4cc84aca202837b163bb67eb0f58897f2a1650e77978a3fb16",
+    "src/ai/neural/selfplay.mjs": "45c68cdf099fbe9d8374500625f1310bcba2c3c01d2944365802c9464d829f33",
+    "src/ai/neural/trainer.mjs": "9708f1272854a98f624ad5d2a8cb753cfb2e254c096b67fc15206ae852cc6e54"
+  }
+}

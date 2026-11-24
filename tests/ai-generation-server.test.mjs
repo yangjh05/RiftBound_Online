@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { listAiGenerations, readAiGenerationCheckpoint } from "../server/ai-data.mjs";
@@ -50,9 +50,10 @@ test("an external AI data directory still discovers the bundled application chec
 
     const generations = await listAiGenerations({ root: dataRoot, engineFingerprint: "current" });
 
-    assert.deepEqual(generations.map((entry) => entry.generation), [0, 9]);
-    assert.equal(generations[0].kind, "bundled");
-    assert.equal(generations[1].kind, "candidate");
+    const bundled = JSON.parse(await readFile(new URL('../src/ai/checkpoints/neural-champion.json', import.meta.url), 'utf8'));
+    assert.deepEqual(generations.map((entry) => entry.generation), [...new Set([bundled.generation, 9])].sort((a,b)=>a-b));
+    assert.equal(generations.find(entry=>entry.generation===bundled.generation).kind, "bundled");
+    if (bundled.generation !== 9) assert.equal(generations.find(entry=>entry.generation===9).kind, "candidate");
   } finally {
     await rm(dataRoot, { recursive: true, force: true });
   }

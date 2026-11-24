@@ -1,6 +1,7 @@
 import { cards } from "../src/cards.mjs";
 import { translateCardText, translationMetadata } from "../src/i18n.mjs";
 import { CARD_KO_TRANSLATIONS } from "../src/cardKoTranslations.mjs";
+import { auditOfficialKoreanTranslations } from "./audit-official-korean-translations.mjs";
 
 const completeUnofficialSets = new Map([
   ["SFD", 221],
@@ -41,7 +42,7 @@ const requiredTerms = [
   { english: /\bexhaust(?:ed|s|ing)?\b/iu, korean: /탈진/u, name: "exhaust/탈진" }
 ];
 
-const errors = [];
+const errors = auditOfficialKoreanTranslations();
 const keywordTranslations = translationMetadata().keywords;
 const escapeRegExp = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 const resourceConfusion = /룬으로 반응|룬(?:\s*\d+장)?을?\s*지불|룬 대신|룬 힘|자원\s*\d+/u;
@@ -63,7 +64,7 @@ const styleViolations = [
   [/카드를\s*\d+장\s*(?:뽑|버)/u, "card count must use 카드 N장을"],
   [/\[(?:예측|통찰)(?:\s+\d+)?\](?:을|를)?\s*(?:합니다|한|하려면)/u, "standalone keyword action must not add 하다"],
   [/\[추가\](?:을|를)?\s*(?:합니다|한|하려면)/u, "Add keyword must not add 하다"],
-  [/(?:에너지|(?:신체|평정|혼돈|격노|정신|질서)?\s*힘)\s*\d+(?:을|를)\s*추가합니다/u, "resource Add must remain the [추가] keyword"]
+  [/(?:에너지|(?:신체|평정|혼돈|분노|정신|질서)?\s*힘)\s*\d+(?:을|를)\s*추가합니다/u, "resource Add must remain the [추가] keyword"]
 ];
 for (const [setId, expected] of completeUnofficialSets) {
   const setCards = Object.values(cards).filter((card) => String(card.cardNumber || "").startsWith(`${setId}-`));
@@ -87,6 +88,9 @@ for (const [setId, expected] of completeUnofficialSets) {
 for (const card of Object.values(cards)) {
   const translation = CARD_KO_TRANSLATIONS[card.cardNumber] || CARD_KO_TRANSLATIONS[card.collectorNumber];
   if (!translation || translation.printedTextEmpty) continue;
+  // Exact official prose (including reminders such as 얻습니다) is checked above
+  // against the source, not against the style rules for authored translations.
+  if (translation.translationStatus) continue;
   const korean = translateCardText(card, "ko");
   for (const term of forbiddenTerms) {
     if (korean.includes(term)) errors.push(`${card.collectorNumber} ${card.name}: forbidden term ${term}`);
@@ -122,9 +126,9 @@ for (const card of Object.values(cards)) {
     errors.push(`${card.collectorNumber} ${card.name}: missing Add/[추가] keyword`);
   }
   if (/\bMighty\b/iu.test(english)) {
-    if (!/\[강력\]/u.test(korean)) errors.push(`${card.collectorNumber} ${card.name}: missing Mighty/[강력] keyword`);
-    if (/(?<!\[)강력(?:한|합니다|\s*상태)|\[강력\]\s*상태/u.test(korean)) {
-      errors.push(`${card.collectorNumber} ${card.name}: Mighty must remain the [강력] keyword`);
+    if (!/\[위력적\]/u.test(korean)) errors.push(`${card.collectorNumber} ${card.name}: missing Mighty/[위력적] keyword`);
+    if (/(?<!\[)강력(?:한|합니다|\s*상태)|\[강력\]|\[위력적\]\s*상태/u.test(korean)) {
+      errors.push(`${card.collectorNumber} ${card.name}: Mighty must remain the [위력적] keyword`);
     }
   }
   if (/\bcounter\b/iu.test(english) && !/차단/u.test(korean)) {

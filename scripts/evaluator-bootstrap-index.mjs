@@ -410,6 +410,10 @@ export function createEvaluatorBootstrapResultIndex(result) {
     leafActionEffectAudit: finalizeLeafActionEffectAudit(
       leafActionEffectAudit
     ),
+    // Task assignment, including jobs with no usable comparison, is fixed
+    // before outcomes. It keeps natural validation splitting outcome-blind.
+    naturalLeafAuditCollection: (result?.trajectories || []).some((trajectory) =>
+      trajectory.leafAuditSamplingDistribution === "natural-distribution"),
     actionEvidenceComputeEfficiency: summarizeActionEvidenceEfficiency({
       validIndependentEvidence:
         (actionEvidenceGradeCounts[

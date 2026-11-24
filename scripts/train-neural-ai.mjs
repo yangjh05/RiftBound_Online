@@ -1,3 +1,5 @@
+import { numericArgument } from "./numeric-argument.mjs";
+import { startTrainingStorageMaintenance } from "./training-storage-maintenance.mjs";
 import { mkdir, open, readFile, readdir, unlink, writeFile } from "node:fs/promises";
 import {
   existsSync,
@@ -76,6 +78,7 @@ import { applyMetaSnapshot } from "../src/ai/meta.mjs";
 import { hydrateHumanReplayTrajectories } from "../src/ai/human-data.mjs";
 import { buildMetaPreset } from "../src/ai/meta-presets.mjs";
 import { readTrajectoryArchive, writeTrajectoryArchive } from "../src/ai/neural/archive.mjs";
+import { collectPolicyQEvidenceInventory, policyQShadowEvidencePreflight } from "./evaluator-policy-q-evidence.mjs";
 import { extractTurningPointReplays, sampleTurningPointReplays } from "../src/ai/neural/turning-point-replay.mjs";
 import {
   createCollectionDescriptor,
@@ -204,6 +207,7 @@ import {
   selectPolicyQShadowConfiguration
 } from "./evaluator-policy-q-readiness.mjs";
 import { TEACHER_LABEL_VERSION } from "../src/ai/neural/teacher-contract.mjs";
+import { POLICY_Q_PILOT, policyQPilotStatus, reusablePolicyQPilot } from "./evaluator-policy-q-pilot.mjs";
 import {
   ACTION_EVIDENCE_PROTOCOL_CONTRACT,
   assessActionEvidence,
@@ -289,73 +293,90 @@ if (compatibleEvaluatorBootstrapKey
     + "--compatible-runtime-fingerprint)."
   );
 }
-const checkpointPath = path.resolve(args.output || "src/ai/checkpoints/neural-champion.json");
 const dataRoot = path.resolve(args["data-dir"] || "data/ai");
+const policyQPilotOnly = args["policy-q-pilot-only"] === "true";
+const pilotSourceDirectory = args["pilot-bootstrap-directory"]
+  ? path.resolve(args["pilot-bootstrap-directory"]) : null;
+const pilotPathsOverlap = pilotSourceDirectory && (
+  pilotSourceDirectory.toLowerCase() === dataRoot.toLowerCase()
+  || pilotSourceDirectory.toLowerCase().startsWith(dataRoot.toLowerCase() + path.sep)
+  || dataRoot.toLowerCase().startsWith(pilotSourceDirectory.toLowerCase() + path.sep)
+);
+if (policyQPilotOnly && (!args["pilot-bootstrap-directory"] || !args["data-dir"]
+  || pilotPathsOverlap)) {
+  throw new Error("A standalone Policy-Q pilot requires a separate output data directory and an explicit source bootstrap directory.");
+}
+const checkpointPath = path.resolve(args.output || (policyQPilotOnly
+  ? path.join(dataRoot, "diagnostic-champion.json")
+  : "src/ai/checkpoints/neural-champion.json"));
 const stopRequestPath = path.resolve(
   args["stop-request-path"]
     || path.join(dataRoot, "stop-after-current-games.request.json")
 );
 const learnerCheckpointPath = path.resolve(args["learner-output"] || path.join(dataRoot, "learner", "neural-learner.json"));
+if (policyQPilotOnly && !learnerCheckpointPath.toLowerCase().startsWith(dataRoot.toLowerCase() + path.sep)) {
+  throw new Error("Standalone pilot learner output must stay inside its diagnostic data directory.");
+}
 const optimizerStatePath = path.join(dataRoot, "learner", "optimizer-state.json");
 const explicitWarmStartPath = args["warm-start-checkpoint"]
   ? path.resolve(args["warm-start-checkpoint"])
   : null;
 const writeAiStatus = (status) => writeAiStatusFile(status, dataRoot);
-const generations = args.continuous === "true" ? Infinity : Math.max(1, Number(args.generations) || 1);
+const generations = args.continuous === "true" ? Infinity : Math.max(1, numericArgument(args.generations, 1));
 if (!officialPromotionRun && generations !== 1) {
   throw new Error("Controlled Run A/B experiments must use exactly one generation.");
 }
-const requestedGames = Math.max(1, Number(args.games) || 32);
-const evaluationGames = Math.max(4, Math.ceil((Number(args["evaluation-games"]) || 40) / 4) * 4);
-const maxActions = Math.max(80, Number(args["max-actions"]) || 600);
-const evaluationMaxActions = Math.max(maxActions, Number(args["evaluation-max-actions"]) || 1200);
-const evaluationCompletionRate = Math.max(0.8, Math.min(1, Number(args["evaluation-completion-rate"]) || 0.9));
-const teacherFraction = Math.max(0, Math.min(1, Number(args["teacher-fraction"]) || 0.12));
-const teacherBudget = Math.max(0, Number(args["teacher-budget"]) || 16);
-const teacherCriticalBudget = Math.max(0, Number(args["teacher-critical-budget"]) || 8);
+const requestedGames = Math.max(1, numericArgument(args.games, 32));
+const evaluationGames = Math.max(4, Math.ceil((numericArgument(args["evaluation-games"], 40)) / 4) * 4);
+const maxActions = Math.max(80, numericArgument(args["max-actions"], 600));
+const evaluationMaxActions = Math.max(maxActions, numericArgument(args["evaluation-max-actions"], 1200));
+const evaluationCompletionRate = Math.max(0.8, Math.min(1, numericArgument(args["evaluation-completion-rate"], 0.9)));
+const teacherFraction = Math.max(0, Math.min(1, numericArgument(args["teacher-fraction"], 0.12)));
+const teacherBudget = Math.max(0, numericArgument(args["teacher-budget"], 16));
+const teacherCriticalBudget = Math.max(0, numericArgument(args["teacher-critical-budget"], 8));
 const teacherUrgentBudgetValue = Number(args["teacher-urgent-budget"]);
 const teacherUrgentBudget = Number.isFinite(teacherUrgentBudgetValue) ? Math.max(0, teacherUrgentBudgetValue) : 4;
 const teacherScreenSimulations = Math.max(2, Math.min(4,
-  Number(args["teacher-screen-simulations"] ?? args["teacher-simulations"]) || 4));
+  numericArgument(args["teacher-screen-simulations"] ?? args["teacher-simulations"], 4)));
 const teacherConfirmationSimulations = Math.max(8, Math.min(32,
-  Number(args["teacher-confirmation-simulations"]) || 16));
+  numericArgument(args["teacher-confirmation-simulations"], 16)));
 const teacherConfirmationMaxSimulations = Math.max(
   teacherConfirmationSimulations,
-  Math.min(32, Number(args["teacher-confirmation-max-simulations"]) || 32)
+  Math.min(32, numericArgument(args["teacher-confirmation-max-simulations"], 32))
 );
-const teacherDepth = Math.max(2, Number(args["teacher-depth"]) || 10);
-const teacherCandidates = Math.max(2, Number(args["teacher-candidates"]) || 6);
+const teacherDepth = Math.max(2, numericArgument(args["teacher-depth"], 10));
+const teacherCandidates = Math.max(2, numericArgument(args["teacher-candidates"], 6));
 const teacherLeafAuditSimulations = Math.max(
-  4,
-  Math.min(16, Number(args["teacher-leaf-audit-simulations"]) || 8)
+  0,
+  Math.min(1024, numericArgument(args["teacher-leaf-audit-simulations"], 128))
 );
-const teacherLeafAuditSchedule = [128];
+const teacherLeafAuditSchedule = [teacherLeafAuditSimulations];
 const teacherActionAuditBudget = Math.max(
   0,
-  Math.min(4, Number(args["teacher-action-audit-budget"]) || 4)
+  Math.min(4, numericArgument(args["teacher-action-audit-budget"], 4))
 );
 const teacherActionAuditMaximumSteps = Math.max(
-  192,
+  1,
   Math.min(
     1200,
-    Number(args["teacher-action-audit-maximum-steps"]) || 1200
+    numericArgument(args["teacher-action-audit-maximum-steps"], 1200)
   )
 );
 const configuredPostmortemReviews = Number(args["postmortem-reviews"]);
 const postmortemReviews = Math.max(0, Math.min(4,
   Number.isFinite(configuredPostmortemReviews) ? configuredPostmortemReviews : 2));
-const postmortemCaptureLimit = Math.max(2, Math.min(12, Number(args["postmortem-capture-limit"]) || 8));
+const postmortemCaptureLimit = Math.max(2, Math.min(12, numericArgument(args["postmortem-capture-limit"], 8)));
 const postmortemAuditInterval = Math.max(6, Math.min(32,
-  Number(args["postmortem-audit-interval"]) || 12));
+  numericArgument(args["postmortem-audit-interval"], 12)));
 const configuredPostmortemWinnerReviewFraction = Number(args["postmortem-winner-review-fraction"]);
 const postmortemWinnerReviewFraction = Math.max(0, Math.min(1,
   Number.isFinite(configuredPostmortemWinnerReviewFraction)
     ? configuredPostmortemWinnerReviewFraction
     : 0.15));
-const postmortemSimulations = Math.max(8, Math.min(32, Number(args["postmortem-simulations"]) || 16));
-const postmortemDepth = Math.max(10, Math.min(96, Number(args["postmortem-depth"]) || Math.max(16, teacherDepth)));
-const postmortemCandidates = Math.max(2, Math.min(12, Number(args["postmortem-candidates"]) || teacherCandidates));
-const replayEvery = Math.max(1, Number(args["replay-every"]) || 8);
+const postmortemSimulations = Math.max(8, Math.min(32, numericArgument(args["postmortem-simulations"], 16)));
+const postmortemDepth = Math.max(10, Math.min(96, numericArgument(args["postmortem-depth"], Math.max(16, teacherDepth))));
+const postmortemCandidates = Math.max(2, Math.min(12, numericArgument(args["postmortem-candidates"], teacherCandidates)));
+const replayEvery = Math.max(1, numericArgument(args["replay-every"], 8));
 const teacherCoefficientValue = Number(args["teacher-coefficient"]);
 const teacherCoefficient = Number.isFinite(teacherCoefficientValue) ? Math.max(0, teacherCoefficientValue) : 0.2;
 const teacherPolicyPreferenceCoefficientValue = Number(args["teacher-policy-preference-coefficient"]);
@@ -376,32 +397,32 @@ const policyConditionedActorCorrectionEnabled = runContract === "C"
   && args["policy-conditioned-actor-correction"] !== "false";
 const policyConditionedActorCorrectionMaximum = Math.max(
   0,
-  Math.floor(Number(args["policy-conditioned-actor-correction-maximum"]) || 256)
+  Math.floor(numericArgument(args["policy-conditioned-actor-correction-maximum"], 256))
 );
 const policyConditionedActorCorrectionFraction = Math.max(
   0,
   Math.min(
     0.2,
-    Number(args["policy-conditioned-actor-correction-fraction"]) || 0.15
+    numericArgument(args["policy-conditioned-actor-correction-fraction"], 0.15)
   )
 );
 const diagnosticWeightValue = Number(args["diagnostic-weight"]);
 const diagnosticWeight = Number.isFinite(diagnosticWeightValue) ? Math.max(0, diagnosticWeightValue) : 0;
-const gamma = Math.max(0.9, Math.min(1, Number(args.gamma) || 0.997));
-const gaeLambda = Math.max(0.8, Math.min(1, Number(args["gae-lambda"]) || 0.95));
-const longHorizonLambda = Math.max(gaeLambda, Math.min(1, Number(args["long-horizon-lambda"]) || 0.985));
+const gamma = Math.max(0.9, Math.min(1, numericArgument(args.gamma, 0.997)));
+const gaeLambda = Math.max(0.8, Math.min(1, numericArgument(args["gae-lambda"], 0.95)));
+const longHorizonLambda = Math.max(gaeLambda, Math.min(1, numericArgument(args["long-horizon-lambda"], 1)));
 const longHorizonWeightValue = Number(args["long-horizon-weight"]);
 const longHorizonWeight = Number.isFinite(longHorizonWeightValue)
   ? Math.max(0, Math.min(1, longHorizonWeightValue))
   : 0.6;
 const retentionFraction = Math.max(0, Math.min(0.25,
-  Number(args["retention-fraction"] ?? args["calibration-fraction"]) || 0.1));
+  numericArgument(args["retention-fraction"] ?? args["calibration-fraction"], 0.1)));
 const calibrationFitFraction = Math.max(0, Math.min(0.25,
-  Number(args["calibration-fit-fraction"]) || 0.05));
+  numericArgument(args["calibration-fit-fraction"], 0.05)));
 const calibrationTestFraction = Math.max(0, Math.min(0.25,
-  Number(args["calibration-test-fraction"]) || 0.05));
+  numericArgument(args["calibration-test-fraction"], 0.05)));
 const evaluatorAuditFraction = Math.max(0, Math.min(0.25,
-  Number(args["evaluator-audit-fraction"]) || 0.05));
+  numericArgument(args["evaluator-audit-fraction"], 0.05)));
 const configuredMinimumRetentionTrajectories = Number(args["retention-trajectories-per-deck"]);
 const minimumRetentionTrajectoriesPerDeck = Math.max(
   1,
@@ -416,13 +437,13 @@ const minimumTrainingTrajectoriesPerDeck = Math.max(
     ? Math.floor(configuredMinimumTrainingTrajectories)
     : 6
 );
-const turningPointReplayFraction = Math.max(0, Math.min(0.35, Number(args["turning-point-replay-fraction"]) || 0.3));
-const turningPointReplayLimit = Math.max(0, Number(args["turning-point-replay-limit"]) || 256);
+const turningPointReplayFraction = Math.max(0, Math.min(0.35, numericArgument(args["turning-point-replay-fraction"], 0.3)));
+const turningPointReplayLimit = Math.max(0, numericArgument(args["turning-point-replay-limit"], 256));
 const evaluationMode = args["evaluation-mode"] || "cross-deck-matrix-v1";
 const leagueSamplingMode = args["league-sampling"] || "pfsp";
 const evaluationGreedy = args["evaluation-greedy"] !== "false";
-const evaluationTemperature = Math.max(0.05, Number(args["evaluation-temperature"]) || 0.05);
-const anchorCoefficient = Math.max(0, Number(args["anchor-coefficient"]) || 0.03);
+const evaluationTemperature = Math.max(0.05, numericArgument(args["evaluation-temperature"], 0.05));
+const anchorCoefficient = Math.max(0, numericArgument(args["anchor-coefficient"], 0.03));
 const warmStartAnchorCoefficient = Math.max(
   0,
   Number.isFinite(Number(args["warm-start-anchor-coefficient"]))
@@ -434,13 +455,13 @@ const warmStartAnchorEpochs = Math.max(0, Math.floor(
     ? Number(args["warm-start-anchor-epochs"])
     : 2
 ));
-const learnerAnchorWeight = Math.max(0, Number(args["learner-anchor-weight"]) || 0.75);
-const championAnchorWeight = Math.max(0, Number(args["champion-anchor-weight"]) || 0.25);
-const configuredLearningRate = Math.max(0.000001, Number(args["learning-rate"]) || 0.00015);
+const learnerAnchorWeight = Math.max(0, numericArgument(args["learner-anchor-weight"], 0.75));
+const championAnchorWeight = Math.max(0, numericArgument(args["champion-anchor-weight"], 0.25));
+const configuredLearningRate = Math.max(0.000001, numericArgument(args["learning-rate"], 0.00015));
 const runStatePath = path.join(dataRoot, "resume", "run.json");
 const persistedRunState = await readCheckpoint(runStatePath);
 const savedRunState = args.fresh === "true" ? null : persistedRunState;
-const seed = (Number(args.seed) || savedRunState?.seed || Date.now()) >>> 0;
+const seed = (numericArgument(args.seed, savedRunState?.seed || Date.now())) >>> 0;
 const retryIteration = args["retry-iteration"] == null ? null : Number(args["retry-iteration"]);
 const latestRetryableIteration = (Number(persistedRunState?.trainingIteration) || 0) + 1;
 if (retryIteration != null && (!Number.isInteger(retryIteration) || retryIteration < 1 || retryIteration > latestRetryableIteration)) {
@@ -466,8 +487,15 @@ const trainingDeckIds = trainingDecks.map((deck) => deck.id);
 // differ only in whether recorded teacher signals are consumed by training.
 const minimumBalancedGames = trainingDeckIds.length > 1 ? TRAINING_SCHEDULE_CYCLE_BLOCKS * 4 : 4;
 const games = Math.max(requestedGames, minimumBalancedGames);
-const workers = Math.max(1, Number(args.workers) || Math.min(4, games));
-const collectionProcesses = Math.max(1, Math.min(games, Number(args.processes) || workers));
+const workers = Math.max(1, numericArgument(args.workers, Math.min(4, games)));
+const collectionProcesses = Math.max(1, Math.min(games, numericArgument(args.processes, workers)));
+const collectionMaximumProcesses = Math.max(collectionProcesses, Math.min(games,
+  Math.floor(numericArgument(args["maximum-processes"], collectionProcesses))));
+const collectionDynamicScaling = args["dynamic-scaling"] !== "false"
+  && collectionMaximumProcesses > collectionProcesses;
+const collectionMinimumFreeMemoryBytes = Math.round(Math.max(0,
+  numericArgument(args["selfplay-memory-reserve-gb"], collectionDynamicScaling ? 4 : 0)
+) * 1024 ** 3);
 const perfProfile = args["perf-profile"] === "true";
 const evaluationScheduleAudit = auditEvaluationScheduleSymmetry(evaluationGames, {
   evaluationMode
@@ -502,7 +530,7 @@ if (storedChampionCheckpoint && !championCheckpoint) {
 }
 let population = trainingDecks.map((deck) => structuredClone(deck));
 const leagueRoot = path.join(dataRoot, "league");
-let league = (await loadLeague(leagueRoot, Math.max(1, Number(args["league-size"]) || 8)))
+let league = (await loadLeague(leagueRoot, Math.max(1, numericArgument(args["league-size"], 8))))
   .map((model) => migrateVerifiedCompatibleModel(
     model,
     compatibleRuntimeFingerprint,
@@ -592,7 +620,7 @@ champion.knowledge.cardPoolId = cardPoolId;
 champion.knowledge.trainingDeckIds = trainingDeckIds;
 trainingIteration = Math.max(trainingIteration, Number(learner.metadata?.trainingIteration) || learner.generation || 0);
 await writeCheckpoint(learnerCheckpointPath, serializeNeuralModel(learner));
-const challengerLeagueSize = Math.max(0, Number(args["challenger-league-size"]) || 3);
+const challengerLeagueSize = Math.max(0, numericArgument(args["challenger-league-size"], 3));
 let challengers = (await loadRecentCandidateModels(dataRoot, trainingDeckIds, challengerLeagueSize, learner))
   .map((model) => migrateVerifiedCompatibleModel(
     model,
@@ -613,7 +641,8 @@ await writeCheckpoint(runStatePath, {
   updatedAt: new Date().toISOString()
 });
 const savedOptimizerState = await readCheckpoint(optimizerStatePath);
-const optimizerIsCompatible = !crossEngineWarmStart;
+const optimizerIsCompatible = !crossEngineWarmStart
+  && learner.checkpointInputMigrated !== true;
 let optimizer = await restoreAdamOptimizer(optimizerIsCompatible && savedOptimizerState?.modelGeneration === learner.generation ? savedOptimizerState : null, configuredLearningRate);
 const sourceOptimizerState = await serializeOptimizer(optimizer, learner.generation);
 const experimentManifestPath = experimentId
@@ -686,7 +715,47 @@ const experimentManifest = experimentManifestPath
   )
   : null;
 
-for (let generationIndex = 0; generationIndex < generations; generationIndex += 1) {
+const stopStorageMaintenance = startTrainingStorageMaintenance({ trainingRoots: [dataRoot] });
+try {
+if (policyQPilotOnly) {
+  const directory = path.resolve(args["pilot-bootstrap-directory"]);
+  const datasetKey = path.basename(directory);
+  const bootstrap = await loadEvaluatorBootstrap(directory, datasetKey, { readOnly: true });
+  const pilotFingerprint = args["pilot-source-fingerprint"];
+  if (!pilotFingerprint) throw new Error("Standalone pilot requires --pilot-source-fingerprint.");
+  const snapshotPath = path.join(dataRoot, "resume", "policy-q-pilot-source.json");
+  const snapshot = await readCheckpoint(snapshotPath);
+  if (snapshot) {
+    if (snapshot.datasetKey !== datasetKey || snapshot.engineFingerprint !== pilotFingerprint) {
+      throw new Error("Standalone pilot source differs from its saved snapshot.");
+    }
+    const keys = new Set(snapshot.recordKeys);
+    bootstrap.records = bootstrap.records.filter((record) => keys.has(`${record.workerIndex}:${record.gameIndex}`));
+    if (bootstrap.records.length !== keys.size) throw new Error("Standalone pilot snapshot lost a committed record.");
+  } else {
+    await writeCheckpoint(snapshotPath, { datasetKey, engineFingerprint: pilotFingerprint,
+      recordKeys: bootstrap.records.map((record) => `${record.workerIndex}:${record.gameIndex}`) });
+  }
+  const pilotProgress = createTrainingProgressReporter(dataRoot, learner.generation, trainingIteration);
+  const report = await runPolicyQPipelinePilot({
+    sourceModel: learner,
+    bootstrap: { ...bootstrap, datasetKey },
+    dataRoot,
+    heldoutNamespace: "diagnostic",
+    engineFingerprint: pilotFingerprint,
+    learningTargetVersion: NEURAL_LEARNING_TARGET_VERSION,
+    trainingDeckIds,
+    runContract,
+    progress: pilotProgress,
+    maximumGames: 4096,
+    calibrationBatchSize: 8,
+    trainingBatchSize: 32
+  });
+  await writeAiStatus({ state: "complete", stage: "policy-q-pilot-only", diagnosticOnly: true, status: report.status });
+  console.log(JSON.stringify({ diagnosticOnly: true, status: report.status, split: report.split }));
+}
+
+for (let generationIndex = 0; !policyQPilotOnly && generationIndex < generations; generationIndex += 1) {
   trainingIteration += 1;
   const generation = learner.generation + 1;
   const learnerAtGenerationStart = deserializeNeuralModel(serializeNeuralModel(learner));
@@ -706,7 +775,7 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
   const trainingRandom = seededRandom(generationSeed ^ 0x85ebca6b);
   const trainingRandomInitialState = trainingRandom.getState?.() ?? null;
   const collectionWorkers = Math.max(1, Math.min(workers, games));
-  const temperature = Number(args.temperature) || curriculum.temperature;
+  const temperature = numericArgument(args.temperature, curriculum.temperature);
   const bestOfThreeFraction = Math.max(0, Math.min(1, Number(args["best-of-three-fraction"] ?? args["match-fraction"] ?? 0.25)));
   const mirrorFraction = Math.max(0, Math.min(0.75, Number(args["mirror-fraction"] ?? 0.25)));
   const focusWinRate = Number(args["focus-win-rate"]);
@@ -822,12 +891,22 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
   try {
   progress.write({ state: "preparing", stage: "generation", trainingIteration, championGeneration: champion.generation, learnerGeneration: learner.generation, games, workers: collectionWorkers, seed: generationSeed, curriculum, deckCurriculum });
   let resume = await loadGenerationResume(dataRoot, descriptor);
-  if (!resume && compatibleCollectionFingerprint) {
+  // Compatibility arguments belong only to the generation being resumed.
+  // A continuous run must collect fresh data after its policy changes.
+  if (!resume && compatibleCollectionFingerprint && generationIndex === 0) {
+    if (args["expected-compatible-collection-key"]
+      && descriptor.collectionKey !== args["expected-compatible-collection-key"]) {
+      throw new Error("The resumed PPO collection differs from the verified descriptor.");
+    }
     const migration = await migrateCompatibleCollection(
       dataRoot,
       descriptor,
       compatibleCollectionFingerprint,
-      { sourceCollectionKey: compatibleCollectionKey }
+      {
+        sourceCollectionKey: compatibleCollectionKey,
+        preserveEquivalentTargets: args["preserve-equivalent-targets"] === "true",
+        verifiedEquivalentSemantics: verifiedCompatibleCollectionMigration
+      }
     );
     console.warn(
       `Compatible collection resume: migrated ${migration.migratedGames} game(s), `
@@ -841,7 +920,7 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
   if (resume) {
     population = resume.population;
   } else {
-    if (evolveDecks) population = evolvePopulation(population, learner.knowledge, evolutionRandom, Math.max(population.length * 2, Number(args.population) || 32), trainingDecks);
+    if (evolveDecks) population = evolvePopulation(population, learner.knowledge, evolutionRandom, Math.max(population.length * 2, numericArgument(args.population, 32)), trainingDecks);
     resume = await saveGenerationResume(dataRoot, descriptor, population);
   }
   let collected = await loadCompletedCollection(dataRoot, descriptor);
@@ -861,6 +940,9 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
       games,
       workers: collectionWorkers,
       processes: collectionProcesses,
+      maximumProcesses: collectionMaximumProcesses,
+      dynamicScaling: collectionDynamicScaling,
+      minimumFreeMemoryBytes: collectionMinimumFreeMemoryBytes,
       decks: population,
       model: learner,
       league: collectionLeague,
@@ -916,6 +998,28 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
         stop
       }),
       completedGameIndexes,
+      onTaskProgressWarning: (warning) => {
+        console.warn(`Self-play progress warning (continuing task): ${JSON.stringify(warning)}`);
+        progress.write({
+          state: "collecting",
+          stage: "selfplay-progress-warning",
+          completedGames: persistedGames,
+          targetGames: games,
+          resumedGames,
+          taskProgressWarning: warning
+        });
+      },
+      onTaskRetry: (retry) => {
+        console.warn(`Self-play task retry: ${JSON.stringify(retry)}`);
+        progress.write({
+          state: "collecting",
+          stage: "selfplay-task-retry",
+          completedGames: persistedGames,
+          targetGames: games,
+          resumedGames,
+          taskRetry: retry
+        });
+      },
       onWorkerHeartbeat: (workerPool) => progress.write({
         state: "collecting",
         stage: "selfplay",
@@ -1030,9 +1134,9 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
   const turningPointReplayPath = path.join(dataRoot, "replay", "turning-points");
   if (shouldArchiveCollection) await saveCompletedCollection(dataRoot, descriptor);
   phase = "training";
-  const ppoEpochs = Math.max(1, Number(args.epochs) || 8);
-  const ppoBatchSize = Math.max(1, Number(args["batch-size"]) || 4);
-  const earlyStoppingPatience = Math.max(0, Number(args["early-stopping-patience"]) || 2);
+  const ppoEpochs = Math.max(1, numericArgument(args.epochs, 8));
+  const ppoBatchSize = Math.max(1, numericArgument(args["batch-size"], 4));
+  const earlyStoppingPatience = Math.max(0, numericArgument(args["early-stopping-patience"], 2));
   const configuredMinimumEpochsBeforeEarlyStopping = Number(args["minimum-epochs-before-early-stopping"]);
   const minimumEpochsBeforeEarlyStopping = Math.max(0, Math.min(
     ppoEpochs,
@@ -1040,21 +1144,21 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
       ? Math.floor(configuredMinimumEpochsBeforeEarlyStopping)
       : Math.min(6, ppoEpochs)
   ));
-  const minimumScoreImprovement = Math.max(0, Number(args["minimum-score-improvement"]) || 0.001);
+  const minimumScoreImprovement = Math.max(0, numericArgument(args["minimum-score-improvement"], 0.001));
   const defaultEpochEvaluationGames = trainingDeckIds.length * 16;
   const epochEvaluationGames = args["epoch-evaluation-games"] === "0"
     ? 0
     : Math.max(
       trainingDeckIds.length * 8,
-      Math.ceil((Number(args["epoch-evaluation-games"]) || defaultEpochEvaluationGames) / 8) * 8
+      Math.ceil((numericArgument(args["epoch-evaluation-games"], defaultEpochEvaluationGames)) / 8) * 8
     );
   const epochEvaluationMode = args["epoch-evaluation-mode"] || "same-deck-mirror-v3";
-  const epochEvaluationMaxActions = Math.max(400, Number(args["epoch-evaluation-max-actions"]) || Math.min(evaluationMaxActions, 800));
-  const epochPracticalWeight = Math.max(0, Number(args["epoch-practical-weight"]) || 0.35);
-  const epochMaximumRetentionDrop = Math.max(0, Number(args["epoch-maximum-retention-drop"]) || 0.005);
-  const epochMinimumPracticalScore = Math.max(0, Math.min(1, Number(args["epoch-minimum-practical-score"]) || 0.47));
-  const epochMinimumPracticalWinRate = Math.max(0, Math.min(1, Number(args["epoch-minimum-practical-win-rate"]) || 0.5));
-  let humanTrajectories = await loadHumanReplayData(path.join(dataRoot, "replays"), Math.max(0, Number(args["human-replays"]) || 32), engineFingerprint);
+  const epochEvaluationMaxActions = Math.max(400, numericArgument(args["epoch-evaluation-max-actions"], Math.min(evaluationMaxActions, 800)));
+  const epochPracticalWeight = Math.max(0, numericArgument(args["epoch-practical-weight"], 0.35));
+  const epochMaximumRetentionDrop = Math.max(0, numericArgument(args["epoch-maximum-retention-drop"], 0.005));
+  const epochMinimumPracticalScore = Math.max(0, Math.min(1, numericArgument(args["epoch-minimum-practical-score"], 0.47)));
+  const epochMinimumPracticalWinRate = Math.max(0, Math.min(1, numericArgument(args["epoch-minimum-practical-win-rate"], 0.5)));
+  let humanTrajectories = await loadHumanReplayData(path.join(dataRoot, "replays"), Math.max(0, numericArgument(args["human-replays"], 32)), engineFingerprint);
   let safeHumanTrajectories = humanTrajectories.slice(0, Math.max(1, Math.ceil(collected.trajectories.length * 0.25)));
   assertTrainingTrajectories(safeHumanTrajectories, engineFingerprint);
   const coverageDeckIds = trainingDeckIds;
@@ -1169,19 +1273,19 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
   const heldoutNamespace = officialPromotionRun ? "official" : `diagnostic-${experimentId}`;
   const calibrationFitMaximumGames = Math.max(
     100,
-    Number(args["calibration-fit-max-games"]) || 1000
+    numericArgument(args["calibration-fit-max-games"], 1000)
   );
   const calibrationTestMaximumGames = Math.max(
     100,
-    Number(args["calibration-test-max-games"]) || 1000
+    numericArgument(args["calibration-test-max-games"], 1000)
   );
   const evaluatorAuditMaximumGames = Math.max(
     100,
-    Number(args["evaluator-audit-max-games"]) || 1000
+    numericArgument(args["evaluator-audit-max-games"], 1000)
   );
   const calibrationBatchSize = Math.max(
     1,
-    Number(args["calibration-batch-size"]) || 8
+    numericArgument(args["calibration-batch-size"], 8)
   );
   const calibrationFitDatasetDescriptor = {
     namespace: heldoutNamespace,
@@ -1274,7 +1378,7 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
   let trainingWorkingSetSuspended = false;
   const requestedEvaluatorBootstrapProcesses =
     evaluatorBootstrapMaximumActionAuditProcesses(
-      collectionProcesses,
+      collectionMaximumProcesses,
       args["evaluator-action-audit-processes"]
     );
   let evaluatorBootstrapProcessBudget = requestedEvaluatorBootstrapProcesses;
@@ -1343,6 +1447,7 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
       1,
       Math.min(
         requestedEvaluatorBootstrapProcesses,
+        collectionDynamicScaling ? collectionProcesses : requestedEvaluatorBootstrapProcesses,
         Math.floor(workerMemoryBudget / estimatedWorkerBytes)
       )
     );
@@ -1390,7 +1495,7 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
     assertTrainingTrajectories(collected.trajectories, engineFingerprint);
     humanTrajectories = await loadHumanReplayData(
       path.join(dataRoot, "replays"),
-      Math.max(0, Number(args["human-replays"]) || 32),
+      Math.max(0, numericArgument(args["human-replays"], 32)),
       engineFingerprint
     );
     safeHumanTrajectories = humanTrajectories.slice(
@@ -1494,7 +1599,7 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
     : EVALUATOR_BOOTSTRAP_EVIDENCE_REQUIREMENTS;
   const evaluatorBootstrapRefreshInterval = Math.max(
     1,
-    Number(args["evaluator-bootstrap-refresh-generations"]) || 4
+    numericArgument(args["evaluator-bootstrap-refresh-generations"], 4)
   );
   const frozenEvaluatorsForRequestedCertificate = frozenEvaluatorRegistry.accepted
     .filter((model) => model?.metadata?.evaluatorCertificate?.certificateKind
@@ -1563,7 +1668,7 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
       Number(args["evaluator-bootstrap-min-leaf-value-pairs-per-deck-seat"]
         ?? args["evaluator-bootstrap-min-references-per-deck-seat"]) || 1);
     const evaluatorBootstrapMaximumTotalGames = Math.max(320,
-      Number(args["evaluator-bootstrap-maximum-total-games"]) || 4096);
+      numericArgument(args["evaluator-bootstrap-maximum-total-games"], 4096));
     // A training evidence partition is now a hard part of the evaluator
     // contract. Keep extending in fixed deterministic windows unless an
     // operator explicitly opts out; never silently run a zero-dose evaluator
@@ -1651,7 +1756,7 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
         opponentPool: opponentModels.map((model) =>
           actionEvidencePoolMember(model, "opponent")),
         searchContractHash: deterministicValueDigest({
-          depth: Number(args["teacher-depth"]) || 10,
+          depth: numericArgument(args["teacher-depth"], 10),
           maximumSteps: Number(
             args["evaluator-action-audit-maximum-steps"]
           ) || 1200,
@@ -1709,14 +1814,14 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
         requestedEvaluatorBootstrapProcesses,
       minimumFreeMemoryBytes: evaluatorBootstrapMemoryReserveBytes,
       minimumGames: Math.max(100,
-        Number(args["evaluator-bootstrap-min-games"]) || 100),
+        numericArgument(args["evaluator-bootstrap-min-games"], 100)),
       minimumActionReferences: evaluatorBootstrapMinimumActionReferences,
       minimumLeafValuePairs: evaluatorBootstrapMinimumLeafValuePairs,
       minimumActionReferenceGames: evaluatorBootstrapMinimumActionReferenceGames,
       minimumLeafValueReferenceGames: evaluatorBootstrapMinimumLeafValueReferenceGames,
       minimumRepresentativeCalibrationGames: Math.max(
         100,
-        Number(args["evaluator-bootstrap-min-calibration-games"]) || 200
+        numericArgument(args["evaluator-bootstrap-min-calibration-games"], 200)
       ),
       minimumActionReferencesPerDeckSeat:
         evaluatorBootstrapMinimumActionReferencesPerDeckSeat,
@@ -1730,18 +1835,18 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
       ignoreActionEvidenceProtocolRequirements: policyQBootstrap,
       collectionScope: policyQBootstrap ? "policy-q" : "robust-action",
       invalidRetryLimit: Math.max(1,
-        Number(args["evaluator-bootstrap-invalid-retry-limit"]) || 3),
+        numericArgument(args["evaluator-bootstrap-invalid-retry-limit"], 3)),
       maximumGames: Math.max(100,
-        Number(args["evaluator-bootstrap-max-games"]) || 320),
+        numericArgument(args["evaluator-bootstrap-max-games"], 320)),
       extensionGames: Math.max(40,
-        Number(args["evaluator-bootstrap-extension-games"]) || 160),
+        numericArgument(args["evaluator-bootstrap-extension-games"], 160)),
       maximumTotalGames: evaluatorBootstrapMaximumTotalGames,
       continueUntilComplete: evaluatorBootstrapContinueUntilComplete,
       batchGames: Math.max(4,
-        Number(args["evaluator-bootstrap-batch-games"]) || 8),
+        numericArgument(args["evaluator-bootstrap-batch-games"], 8)),
       detachedActionAuditBoundaryGames: Math.max(
         320,
-        Number(args["evaluator-action-audit-detach-after-games"]) || 320
+        numericArgument(args["evaluator-action-audit-detach-after-games"], 320)
       ),
       detachedActionAuditProcesses: requestedEvaluatorBootstrapProcesses,
       detachedActionAuditInitialProcesses: evaluatorBootstrapProcessBudget,
@@ -1822,8 +1927,7 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
           audit.representativeCalibrationGames,
         representativeCalibrationRequirement: Math.max(
           100,
-          Number(args["evaluator-bootstrap-min-calibration-games"])
-            || 200
+          numericArgument(args["evaluator-bootstrap-min-calibration-games"], 200)
         ),
         missingActionReferenceCoverage:
           audit.missingActionReferenceCoverage,
@@ -1905,7 +2009,11 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
     };
     const targetEvaluatorBootstrapKey =
       evaluatorBootstrapDatasetKey(evaluatorBootstrapOptions);
-    if (compatibleEvaluatorBootstrapKey
+    if (generationIndex === 0 && args["expected-evaluator-bootstrap-key"]
+      && targetEvaluatorBootstrapKey !== args["expected-evaluator-bootstrap-key"]) {
+      throw new Error("The resumed evaluator lineage differs from the verified descriptor.");
+    }
+    if (generationIndex === 0 && compatibleEvaluatorBootstrapKey
       && compatibleEvaluatorBootstrapKey !== targetEvaluatorBootstrapKey) {
       const targetBootstrapState = await readCheckpoint(path.join(
         dataRoot,
@@ -1928,6 +2036,8 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
           sourceEngineFingerprint:
             compatibleEvaluatorRuntimeFingerprint,
           targetEngineFingerprint: engineFingerprint,
+          preserveEquivalentTargets: args["preserve-equivalent-targets"] === "true",
+          verifiedEquivalentSemantics: verifiedCompatibleRuntimeMigration,
           concurrency: 8,
           holdoutRolePolicy:
             args["evaluator-bootstrap-migration-role-policy"]
@@ -1978,8 +2088,7 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
           seed: `bootstrap-${bootstrap.datasetKey}`,
           minimumRepresentativeCalibrationGames: Math.max(
             100,
-            Number(args["evaluator-bootstrap-min-calibration-games"])
-              || 200
+            numericArgument(args["evaluator-bootstrap-min-calibration-games"], 200)
           )
         }
       );
@@ -2075,9 +2184,9 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
         replicas: 1,
         epochs: 3,
         trainingBatchSize: Math.max(4,
-          Math.floor(Number(args["evaluator-training-batch-size"]) || 32)),
+          Math.floor(numericArgument(args["evaluator-training-batch-size"], 32))),
         learningRate: Math.max(1e-6,
-          Number(args["evaluator-training-learning-rate"]) || 0.0001),
+          numericArgument(args["evaluator-training-learning-rate"], 0.0001)),
         calibrationBatchSize,
         maximumGames: evaluatorBootstrapMaximumTotalGames,
         dataRoot,
@@ -2104,20 +2213,8 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
       let retrySplit = previousEvaluatorEarlyDiagnosticReport?.split || null;
       for (let diagnosticAttempt = 0; diagnosticAttempt < 3;
         diagnosticAttempt += 1) {
-        const shadowActionEffectWaveGames = Math.max(
-          0,
-          Number(
-            shadowRequirement.shadowActionEffectDemand?.requestedGames
-          ) || 0
-        );
         evaluatorBootstrap = await collectEvaluatorBootstrapIsolated({
           ...evaluatorBootstrapOptions,
-          ...(shadowActionEffectWaveGames > 0
-            ? {
-              extensionGames: shadowActionEffectWaveGames,
-              rollingWindowGames: shadowActionEffectWaveGames
-            }
-            : {}),
           activeEvidenceRoles: [EVALUATOR_TRAINING_PARTITION],
           diagnosticDemand: evaluatorEarlyDiagnosticDemand,
           stopWhenEvidenceCheckpoint: {
@@ -2154,9 +2251,9 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
           replicas: checkpoint.replicas,
           epochs: checkpoint.epochs,
           trainingBatchSize: Math.max(4,
-            Math.floor(Number(args["evaluator-training-batch-size"]) || 32)),
+            Math.floor(numericArgument(args["evaluator-training-batch-size"], 32))),
           learningRate: Math.max(1e-6,
-            Number(args["evaluator-training-learning-rate"]) || 0.0001),
+            numericArgument(args["evaluator-training-learning-rate"], 0.0001)),
           calibrationBatchSize,
           maximumGames: evaluatorBootstrapMaximumTotalGames,
           dataRoot,
@@ -2226,6 +2323,47 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
     }
     if (evaluatorEarlyDiagnosticStopped) break;
 
+    if (policyQBootstrap) {
+      const pilotPath = path.join(dataRoot, "evaluator-bootstrap", targetEvaluatorBootstrapKey,
+        "stage-gates", `early-diagnostic-${POLICY_Q_PILOT.id}.json`);
+      const cachedPilot = await readCheckpoint(pilotPath);
+      if (!reusablePolicyQPilot(cachedPilot, targetEvaluatorBootstrapKey,
+        checkpointHash(serializeNeuralModel(learner)))) {
+        evaluatorBootstrap = await collectEvaluatorBootstrapIsolated({
+          ...evaluatorBootstrapOptions,
+          activeEvidenceRoles: [EVALUATOR_TRAINING_PARTITION],
+          stopWhenEvidenceCheckpoint: {
+            id: POLICY_Q_PILOT.id,
+            role: EVALUATOR_TRAINING_PARTITION,
+            requirement: POLICY_Q_PILOT.requirement,
+            deckIds: trainingDeckIds
+          }
+        });
+        if (await persistEvaluatorBootstrapPause(evaluatorBootstrap)) break;
+        const pilot = await runPolicyQPipelinePilot({
+          sourceModel: learner,
+          bootstrap: evaluatorBootstrap,
+          dataRoot, heldoutNamespace, engineFingerprint,
+          learningTargetVersion: NEURAL_LEARNING_TARGET_VERSION,
+          trainingDeckIds, runContract, progress, calibrationBatchSize,
+          maximumGames: evaluatorBootstrapMaximumTotalGames,
+          trainingBatchSize: 32,
+          continuationLineage: evaluatorBootstrapContinuationLineage
+        });
+        if (pilot.status.failed) {
+          const stopped = { state: "interrupted", stage: "policy-q-pilot-pipeline-invalid",
+            resumable: true, diagnosticOnly: true, requiresModelReview: true,
+            evaluatorEarlyDiagnostic: pilot.status };
+          progress.write(stopped);
+          await writeAiStatus(stopped);
+          break;
+        }
+        evaluatorBootstrap.records = [];
+        evaluatorBootstrap.invalidRecords = [];
+        await compactTrainingHeap();
+      }
+    }
+
     // Policy-Q gets a sealed, training-only shadow readiness pass before the
     // protected Development partition is materialized or evaluated.  The
     // architecture, learning rate, epoch count and replica contract selected
@@ -2241,21 +2379,23 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
           args["policy-q-shadow-maximum-collection-attempts"]
         ) || (continuePolicyQShadowUntilReady ? 32 : 0))
       );
-      let policyQShadowAcceptedGames = Math.max(
-        0,
-        Math.floor(Number(evaluatorBootstrap?.audit?.acceptedGames) || 0)
-      );
-      for (let shadowAttempt = 0;
-        shadowAttempt < policyQShadowMaximumCollectionAttempts;
-        shadowAttempt += 1) {
-        const shadowRequirement = shadowAttempt === 0
+      let shadowAttempt = 0;
+      // Data-only preflights do not consume expensive model-search attempts.
+      // Bound zero-yield collection separately and report it as missing data.
+      for (let evidenceWave = 0;
+        shadowAttempt < policyQShadowMaximumCollectionAttempts && evidenceWave < 32;
+        evidenceWave += 1) {
+        const shadowRequirement = !policyQShadowReadiness
           ? EVALUATOR_POLICY_Q_EVIDENCE_REQUIREMENTS.training
           : expandPolicyQShadowReadinessRequirement(
             EVALUATOR_POLICY_Q_EVIDENCE_REQUIREMENTS.training,
-            shadowAttempt,
+            evidenceWave,
             policyQShadowReadiness,
             POLICY_Q_SHADOW_READINESS_GRID,
-            { currentAcceptedGames: policyQShadowAcceptedGames }
+            {
+              trainingAudit: evaluatorBootstrap?.audit
+                ?.certificationPartitions?.[EVALUATOR_TRAINING_PARTITION]
+            }
           );
         evaluatorBootstrap = await collectEvaluatorBootstrapIsolated({
           ...evaluatorBootstrapOptions,
@@ -2263,7 +2403,7 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
           diagnosticDemand:
             policyQShadowReadiness?.diagnosticDemand || null,
           stopWhenEvidenceCheckpoint: {
-            id: `policy-q-shadow-readiness-${shadowAttempt + 1}`,
+            id: `policy-q-shadow-readiness-${shadowAttempt + 1}-evidence-${evidenceWave + 1}`,
             role: EVALUATOR_TRAINING_PARTITION,
             requirement: shadowRequirement,
             deckIds: trainingDeckIds
@@ -2273,28 +2413,22 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
           policyQShadowInterrupted = true;
           break;
         }
-        policyQShadowAcceptedGames = Math.max(
-          policyQShadowAcceptedGames,
-          Math.floor(Number(evaluatorBootstrap?.audit?.acceptedGames) || 0)
-        );
         policyQShadowReadiness = await runPolicyQShadowReadinessStage({
           sourceModel: learner,
           bootstrap: evaluatorBootstrap,
           collectionRequirement: shadowRequirement,
           calibrationBatchSize,
           trainingBatchSize: Math.max(4,
-            Math.floor(Number(args["evaluator-training-batch-size"]) || 32)),
+            Math.floor(numericArgument(args["evaluator-training-batch-size"], 32))),
           candidateProcessesMaximum: Math.max(1, Math.min(4,
-            Math.floor(Number(args["evaluator-candidate-processes"]) || 4))),
+            Math.floor(numericArgument(args["evaluator-candidate-processes"], 4)))),
           candidateProcessReserveBytes: Math.max(
             2 * 1024 ** 3,
-            Number(args["evaluator-candidate-memory-reserve-bytes"])
-              || 4 * 1024 ** 3
+            numericArgument(args["evaluator-candidate-memory-reserve-bytes"], 4 * 1024 ** 3)
           ),
           candidateProcessEstimatedBytes: Math.max(
             1024 ** 3,
-            Number(args["evaluator-candidate-estimated-memory-bytes"])
-              || Math.floor(1.75 * 1024 ** 3)
+            numericArgument(args["evaluator-candidate-estimated-memory-bytes"], Math.floor(1.75 * 1024 ** 3))
           ),
           maximumGames: evaluatorBootstrapMaximumTotalGames,
           dataRoot,
@@ -2306,6 +2440,7 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
           runContract,
           progress
         });
+        if (policyQShadowReadiness.evidenceOnly !== true) shadowAttempt += 1;
         evaluatorBootstrap.records = [];
         evaluatorBootstrap.invalidRecords = [];
         await compactTrainingHeap();
@@ -2319,7 +2454,9 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
         const stoppedStatus = {
           state: "interrupted",
           phase: "training",
-          stage: shadowOutcome === "structural-failure"
+          stage: policyQShadowReadiness?.evidenceOnly === true
+            ? "evaluator-policy-q-shadow-evidence-insufficient"
+            : shadowOutcome === "structural-failure"
             ? "evaluator-policy-q-shadow-structural-failure"
             : "evaluator-policy-q-shadow-inconclusive",
           generation,
@@ -2377,29 +2514,27 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
       replicas: policyQBootstrap
         ? policyQShadowReadiness.schedule.replicas
         : Math.max(1, Math.min(5,
-          Math.floor(Number(args["evaluator-training-replicas"]) || 3))),
+          Math.floor(numericArgument(args["evaluator-training-replicas"], 3)))),
       epochs: policyQBootstrap
         ? policyQShadowReadiness.schedule.epochs
         : Math.max(1,
-          Math.floor(Number(args["evaluator-training-epochs"]) || 8)),
+          Math.floor(numericArgument(args["evaluator-training-epochs"], 8))),
       trainingBatchSize: Math.max(4,
-        Math.floor(Number(args["evaluator-training-batch-size"]) || 32)),
+        Math.floor(numericArgument(args["evaluator-training-batch-size"], 32))),
       candidateProcessesMaximum: Math.max(1, Math.min(4,
-        Math.floor(Number(args["evaluator-candidate-processes"]) || 4))),
+        Math.floor(numericArgument(args["evaluator-candidate-processes"], 4)))),
       candidateProcessReserveBytes: Math.max(
         2 * 1024 ** 3,
-        Number(args["evaluator-candidate-memory-reserve-bytes"])
-          || 4 * 1024 ** 3
+        numericArgument(args["evaluator-candidate-memory-reserve-bytes"], 4 * 1024 ** 3)
       ),
       candidateProcessEstimatedBytes: Math.max(
         1024 ** 3,
-        Number(args["evaluator-candidate-estimated-memory-bytes"])
-          || Math.floor(1.75 * 1024 ** 3)
+        numericArgument(args["evaluator-candidate-estimated-memory-bytes"], Math.floor(1.75 * 1024 ** 3))
       ),
       learningRate: policyQBootstrap
         ? policyQShadowReadiness.schedule.learningRate
         : Math.max(1e-6,
-          Number(args["evaluator-training-learning-rate"]) || 0.0001),
+          numericArgument(args["evaluator-training-learning-rate"], 0.0001)),
       architectureSpecs: policyQBootstrap
         ? [policyQShadowReadiness.schedule.architecture]
         : EVALUATOR_ARCHITECTURE_SPECS,
@@ -2704,58 +2839,57 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
   const rotatingValidationGames = Math.max(0, epochEvaluationGames - commonDevelopmentGames);
   const finalEpochConfirmationGames = epochEvaluationGames > 0
     ? Math.max(trainingDeckIds.length * 8, Math.ceil(
-      (Number(args["final-epoch-confirmation-games"]) || trainingDeckIds.length * 8) / 8
+      (numericArgument(args["final-epoch-confirmation-games"], trainingDeckIds.length * 8)) / 8
     ) * 8)
     : 0;
   const finalEpochAuditGames = protectedFinalAuditGamesForRun(
     runContract,
-    Number(args["final-epoch-audit-games"]) || 104,
+    numericArgument(args["final-epoch-audit-games"], 104),
     epochEvaluationGames > 0
   );
   const finalEpochConfirmationSeed = (generationSeed + 0x4f1bbcdc) >>> 0;
   const finalEpochAuditSeed = (generationSeed + 0x6d2b79f5) >>> 0;
   const practicalHistory = [];
-  const humanEpochs = Math.max(1, Number(args["human-epochs"]) || 1);
-  const humanBatchSize = Math.max(1, Number(args["human-batch-size"]) || 4);
+  const humanEpochs = Math.max(1, numericArgument(args["human-epochs"], 1));
+  const humanBatchSize = Math.max(1, numericArgument(args["human-batch-size"], 4));
   const correctionLifecycleTtl = Math.max(
     1,
-    Number(args["teacher-correction-lifecycle-ttl"]) || 8
+    numericArgument(args["teacher-correction-lifecycle-ttl"], 8)
   );
   const benchmarkGames = Math.max(
     evaluationGames,
-    Math.ceil((Number(args["benchmark-games"]) || 40) / 4) * 4
+    Math.ceil((numericArgument(args["benchmark-games"], 40)) / 4) * 4
   );
   const minimumLeagueGames = diagnosticRun ? 4 : 20;
   const configuredLeagueGamesPerOpponent = Math.max(
     minimumLeagueGames,
-    Math.ceil((Number(args["league-games-per-opponent"]) || evaluationGames) / 4) * 4
+    Math.ceil((numericArgument(args["league-games-per-opponent"], evaluationGames)) / 4) * 4
   );
   const intrinsicEvaluationMode = "same-deck-mirror-v3";
   const intrinsicEvaluationGames = Math.max(
     trainingDeckIds.length * 8,
     Math.ceil(
-      (Number(args["intrinsic-evaluation-games"]) || trainingDeckIds.length * 8) / 8
+      (numericArgument(args["intrinsic-evaluation-games"], trainingDeckIds.length * 8)) / 8
     ) * 8
   );
-  const maxSeatGap = Number(args["max-seat-gap"]) || 0.2;
-  const maxConditionGap = Number(args["max-condition-gap"]) || 0.4;
+  const maxSeatGap = numericArgument(args["max-seat-gap"], 0.2);
+  const maxConditionGap = numericArgument(args["max-condition-gap"], 0.4);
   const minimumDeckWinRate = Math.max(
     0,
-    Math.min(0.5, Number(args["minimum-deck-win-rate"]) || 0.35)
+    Math.min(0.5, numericArgument(args["minimum-deck-win-rate"], 0.35))
   );
   const minimumDeckScoreMargin = Math.max(
     -8,
-    Math.min(0, Number(args["minimum-deck-score-margin"]) || -2.5)
+    Math.min(0, numericArgument(args["minimum-deck-score-margin"], -2.5))
   );
-  const learnerMinimumDeckWinRate = Number(args["learner-minimum-deck-win-rate"]) || 0.25;
-  const learnerMinimumDeckScoreMargin = Number(args["learner-minimum-deck-score-margin"]) || -3.5;
+  const learnerMinimumDeckWinRate = numericArgument(args["learner-minimum-deck-win-rate"], 0.25);
+  const learnerMinimumDeckScoreMargin = numericArgument(args["learner-minimum-deck-score-margin"], -3.5);
   const intrinsicMinimumDeckGames = Math.max(8, Math.floor(
-    Number(args["intrinsic-minimum-deck-games"])
-      || intrinsicEvaluationGames / Math.max(1, trainingDeckIds.length)
+    numericArgument(args["intrinsic-minimum-deck-games"], intrinsicEvaluationGames / Math.max(1, trainingDeckIds.length))
   ));
   const intrinsicConfirmationDeckGames = Math.max(
     intrinsicMinimumDeckGames,
-    Math.floor(Number(args["intrinsic-confirmation-deck-games"]) || 24)
+    Math.floor(numericArgument(args["intrinsic-confirmation-deck-games"], 24))
   );
   const gradientConflictDiagnosticsEnabled =
     args["gradient-conflict-diagnostics"] !== "false";
@@ -3324,8 +3458,8 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
             minimumPracticalScore: epochMinimumPracticalScore,
             minimumPracticalWinRate: epochMinimumPracticalWinRate,
             requireBootstrapEvidence: true,
-            minimumBootstrapSupport: Number(args["final-audit-minimum-bootstrap-support"]) || 0.75,
-            minimumDeckCvar: Number(args["final-audit-minimum-deck-cvar"]) || 0.35
+            minimumBootstrapSupport: numericArgument(args["final-audit-minimum-bootstrap-support"], 0.75),
+            minimumDeckCvar: numericArgument(args["final-audit-minimum-deck-cvar"], 0.35)
           });
           return {
             selectionEligible: selection.selectionEligible,
@@ -3549,7 +3683,7 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
     1,
     Math.min(
       5,
-      Math.floor(Number(args["evaluator-training-replicas"]) || 3)
+      Math.floor(numericArgument(args["evaluator-training-replicas"], 3))
     )
   );
   const evaluatorBaseEpochInputs = evaluatorDevelopmentGate?.passed === true
@@ -3593,15 +3727,15 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
   const seenEvaluatorArtifacts = new Set();
   const evaluatorTrainingEpochs = Math.max(
     1,
-    Math.floor(Number(args["evaluator-training-epochs"]) || 8)
+    Math.floor(numericArgument(args["evaluator-training-epochs"], 8))
   );
   const evaluatorTrainingBatchSize = Math.max(
     4,
-    Math.floor(Number(args["evaluator-training-batch-size"]) || 32)
+    Math.floor(numericArgument(args["evaluator-training-batch-size"], 32))
   );
   const evaluatorTrainingLearningRate = Math.max(
     1e-6,
-    Number(args["evaluator-training-learning-rate"]) || 0.0001
+    numericArgument(args["evaluator-training-learning-rate"], 0.0001)
   );
   const evaluatorTrainingEnabled = officialPromotionRun
     && evaluatorBootstrap?.audit?.complete === true
@@ -3934,8 +4068,8 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
     evaluationMode,
     greedy: evaluationGreedy,
     temperature: evaluationTemperature,
-    wilsonThreshold: Number(args["benchmark-wilson-threshold"]) || 0.4,
-    maxSeatGap: Number(args["max-seat-gap"]) || 0.2,
+    wilsonThreshold: numericArgument(args["benchmark-wilson-threshold"], 0.4),
+    maxSeatGap: numericArgument(args["max-seat-gap"], 0.2),
     resumedSummaries: mapToArray(resumedHeuristicEvaluation, benchmarkGames),
     onGameComplete: (item) => {
       saveEvaluationGame(dataRoot, heuristicEvaluationDescriptor, item.game - 1, item.summary);
@@ -4149,28 +4283,28 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
   const absoluteDeckGate = evaluateDeckCoverage(absoluteEvaluation, trainingDeckIds, minimumDeckWinRate, minimumDeckScoreMargin);
   const candidateGate = evaluation.completed >= Math.ceil(evaluation.games * evaluationCompletionRate)
     && evaluation.invalidGames === 0
-    && evaluation.wilsonLowerBound > (Number(args["candidate-wilson-threshold"]) || 0.5)
+    && evaluation.wilsonLowerBound > (numericArgument(args["candidate-wilson-threshold"], 0.5))
     && intrinsicDeckSafety.passed;
   const leagueGate = leagueEvaluation.results.every((result) => result.completed >= Math.ceil(result.games * evaluationCompletionRate))
     && leagueEvaluation.invalidGames === 0
-    && leagueEvaluation.worstOpponentWilsonLowerBound >= (Number(args["league-wilson-threshold"]) || 0.45);
+    && leagueEvaluation.worstOpponentWilsonLowerBound >= (numericArgument(args["league-wilson-threshold"], 0.45));
   const absoluteGate = absoluteEvaluation.completed >= Math.ceil(absoluteEvaluation.games * evaluationCompletionRate)
     && absoluteEvaluation.invalidGames === 0
-    && absoluteEvaluation.wilsonLowerBound >= (Number(args["benchmark-wilson-threshold"]) || 0.4);
+    && absoluteEvaluation.wilsonLowerBound >= (numericArgument(args["benchmark-wilson-threshold"], 0.4));
   const parentLearnerEvaluation = intrinsicEvaluation;
   const learnerAdvanceGate = evaluateLearnerAdvance(parentLearnerEvaluation, trainingDeckIds, {
     minimumCompletionRate: evaluationCompletionRate,
-    minimumWinRate: Number(args["learner-minimum-win-rate"]) || 0.525,
-    minimumWilsonLowerBound: Number(args["learner-wilson-threshold"]) || 0.35,
+    minimumWinRate: numericArgument(args["learner-minimum-win-rate"], 0.525),
+    minimumWilsonLowerBound: numericArgument(args["learner-wilson-threshold"], 0.35),
     baselineEvaluation: parentSeatBaselineEvaluation,
     maximumSeatGapIncrease:
-      Number(args["learner-max-seat-gap-increase"]) || 0.1,
+      numericArgument(args["learner-max-seat-gap-increase"], 0.1),
     maximumConditionGapIncrease:
-      Number(args["learner-max-condition-gap-increase"]) || 0.1,
+      numericArgument(args["learner-max-condition-gap-increase"], 0.1),
     maximumSeatWinRateDrop:
-      Number(args["learner-max-seat-win-rate-drop"]) || 0.1,
+      numericArgument(args["learner-max-seat-win-rate-drop"], 0.1),
     maximumConditionWinRateDrop:
-      Number(args["learner-max-condition-win-rate-drop"]) || 0.15,
+      numericArgument(args["learner-max-condition-win-rate-drop"], 0.15),
     minimumDeckWinRate: learnerMinimumDeckWinRate,
     minimumDeckScoreMargin: learnerMinimumDeckScoreMargin,
     minimumDeckGames: intrinsicMinimumDeckGames,
@@ -4680,7 +4814,7 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
     championCheckpoint = serializeNeuralModel(candidate);
     await writeCheckpoint(checkpointPath, championCheckpoint);
     await writeCheckpoint(path.join(leagueRoot, `generation-${String(candidate.generation).padStart(5, "0")}.json`), championCheckpoint);
-    league = (await loadLeague(leagueRoot, Math.max(1, Number(args["league-size"]) || 8)))
+    league = (await loadLeague(leagueRoot, Math.max(1, numericArgument(args["league-size"], 8))))
       .filter((model) => isCurrentEngineValidatedModel(model, engineFingerprint));
   }
   if (learnerAdvanced) {
@@ -4772,7 +4906,7 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
   progress.write({ ...summary, stage: "complete" });
   await writeAiStatus({ ...summary, progressPath: progress.latestPath, eventLogPath: progress.eventLogPath });
   console.log(JSON.stringify(summary));
-  if (generations === Infinity) await new Promise((resolve) => setTimeout(resolve, Math.max(1000, Number(args["generation-delay-ms"]) || 5000)));
+  if (generations === Infinity) await new Promise((resolve) => setTimeout(resolve, Math.max(1000, numericArgument(args["generation-delay-ms"], 5000))));
   } catch (error) {
     const failurePath = await writeTrainingFailure(dataRoot, {
       generation,
@@ -4798,6 +4932,10 @@ for (let generationIndex = 0; generationIndex < generations; generationIndex += 
     progress.write({ state: "error", stage: phase, failurePath, error: { message: error?.message || String(error), code: error?.code || null } });
     throw error;
   }
+}
+
+} finally {
+  await stopStorageMaintenance();
 }
 
 function evolvePopulation(current, knowledge, random, limit, seedDecks) {
@@ -6165,7 +6303,7 @@ async function evaluateIndependentRankingAudits(
   for await (const trajectories of iterateIndependentTrajectoryDataset(
     dataset
   )) {
-    assertTrainingTrajectories(trajectories, engineFingerprint);
+    assertTrainingTrajectories(trajectories, options.engineFingerprint || engineFingerprint);
     accumulateActionRankingAudit(
       model,
       trajectories,
@@ -6824,6 +6962,12 @@ async function materializeEvaluatorEarlyDiagnosticDatasets(options) {
     trainingDeckIds: options.trainingDeckIds
   };
   const materialize = async (role, records) => {
+    options.progress.write({
+      state: "training", stage: "evaluator-early-diagnostic-materializing",
+      evaluatorEarlyDiagnosticCheckpoint: options.checkpointId,
+      evaluatorEarlyDiagnosticRole: role,
+      evaluatorEarlyDiagnosticSourceRecords: records.length
+    });
     const dataset = await updateIndependentTrajectoryDatasetFromBootstrapRecords(
       options.dataRoot,
       {
@@ -6906,6 +7050,25 @@ async function materializeEvaluatorEarlyDiagnosticDatasets(options) {
   };
 }
 
+async function runPolicyQPipelinePilot(options) {
+  return runEvaluatorEarlyDiagnosticCheckpoint({
+    ...options,
+    checkpointId: POLICY_Q_PILOT.id,
+    checkpointOrdinal: 0,
+    diagnosticOnly: true,
+    certificateKind: EVALUATOR_CERTIFICATE_KINDS.policyQ,
+    requireActionEvidence: false,
+    requireStructuredV2: true,
+    collectionRequirement: POLICY_Q_PILOT.requirement,
+    trainingEvidenceRequirement: POLICY_Q_PILOT.trainingRequirement,
+    architectureSpecs: EVALUATOR_ARCHITECTURE_SPECS.filter((item) => item.inputSchema === "structured-v2"),
+    replicas: POLICY_Q_PILOT.replicas,
+    epochs: POLICY_Q_PILOT.epochs,
+    learningRate: 0.0001,
+    statusFunction: policyQPilotStatus
+  });
+}
+
 async function runEvaluatorEarlyDiagnosticCheckpoint(options) {
   const datasets = await materializeEvaluatorEarlyDiagnosticDatasets({
     ...options,
@@ -6916,7 +7079,7 @@ async function runEvaluatorEarlyDiagnosticCheckpoint(options) {
   const trainingRequirement = options.trainingEvidenceRequirement || {};
   const requireStructuredV2 = options.requireStructuredV2 !== false;
   const trainingSplitSufficient =
-    datasets.split.trainingEvidence.sufficient === true
+    (options.diagnosticOnly === true || datasets.split.trainingEvidence.sufficient === true)
     && datasets.split.trainingEvidence.eligibleActionReferences
       >= Number(trainingRequirement.minimumActionReferences || 0)
     && datasets.split.trainingEvidence.eligibleLeafValuePairs
@@ -6930,6 +7093,8 @@ async function runEvaluatorEarlyDiagnosticCheckpoint(options) {
   const gate = trainingSplitSufficient
     ? await trainEvaluatorDevelopmentStage({
     sourceModel: options.sourceModel,
+    certificateKind: options.certificateKind,
+    continuationLineage: options.continuationLineage,
     trainingDataset: datasets.training,
     developmentDataset: datasets.validation,
     comparisonDevelopmentDataset: options.previousReport
@@ -6975,7 +7140,7 @@ async function runEvaluatorEarlyDiagnosticCheckpoint(options) {
       trainingEvidence: datasets.split.trainingEvidence,
       trainingEvidenceRequirement: trainingRequirement
     };
-  const status = evaluatorEarlyDiagnosticStatus(gate.candidates, {
+  const status = (options.statusFunction || evaluatorEarlyDiagnosticStatus)(gate.candidates, {
     checkpointId: options.checkpointId,
     checkpointOrdinal: options.checkpointOrdinal,
     diagnosticAttempt: Math.max(0, Number(options.diagnosticAttempt) || 0),
@@ -6986,6 +7151,8 @@ async function runEvaluatorEarlyDiagnosticCheckpoint(options) {
   });
   const report = {
     version: 3,
+    diagnosticOnly: options.diagnosticOnly === true,
+    sourceModelHash: checkpointHash(serializeNeuralModel(options.sourceModel)),
     checkpointId: options.checkpointId,
     checkpointOrdinal: options.checkpointOrdinal,
     diagnosticAttempt: Math.max(0, Number(options.diagnosticAttempt) || 0),
@@ -6993,7 +7160,9 @@ async function runEvaluatorEarlyDiagnosticCheckpoint(options) {
     requirement: options.collectionRequirement || null,
     trainingEvidenceRequirement: options.trainingEvidenceRequirement,
     split: datasets.split,
-    gate: evaluatorGateWithoutCheckpoint(gate),
+    gate: options.diagnosticOnly === true
+      ? { ...evaluatorGateWithoutCheckpoint(gate), passed: false, selected: null, officialSelectionEligible: false }
+      : evaluatorGateWithoutCheckpoint(gate),
     status,
     completedAt: new Date().toISOString()
   };
@@ -7259,7 +7428,25 @@ async function runPolicyQShadowReadinessStage(options) {
   const splitSufficient =
     datasets.split.trainingEvidence.sufficient === true
     && datasets.split.validationEvidence.sufficient === true;
-  if (!splitSufficient) {
+  options.progress.write({
+    state: "training", stage: "evaluator-policy-q-shadow-evidence-preflight",
+    ...readinessProgress("evidence-coverage", { modelTrainingStarted: false })
+  });
+  const evidencePreflight = policyQShadowEvidencePreflight(
+    await collectPolicyQEvidenceInventory(
+      iterateIndependentTrajectoryDataset(datasets.validation)
+    ), grid, { demand: options.collectionRequirement?.shadowActionEffectDemand }
+  );
+  await writeCheckpoint(splitPath.replace(/\.json$/, ".evidence-preflight.json"), {
+    ...evidencePreflight, updatedAt: new Date().toISOString()
+  });
+  if (!splitSufficient || !evidencePreflight.sufficient) {
+    options.progress.write({
+      state: "training", stage: "evaluator-policy-q-shadow-evidence-insufficient",
+      ...readinessProgress("additional-evidence-required", {
+        evidencePreflight, modelTrainingStarted: false, performanceAssessed: false
+      })
+    });
     releaseTrajectoryDatasets(
       datasets.training,
       datasets.validation,
@@ -7272,10 +7459,14 @@ async function runPolicyQShadowReadinessStage(options) {
       passed: false,
       outcome: "inconclusive",
       structuralFailure: false,
-      diagnosticInvalid: true,
-      reasons: ["policy-q-shadow-split-evidence-insufficient"],
+      evidenceOnly: true,
+      performanceAssessed: false,
+      evidencePreflight,
+      diagnosticInvalid: !splitSufficient,
+      reasons: [!splitSufficient ? "policy-q-shadow-split-evidence-insufficient"
+        : "policy-q-shadow-evidence-precision-insufficient"],
       split: datasets.split,
-      diagnosticDemand: {
+      diagnosticDemand: splitSufficient ? evidencePreflight.diagnosticDemand : {
         version: 1,
         contract: "policy-q-shadow-targeted-training-demand-v1",
         role: EVALUATOR_TRAINING_PARTITION,
@@ -9381,7 +9572,7 @@ function compatibleRuntimeMetadata(
       migratedAt: new Date().toISOString(),
       fromEngineFingerprint: sourceFingerprint,
       toEngineFingerprint: targetFingerprint,
-      scope: "audit-stratum-and-evaluator-certification-only",
+      scope: "verified-runtime-semantic-equivalence",
       preserved: [
         "weights",
         "calibration",

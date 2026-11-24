@@ -103,7 +103,7 @@ async function runFocusedMutant(entry, evidence) {
   const selected = [...evidence].slice(0, 32);
   const files = [...new Set(selected.map((item) => item.file))];
   const pattern = `^(?:${selected.map((item) => escapeRegex(item.name)).join("|")})$`;
-  const run = await runChild(["--test", `--test-name-pattern=${pattern}`, ...files], 45000, entry.effectKey);
+  const run = await runChild(["--test", "--test-reporter=tap", `--test-name-pattern=${pattern}`, ...files], 45000, entry.effectKey);
   const output = `${run.stdout}\n${run.stderr}`;
   const invalid = run.timedOut || /SyntaxError|ERR_MODULE_NOT_FOUND|ReferenceError/.test(output) || (run.status !== 0 && !/not ok/i.test(output));
   return {

@@ -45,6 +45,14 @@ Open:
 http://127.0.0.1:4173
 ```
 
+## 덱 이미지 내보내기
+
+덱 편집 화면에서 **덱 이미지 내보내기 → PNG 저장**을 선택하시면 됩니다. 레전드와 전장을 상단에 배치하고, 메인 덱과 사이드보드는 중복 카드까지 한 장씩 10열로 펼쳐 저장합니다. 룬은 종류별 개수만 표시하며, 현재 언어 설정에 맞는 카드 이미지를 사용합니다. 저장 전 미리보기를 확인할 수 있고, 불러오지 못한 이미지가 있으면 해당 카드 이름과 다시 불러오기 버튼을 표시합니다.
+
+## AI 학습 대시보드
+
+`npm run ai:dashboard` 실행 후 [AI 학습 현황](http://127.0.0.1:4180/)을 여시면 됩니다. 실제 실행 중인 adaptive 학습을 자동으로 찾아 3초마다 세대, 단계 진행률, 평가 경기 수, 승률, 덱별 추이와 최근 승급평가를 갱신합니다. 우선순위 버튼은 현재 학습 프로세스와 이후 생성되는 프로세스에 함께 적용됩니다. 자세한 동작과 실행 옵션은 [대시보드 안내](docs/ai-dashboard.md)를 확인해 주세요.
+
 ## Public Server with Tailscale Funnel
 
 Tailscale Funnel provides a public `*.ts.net` HTTPS address without requiring
@@ -122,6 +130,37 @@ This runs:
 - `npm run test:e2e`: real Chromium coverage for local setup, mobile layout, two-client multiplayer, reconnection, and game completion
 
 Install the E2E browser once on a new development machine with `npm run test:e2e:install`.
+
+## Inspect submitted bug reports
+
+Game reproduction reports are stored under `data/bug-reports` by default. Set
+`RIFTBOUND_BUG_REPORT_DATA_DIR` to move that private data and set a long random
+`RIFTBOUND_BUG_REPORT_ADMIN_TOKEN` before exposing the administrator API.
+The store accepts at most 1,000 reports and 2 GiB by default. When either quota
+is full, it preserves every existing report and rejects new submissions with
+HTTP 507. Override the limits with `RIFTBOUND_BUG_REPORT_MAX_COUNT` and
+`RIFTBOUND_BUG_REPORT_MAX_TOTAL_BYTES`. Automatic removal of the oldest reports
+is disabled by default; enable `RIFTBOUND_BUG_REPORT_PRUNE_ON_QUOTA=true` only
+when that retention tradeoff is intentional.
+
+The anonymous submission limiter keeps at most 2,048 address buckets by
+default; change this with `RIFTBOUND_BUG_REPORT_RATE_LIMIT_MAX_ENTRIES`.
+`X-Forwarded-For` is ignored unless
+`RIFTBOUND_BUG_REPORT_TRUST_PROXY=true`, which should be enabled only when a
+trusted reverse proxy connects to the server over loopback. The built-in
+Tailscale Funnel restart enables this setting in its server process when the
+variable is unset; `--no-tunnel` restarts and explicit environment values are
+left unchanged.
+
+```powershell
+npm run bug-reports
+npm run bug-reports -- --id <report-id>
+```
+
+The protected HTTP equivalents are `GET /api/admin/bug-reports` and
+`GET /api/admin/bug-reports/<report-id>` with the administrator token in the
+`Authorization: Bearer ...` header. Report contents can include both players'
+game state, so do not publish the report directory or administrator token.
 
 ## Train the AI
 

@@ -9,9 +9,9 @@ import {
   cardBin
 } from "./encoding.mjs";
 
-export const STRUCTURED_EVIDENCE_SCHEMA_VERSION = 5;
+export const STRUCTURED_EVIDENCE_SCHEMA_VERSION = 6;
 export const STRUCTURED_EVIDENCE_ENCODER_FINGERPRINT =
-  "public-structured-evidence-v5-object-masks-full-turn-priority-ledger";
+  "public-structured-evidence-v6-scoring-history-full-card-vocabulary";
 export const STRUCTURED_EVIDENCE_TENSOR_LAYOUT = Object.freeze({
   version: 2,
   globalWidth: 64,
@@ -25,7 +25,7 @@ export const STRUCTURED_EVIDENCE_TENSOR_LAYOUT = Object.freeze({
   availabilityWidth: 8
 });
 
-// Append-only companion to the legacy 3,704-value encoding. observeGame() is
+// Structured companion to the flat encoding. observeGame() is
 // the only source, which keeps opponent private cards outside the archive.
 export function createPublicStructuredEvidenceSnapshot(game, viewerId, options = {}) {
   const observation = observeGame(game, viewerId);
@@ -234,7 +234,7 @@ function validObservationSnapshot(value, options = {}) {
     && value.players[0]?.side === "self"
     && value.players[1]?.side === "opponent"
     && Array.isArray(value.players[1]?.hand)
-    && value.players[1].hand.length === 0
+    && (value.players[1].hand.length === 0 || value.players[1].handVisible === true)
     && Array.isArray(value?.battlefields)
     && !containsPrivateHiddenIdentity(value);
 }
@@ -380,8 +380,10 @@ function compactPlayer(player, viewerId) {
   return {
     side: relativePlayer(player.id, viewerId),
     score: Number(player.score) || 0,
+    turnScoredBattlefields: [...(player.turnScoredBattlefields || [])],
     xp: Number(player.xp) || 0,
     handCount: Number(player.handCount) || 0,
+    handVisible: player.handVisible === true,
     hand: (player.hand || []).map((card) => compactCard(card, viewerId)),
     deckCount: Number(player.deckCount) || 0,
     trash: (player.trash || []).map((card) => compactCard(card, viewerId)),
@@ -802,6 +804,10 @@ function encodeBattlefields(observation, output, mask) {
     output[offset + 6] = theirs.length / 12;
     output[offset + 7] = mine.reduce((sum, card) => sum + (Number(card.might) || 0), 0) / 40;
     output[offset + 8] = theirs.reduce((sum, card) => sum + (Number(card.might) || 0), 0) / 40;
+    output[offset + 9] = observation.players?.[0]?.turnScoredBattlefields?.includes(field.id) ? 1 : 0;
+    output[offset + 10] = observation.players?.[1]?.turnScoredBattlefields?.includes(field.id) ? 1 : 0;
+    output[offset + 11] = mine.reduce((sum, card) => sum + Math.max(0, (card.might || 0) - (card.damage || 0)), 0) / 40;
+    output[offset + 12] = theirs.reduce((sum, card) => sum + Math.max(0, (card.might || 0) - (card.damage || 0)), 0) / 40;
     mask[index] = 1;
   });
 }

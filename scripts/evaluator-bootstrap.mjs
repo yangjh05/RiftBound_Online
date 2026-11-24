@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { mixNaturalPolicyQFocuses, policyQLeafAuditPrecision } from "./evaluator-policy-q-evidence.mjs";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { readTrajectoryArchive, writeTrajectoryArchive } from "../src/ai/neural/archive.mjs";
@@ -15,6 +16,7 @@ import {
   validLeafValueReference
 } from "../src/ai/neural/action-ranking-reference.mjs";
 import { collectProcessPoolSelfPlay } from "./ai-selfplay-process-pool.mjs";
+import { evaluatorBootstrapPrecisionCollectionWindow } from "./evaluator-bootstrap-collection-window.mjs";
 import {
   detachedActionAuditFineRoleChunkGames,
   runDetachedActionAuditCoordinator
@@ -790,7 +792,7 @@ export function evaluatorBootstrapDiagnosticFocus(
       ? item.deckSeat
       : null
   })).filter((item) =>
-    item.phaseBand || item.actionClass || item.deckSeat);
+    item.phaseBand || item.actionClass || item.deckSeat || item.auditDistribution);
   return {
     items,
     phaseBands: [...new Set(items.map((item) => item.phaseBand)
@@ -1766,11 +1768,18 @@ export function evaluatorBootstrapLeafCertificationRolePlan(
     if (count <= 0) continue;
     allocations[role] = count;
     roles.push(...Array.from({ length: count }, () => role));
-    const roleFocuses = evaluatorBootstrapLeafPartitionFocuses(
+    let roleFocuses = evaluatorBootstrapLeafPartitionFocuses(
       partition,
       count,
       demandEvidence
     );
+    // Collect natural policy decisions before the first Shadow, including
+    // small worker waves with no duplicate focus. Retry diagnostics may
+    // override the mixture below when a specific evidence type is missing.
+    if (role === "training") {
+      roleFocuses = mixNaturalPolicyQFocuses(roleFocuses,
+        Math.max(0, Number(partition?.acceptedGames) || 0));
+    }
     // Protected Policy-Q roles need enough independent natural games for the
     // game-cluster population and tail bounds. Reserve two thirds for the
     // precommitted Bernoulli frame while retaining at least one task for every
@@ -2141,7 +2150,7 @@ export async function collectEvaluatorBootstrap(options) {
     // The pool asks shouldAssignNext after every persisted game and closes the
     // queue as soon as this evidence role is complete. This removes the
     // 12-game straggler barrier without changing any game coordinate or seed.
-    const rollingWindowGames = Math.max(
+    let rollingWindowGames = Math.max(
       Number(options.processes) || 1,
       Number(options.rollingWindowGames)
         || allocation.allocatedGames - completedLogical
@@ -2162,6 +2171,17 @@ export async function collectEvaluatorBootstrap(options) {
       throw new Error(
         "Evaluator bootstrap is incomplete but has no remaining sampling mode."
       );
+    }
+    const precisionCollectionWindow = evaluatorBootstrapPrecisionCollectionWindow({
+      options, allocation, audit, completedLogical, samplingMode
+    });
+    if (precisionCollectionWindow) {
+      // Persist the full checkpoint before dispatch. On recovery, accepted
+      // Training games determine the remaining queue; an old 32-game window
+      // must not reinstate a straggler barrier or count calibration games.
+      allocation = precisionCollectionWindow.allocation;
+      rollingWindowGames = precisionCollectionWindow.remainingGames;
+      await writeBootstrapAllocation(directory, allocation);
     }
     if (samplingMode === EVALUATOR_BOOTSTRAP_SAMPLING_MODES.leaf
       && allocation.leafRoleSchedule?.version
@@ -2496,7 +2516,8 @@ export async function collectEvaluatorBootstrap(options) {
         ? evaluatorBootstrapLeafCertificationRole(audit, auditOptions)
         : null;
     const configuredLeafRolePlanWaves = Number(options.leafRolePlanWaves);
-    const leafRolePlanLimit = Number.isFinite(configuredLeafRolePlanWaves)
+    const leafRolePlanLimit = !precisionCollectionWindow
+      && Number.isFinite(configuredLeafRolePlanWaves)
       && configuredLeafRolePlanWaves > 0
         ? Math.min(
           taskLimit,
@@ -2729,7 +2750,7 @@ export async function collectEvaluatorBootstrap(options) {
       },
       resolveTaskOptions:
         certificationRolePlan || hasDiagnosticTaskFocus
-          ? ({ taskIndex }) => {
+          ? ({ taskIndex, task }) => {
             const taskCertificationRole =
               certificationRoles[taskIndex] || certificationRole;
             const taskFocus = certificationFocuses[taskIndex] || null;
@@ -2753,10 +2774,15 @@ export async function collectEvaluatorBootstrap(options) {
               scope:
                 options.collection.evidenceProtocolManifest?.scope || null,
               candidateSelection: naturalDistributionTask
-                ? "hash-priority-reservoir-policy-decision-v1"
+                ? "hash-priority-mixture-reservoir-policy-decision-v1"
                 : "teacher-selected-policy-decision-pair-v1",
               selectionProbability: null,
-              targeted: !naturalDistributionTask
+              targeted: !naturalDistributionTask,
+              collectionTask: `${task.workerIndex}:${task.gameIndex}`,
+              plannedFinalSimulations: policyQLeafAuditPrecision(
+                datasetKey, `${task.workerIndex}:${task.gameIndex}`,
+                options.collection.teacherLeafAuditSimulations ?? 128
+              )
             };
             const samplingTaskManifestHash = createHash("sha256")
               .update(JSON.stringify(samplingFrameBase))
@@ -2808,7 +2834,7 @@ export async function collectEvaluatorBootstrap(options) {
                 ?? null);
             return {
               optionOverrides: {
-                deckCurriculum: taskDeckCurriculum,
+                deckCurriculum: naturalDistributionTask ? null : taskDeckCurriculum,
                 teacherActionAuditFocusPhaseBands:
                   samplingMode === EVALUATOR_BOOTSTRAP_SAMPLING_MODES.action
                     ? diagnosticFocus?.phaseBand
@@ -2826,13 +2852,16 @@ export async function collectEvaluatorBootstrap(options) {
                       : actionRoleActionClassFocus[taskCertificationRole] || []
                     : [],
                 teacherLeafAuditFocusPhaseBands:
-                  samplingMode === EVALUATOR_BOOTSTRAP_SAMPLING_MODES.leaf
+                  samplingMode === EVALUATOR_BOOTSTRAP_SAMPLING_MODES.leaf && !naturalDistributionTask
                     ? diagnosticFocus?.phaseBand
                       ? [diagnosticFocus.phaseBand]
                       : taskFocus?.phaseBand
                       ? [taskFocus.phaseBand]
                       : rolePhaseFocus[taskCertificationRole] || []
                     : [],
+                ...(samplingMode === EVALUATOR_BOOTSTRAP_SAMPLING_MODES.leaf
+                  ? { teacherLeafAuditSimulations: samplingFrameBase.plannedFinalSimulations }
+                  : {}),
                 ...(samplingMode === EVALUATOR_BOOTSTRAP_SAMPLING_MODES.leaf
                   && naturalDistributionTask
                   ? { teacherLeafAuditPairBudget: 1 }
@@ -2866,6 +2895,8 @@ export async function collectEvaluatorBootstrap(options) {
               taskContext: {
                 samplingMode,
                 certificationRole: taskCertificationRole,
+                auditDistribution: samplingFrameBase.distribution,
+                plannedFinalSimulations: samplingFrameBase.plannedFinalSimulations,
                 auditFocus: taskFocus,
                 diagnosticFocus,
                 prefetched:
@@ -5619,7 +5650,7 @@ function finiteNaturalMetric(value) {
   return Number.isFinite(numeric) ? numeric : -Infinity;
 }
 
-export async function loadEvaluatorBootstrap(directory, datasetKey) {
+export async function loadEvaluatorBootstrap(directory, datasetKey, options = {}) {
   const records = [];
   const invalidRecords = [];
   try {
@@ -5633,7 +5664,8 @@ export async function loadEvaluatorBootstrap(directory, datasetKey) {
         const record = await loadOrCreateBootstrapSummaryRecord(
           archivePath,
           summaryPath,
-          datasetKey
+          datasetKey,
+          { readOnly: options.readOnly === true }
         );
         if (!record || record.resultIndex?.valid !== true) continue;
         records.push(record);
@@ -5652,7 +5684,7 @@ export async function loadEvaluatorBootstrap(directory, datasetKey) {
           archivePath,
           summaryPath,
           datasetKey,
-          { allowInvalid: true }
+          { allowInvalid: true, readOnly: options.readOnly === true }
         );
         if (!record) continue;
         invalidRecords.push(record);
@@ -5742,6 +5774,7 @@ async function loadOrCreateBootstrapSummaryRecord(
   // Legacy evaluator-bootstrap archives wrapped the full result inside a
   // record. Convert only one archive at a time and retain just the compact
   // index, so resume memory is bounded by the largest individual game.
+  if (options.readOnly === true) return null;
   const payload = await readTrajectoryArchive(archivePath);
   const legacyRecord = payload?.result ? payload : null;
   if (legacyRecord && legacyRecord.datasetKey !== datasetKey) return null;

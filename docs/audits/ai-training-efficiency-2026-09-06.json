@@ -1,0 +1,119 @@
+{
+  "version": 1,
+  "passed": true,
+  "sourceEngineFingerprint": "sha256:7d8531a04a7de71881869771ef13fc86eea4c216e48aaee7e2e792a9349f572d",
+  "targetEngineFingerprint": "sha256:fa68b3fd39f2af33d7e6adcae17423e2460f7689af66d8ba09aebdd3b4474ac6",
+  "sourceCollectionKey": "97c70288bd53fb32cd9945d32dfacf329c1077548423a6fabe0b8c275dd597f5",
+  "targetCollectionKey": "18aa7d357d193d068f9fa39df51aa3bd223fc21714e57be29928bef5be2b180b",
+  "sourceEvaluatorKey": "99a06a5ae5ee23a0537616f2f35770b95d572120837cce93148a8127684d56f9",
+  "targetEvaluatorKey": "856e331a8d795dd67eb8a3e594f8df9dc39a55d930f36c5002e0cff9b717d128",
+  "minimumEvaluatorGames": 362,
+  "tests": {
+    "efficiency-regressions.log": 75,
+    "efficiency-neural-regressions.log": 262,
+    "efficiency-final-contract-tests.log": 9
+  },
+  "pipelineHashes": {
+    "src/ai/clone-state.mjs": "d702a923d7c6399fc69db92d961a929b6f95d1d7ab086dca08b8b38dc8747897",
+    "src/ai/actions.mjs": "d3817dd777bad9bab93534df4cea02701a93ce603dfe3161eccdd68ca72e9548",
+    "scripts/training-safety.mjs": "6b4deb216820abdc3760f3569d45f4f49a647aa908d33df4fd69712a115304c3",
+    "scripts/train-neural-ai.mjs": "352a3473e9b07642761338bd3e86114200547e952cd60dd73a9877657df489ef",
+    "scripts/evaluator-policy-q-pilot.mjs": "46b9732f451d53356ae21aa6d0a598149a94465dba46bbe8d6b455f2ddf832e5",
+    "scripts/evaluator-bootstrap.mjs": "a76ddff5c2c7dec0ee3f106386d34746a00236fd88fe561ad493abdde0aa630c",
+    "scripts/evaluator-early-diagnostic.mjs": "7dd530065ae7340d38a100b82fa68e68c489c703d3ed4672141c8d313cf80ff0",
+    "scripts/migrate-compatible-ai-collection.mjs": "6c11856d07c7a9718f8e3c3d201c0fdddf3cdb104bded319a3183cc8413adddc",
+    "scripts/migrate-compatible-evaluator-bootstrap.mjs": "b570adea13257397d5e47da1d79d5dca9f7ce157ba31c06cec3862da2a526e62",
+    "scripts/ai-selfplay-process-pool.mjs": "f76add5760a54d863ac7c7db57bc37808a83374530557ee248fbcec29d59baae",
+    "scripts/ai-selfplay-worker-process.mjs": "4da157d8068997c4284af4913473bb84a342887d1f080a26ad3819e3b0725358",
+    "scripts/ai-selfplay-progress.mjs": "1de11c9f4ed7bfbf25f42b37276248c04ded1d29f1fa5011274cbc615344317c"
+  },
+  "benchmark": {
+    "backend": "plain-data",
+    "resultHash": "39358344e0ec19b0202e30298e94ec2c98621e3234c4f286e5f8cfe0fc05b48c",
+    "transitions": 216,
+    "searches": 5,
+    "phases": [
+      "first-player",
+      "champion-select",
+      "mulligan",
+      "action",
+      "showdown"
+    ],
+    "turns": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "performance": {
+      "version": 1,
+      "wallMs": 65716.383,
+      "cloneCalls": 19312,
+      "cloneMs": 50045.27,
+      "legalCalls": 819,
+      "legalCandidates": 10288,
+      "legalMs": 59802.629,
+      "applyCalls": 9533,
+      "applyMs": 6846.668,
+      "inferenceCalls": 0,
+      "inferenceMs": 0,
+      "rolloutCalls": 5,
+      "rolloutCandidates": 14,
+      "rolloutSimulations": 56,
+      "rolloutSteps": 638,
+      "rolloutMs": 30591.379,
+      "gcCount": 0,
+      "gcMs": 0
+    },
+    "nativePerformance": {
+      "version": 1,
+      "wallMs": 123842.501,
+      "cloneCalls": 19312,
+      "cloneMs": 107046.443,
+      "legalCalls": 819,
+      "legalCandidates": 10288,
+      "legalMs": 114181.488,
+      "applyCalls": 9533,
+      "applyMs": 7161.341,
+      "inferenceCalls": 0,
+      "inferenceMs": 0,
+      "rolloutCalls": 5,
+      "rolloutCandidates": 14,
+      "rolloutSimulations": 56,
+      "rolloutSteps": 638,
+      "rolloutMs": 55490.627,
+      "gcCount": 0,
+      "gcMs": 0
+    },
+    "measuredSpeedup": 1.884499653609968
+  },
+  "migrationProbe": {
+    "passed": true,
+    "sourceDatasetKey": "99a06a5ae5ee23a0537616f2f35770b95d572120837cce93148a8127684d56f9",
+    "targetDatasetKey": "probe-target",
+    "sourceEngineFingerprint": "sha256:7d8531a04a7de71881869771ef13fc86eea4c216e48aaee7e2e792a9349f572d",
+    "targetEngineFingerprint": "sha256:fa68b3fd39f2af33d7e6adcae17423e2460f7689af66d8ba09aebdd3b4474ac6",
+    "migratedGames": 3,
+    "migratedTrajectories": 3,
+    "holdoutRolePolicy": "preserve-v1",
+    "roleReassignments": {
+      "unassigned->unassigned": 1,
+      "training->training": 2
+    },
+    "targetBackedUp": false,
+    "backupDirectory": null,
+    "deckSeatScheduleBoundaryGameIndex": 0,
+    "comparedSteps": 325,
+    "validCommittedRecords": 3,
+    "ppoMigration": {
+      "migratedGames": 1,
+      "skippedGames": 0,
+      "alreadyCurrent": false,
+      "sourceCollectionKey": "97c70288bd53fb32cd9945d32dfacf329c1077548423a6fabe0b8c275dd597f5",
+      "targetCollectionKey": "18aa7d357d193d068f9fa39df51aa3bd223fc21714e57be29928bef5be2b180b",
+      "comparedSteps": 42
+    },
+    "completedAt": "2026-09-05T20:47:38.926Z"
+  },
+  "createdAt": "2026-09-05T20:51:00.686Z"
+}

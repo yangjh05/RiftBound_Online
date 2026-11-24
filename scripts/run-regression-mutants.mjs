@@ -414,8 +414,10 @@ const engineMutants = [
   },
   {
     id: "rune-activated-zone-omitted",
-    search: "    ...player.runes.filter((rune) => rune.controllerId === playerId),",
-    replacement: "    // Mutant: Runes are incorrectly omitted from active controlled cards.",
+    search: `  for (const rune of player.runes) {
+    if (rune.controllerId === playerId) pushUniqueCard(cards, seen, rune);
+  }`,
+    replacement: "  // Mutant: Runes are incorrectly omitted from active controlled cards.",
     testName: "Basic Runes bank Energy by exhausting and matching Power by recycling, including while exhausted"
   },
   {
@@ -719,15 +721,22 @@ const engineMutants = [
   },
   {
     id: "hidden-loses-conditional-reaction",
-    search: "    fromHidden: card.hidden === true,",
+    search: "    fromHidden: hiddenGrantsReaction(game, card),",
     replacement: "    fromHidden: false,",
     testName: "a Hidden card gains its conditional Reaction permission beginning on the next turn",
     testFile: "tests/rules-conformance.test.mjs"
   },
   {
+    id: "hidden-loses-reaction-characteristic",
+    search: '  if (keyword.toLowerCase() === "reaction" && hiddenGrantsReaction(game, card)) return true;',
+    replacement: '  // Mutant: ignore Hidden\'s Reaction characteristic.',
+    testName: "Hidden grants the Reaction characteristic from the next turn through the spell's Chain lifetime",
+    testFile: "tests/hidden-reaction-timing.test.mjs"
+  },
+  {
     id: "card-finalization-skips-legality-recheck",
     search: `  if (process.timingPermission === "actionOrReaction") {
-    if (game.phase !== "showdown" || (!card.tags?.includes("Action")
+    if (game.phase !== "showdown" || (!cardHasActionTimingPermission(card)
       && !pendingCardRetainsReactionPermission(game, player, card, payment.destination, process))) {
       return { ok: false, message: "That card is no longer legally timed." };
     }
@@ -793,30 +802,8 @@ const engineMutants = [
   },
   {
     id: "action-item-remains-pending",
-    search: `function finalizePendingActionChainItems(game) {
-  const pending = normalizeActionChainItems(game.actionChain)
-    .filter((item) => item.status === "pending" && pendingCardReadyForFinalize(item));
-  if (!pending.length) return;
-  for (const item of pending) {
-    if (item.playOptions?.playProcess) delete item.playOptions.playProcess.privateLogSnapshot;
-    item.status = "finalized";
-    recordFinalizedCardPlay(game, item);
-    requestCleanup(game, "pending-item-finalized", { itemId: item.id, itemType: item.itemType });
-  }
-  log(game, \`${"${pending.length}"} chain item${"${pending.length === 1 ? \"\" : \"s\"}"} finalized.\`);
-}`,
-    replacement: `function finalizePendingActionChainItems(game) {
-  const pending = normalizeActionChainItems(game.actionChain)
-    .filter((item) => item.status === "pending" && pendingCardReadyForFinalize(item));
-  if (!pending.length) return;
-  for (const item of pending) {
-    if (item.playOptions?.playProcess) delete item.playOptions.playProcess.privateLogSnapshot;
-    item.status = "pending";
-    recordFinalizedCardPlay(game, item);
-    requestCleanup(game, "pending-item-finalized", { itemId: item.id, itemType: item.itemType });
-  }
-  log(game, \`${"${pending.length}"} chain item${"${pending.length === 1 ? \"\" : \"s\"}"} finalized.\`);
-}`,
+    search: "      if (!pendingCardReadyForFinalize(item)) return finalizedAny;",
+    replacement: "      if (!pendingCardReadyForFinalize(item)) return finalizedAny;\n      if (kind === \"action\") return true;",
     testName: "cards and abilities use every first and later two-player Execute window through Finalize",
     testFile: "tests/rules-conformance.test.mjs"
   },
@@ -858,40 +845,18 @@ const engineMutants = [
     testFile: "tests/rules-conformance.test.mjs"
   },
   {
-    id: "resolved-card-trigger-skips-existing-chain",
-    search: `    : context.chainKind === "action"
-      ? "actionChain"`,
-    replacement: `    : context.chainKind === "action"
-      ? "queue"`,
-    testName: "a Pending trigger created during Resolve re-enters Finalize before the next Execute window",
-    testFile: "tests/rules-conformance.test.mjs"
+    id: "headless-resolved-card-trigger-skips-existing-chain",
+    search: `  if (mode === "actionChain" && game.phase === "action" && (game.interactive || game.actionChain)) {
+    const missing = active.filter((trigger) => !pendingTriggerChainItem(game, trigger));`,
+    replacement: `  if (mode === "actionChain" && game.phase === "action" && game.interactive) {
+    const missing = active.filter((trigger) => !pendingTriggerChainItem(game, trigger));`,
+    testName: "PF automatic declarations retain play triggers: dazzlingAurora / disarmingRake",
+    testFile: "tests/promising-future.test.mjs"
   },
   {
     id: "showdown-item-remains-pending",
-    search: `function finalizePendingChainItems(game) {
-  const pending = normalizeChainItems(game.showdown)
-    .filter((item) => item.status === "pending" && pendingCardReadyForFinalize(item));
-  if (!pending.length) return;
-  for (const item of pending) {
-    if (item.playOptions?.playProcess) delete item.playOptions.playProcess.privateLogSnapshot;
-    item.status = "finalized";
-    recordFinalizedCardPlay(game, item);
-    requestCleanup(game, "pending-item-finalized", { itemId: item.id, itemType: item.itemType });
-  }
-  log(game, \`${"${pending.length}"} chain item${"${pending.length === 1 ? \"\" : \"s\"}"} finalized.\`);
-}`,
-    replacement: `function finalizePendingChainItems(game) {
-  const pending = normalizeChainItems(game.showdown)
-    .filter((item) => item.status === "pending" && pendingCardReadyForFinalize(item));
-  if (!pending.length) return;
-  for (const item of pending) {
-    if (item.playOptions?.playProcess) delete item.playOptions.playProcess.privateLogSnapshot;
-    item.status = "pending";
-    recordFinalizedCardPlay(game, item);
-    requestCleanup(game, "pending-item-finalized", { itemId: item.id, itemType: item.itemType });
-  }
-  log(game, \`${"${pending.length}"} chain item${"${pending.length === 1 ? \"\" : \"s\"}"} finalized.\`);
-}`,
+    search: "      if (!pendingCardReadyForFinalize(item)) return finalizedAny;",
+    replacement: "      if (!pendingCardReadyForFinalize(item)) return finalizedAny;\n      if (kind === \"showdown\") return true;",
     testName: "interactive showdown spells can enter manual payment and join the chain"
   },
   {
@@ -1354,7 +1319,7 @@ for (const mutant of engineMutants) {
       .replace('from "../src/engine.mjs";', `from "../src/.mutant-${mutant.id}.mjs";`);
     fs.writeFileSync(mutantEngine, source);
     fs.writeFileSync(mutantTest, testSource);
-    const run = spawnSync(process.execPath, ["--test", `--test-name-pattern=${mutant.testName}`, mutantTest], {
+    const run = spawnSync(process.execPath, ["--test", "--test-reporter=tap", `--test-name-pattern=${mutant.testName}`, mutantTest], {
       cwd: ROOT,
       encoding: "utf8",
       maxBuffer: 10 * 1024 * 1024
@@ -1399,7 +1364,7 @@ function runRuntimeMutant(mutant) {
     fs.writeFileSync(mutantRuntime, runtimeSource);
     fs.writeFileSync(mutantEngine, engineSource);
     fs.writeFileSync(mutantTest, testSource);
-    const run = spawnSync(process.execPath, ["--test", `--test-name-pattern=${mutant.testName}`, mutantTest], {
+    const run = spawnSync(process.execPath, ["--test", "--test-reporter=tap", `--test-name-pattern=${mutant.testName}`, mutantTest], {
       cwd: ROOT,
       encoding: "utf8",
       maxBuffer: 10 * 1024 * 1024
@@ -1421,7 +1386,7 @@ function runDeckRuleMutant(mutant) {
       .replace('from "../src/decks/rules.mjs";', `from "../src/decks/.mutant-${mutant.id}.mjs";`);
     fs.writeFileSync(mutantRules, source);
     fs.writeFileSync(mutantTest, testSource);
-    const run = spawnSync(process.execPath, ["--test", `--test-name-pattern=${mutant.testName}`, mutantTest], {
+    const run = spawnSync(process.execPath, ["--test", "--test-reporter=tap", `--test-name-pattern=${mutant.testName}`, mutantTest], {
       cwd: ROOT,
       encoding: "utf8",
       maxBuffer: 10 * 1024 * 1024
@@ -1456,7 +1421,7 @@ test("official Annie cost mutation is rejected", () => {
 `;
     fs.writeFileSync(mutantCards, source);
     fs.writeFileSync(mutantTest, testSource);
-    const run = spawnSync(process.execPath, ["--test", mutantTest], {
+    const run = spawnSync(process.execPath, ["--test", "--test-reporter=tap", mutantTest], {
       cwd: ROOT,
       encoding: "utf8",
       maxBuffer: 10 * 1024 * 1024

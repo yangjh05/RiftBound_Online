@@ -1,0 +1,7 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>덱별 AI 리그</title><link rel="stylesheet" href="/league.css"></head>
+<body><main><header><div><p class="eyebrow">RIFTBOUND · INDEPENDENT DECK LEAGUE</p><h1>덱별 AI 경쟁 학습</h1><p>7개의 독립 신경망이 각자의 덱으로 서로의 고정 모델과 대전합니다.</p></div><a href="/legacy">이전 학습 기록 ↗</a></header>
+<section class="summary"><strong id="status">상태를 확인하고 있습니다.</strong><span id="resources"></span><span id="updated"></span></section>
+<section id="profiles" class="profiles"></section>
+<section class="panel"><h2>상대별 독립 평가</h2><p>후보와 기존 모델이 같은 덱·상대·시드·좌석·선후공으로 대전한 차이입니다. 선별 평가만 통과한 결과는 승급이 아닙니다.</p><div class="scroll"><table id="matrix"></table></div></section>
+<section class="panel"><h2>학습과 승급의 구분</h2><p>수집 경기 → 자신의 행동으로 학습 → 해당 덱의 교정 보존 검사 → 독립 평가 → 통과한 덱만 교체합니다. 세대 번호는 덱마다 독립적입니다. 다른 덱의 행동을 이 모델의 학습 행동으로 바꾸지 않습니다.</p><p id="queue"></p></section>
+</main><script type="module" src="/league.mjs"></script></body></html>

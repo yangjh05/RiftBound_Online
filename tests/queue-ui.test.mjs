@@ -72,7 +72,8 @@ test("a resolving Chain item remains visible once and reuses its owning Chain it
   assert.match(appSource, /liveItems\.findIndex\(\(item\) => chainPresentationItemsMatch\(resolvingItem, item\)\)/);
   assert.match(appSource, /chainTreePresentationItems = uniqueLiveItems\.map\(snapshotChainPresentationItem\)/);
   assert.match(appSource, /resolutionStillOpen && chainTreePresentationItems\.length/);
-  assert.match(appSource, /chainTreePresentationItems = \[\];\s*return \[\];/);
+  assert.match(appSource, /chainTreePresentationItems = \[\];\s*return cacheChainTreeItems\(\[\], cacheViewerId\);/);
+  assert.match(appSource, /chainTreeCacheRevision === gameStateRevision/);
 });
 
 test("priority response controls contain only the selected reaction actions and pass", () => {

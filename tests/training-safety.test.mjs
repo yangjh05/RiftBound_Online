@@ -261,11 +261,11 @@ test("trajectory gate rejects stale engines and lost legal-action manifests", ()
     engineFingerprint: fingerprint,
     decisionSafetyVersion: 1,
     decisionSafetyViolations: [],
-    steps: [{ selectedActionKey: "a", legalActionKeys: ["a", "b"], originalLegalCount: 2 }]
+    steps: [{ selectedIndex: 0, legalCount: 2, selectedActionKey: "a", legalActionKeys: ["a", "b"], originalLegalCount: 2 }]
   }];
   assert.deepEqual(validateTrainingTrajectories(valid, fingerprint), []);
   assert.match(validateTrainingTrajectories([{ ...valid[0], engineFingerprint: "sha256:stale" }], fingerprint)[0], /엔진 지문/);
-  assert.match(validateTrainingTrajectories([{ ...valid[0], steps: [{ selectedActionKey: "a", legalActionKeys: ["b"], originalLegalCount: 2 }] }], fingerprint)[0], /합법 행동 목록/);
+  assert.match(validateTrainingTrajectories([{ ...valid[0], steps: [{ selectedActionKey: "a", legalActionKeys: ["b"], originalLegalCount: 2 }] }], fingerprint)[0], /encoded action index/);
 });
 
 test("turning-point replay migration accepts only shape- and safety-compatible trajectories", () => {

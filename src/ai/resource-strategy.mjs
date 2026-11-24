@@ -1,4 +1,6 @@
-import { isInherentReaction } from "../rules/keywords.mjs";
+import { currentMight } from "../engine.mjs";
+import { isInherentReaction, keywordListHas } from "../rules/keywords.mjs";
+import { hiddenCardIsControlledBy } from "../rules/zones.mjs";
 import { cards } from "../cards.mjs";
 import { inferOpponentDeckBelief } from "./belief.mjs";
 
@@ -25,7 +27,7 @@ export function reactionReserveProfile(game, playerId) {
   const player = game?.players?.find((candidate) => candidate.id === playerId);
   const opponent = game?.players?.find((candidate) => candidate.id !== playerId);
   if (!player) return emptyReserveProfile();
-  const reactions = (player.hand || []).filter(isInherentReaction);
+  const reactions = responseReserveCards(game, playerId);
   const assessed = reactions.map((card) => assessReactionReserve(game, player, card));
   const affordable = assessed.filter((item) => item.payable);
   const partial = assessed.reduce((sum, item) => sum + item.coverage, 0);
@@ -53,14 +55,37 @@ export function reactionReserveProfile(game, playerId) {
   };
 }
 
-export function opponentResponseProfile(game, viewerId, model = {}) {
+export function isActionResponse(card) {
+  return keywordListHas(card?.keywords, 'Action') || keywordListHas(card?.tags, 'Action');
+}
+
+// Prospective resource coverage, not a claim that a target is legal now.
+export function responseReserveCards(game, playerId) {
+  const player = game.players.find(p=>p.id===playerId);
+  if (!player) return [];
+  const hand = (player.hand||[]).filter(c=>isInherentReaction(c)||isActionResponse(c));
+  const hidden = game.battlefields.flatMap(f=>(f.hidden||[]).filter(h=>hiddenCardIsControlledBy(h,playerId))
+    .map(h=>({...h.card,energy:0,power:[],reserveSource:'hidden'})));
+  const abilities = activeControlledCards(game,player).flatMap(card=>activatedEffectGroups(card).flatMap(specs=>{
+    if (isPureResourceAbilitySpecs(specs) || !specs.some(s=>(s.abilityKeywords||[]).some(k=>/^(Reaction|Action)$/i.test(k)))
+      || specs.some(s=>(s.exhaust||s.exhaustSelf)&&card.exhausted)) return [];
+    // Unsupported additional costs must not be certified from runes alone.
+    if (specs.some(s=>s.killSelfCost||s.recycleSelfCost||s.killFriendlyPermanentCost||s.discardCost
+      ||s.recycleTrashCost||s.costRecycleTrash||s.costSpendBuff||s.requiresLegion||s.condition)) return [];
+    return [{...card,energy:Math.max(...specs.map(s=>Number(s.energyCost)||0)),
+      power:specs.flatMap(s=>s.powerCost||[]),effects:specs,reserveSource:'ability'}];
+  }));
+  return [...hand,...hidden,...abilities];
+}
+
+export function opponentResponseProfile(game, viewerId, model = {}, options = {}) {
   const opponent = game?.players?.find((player) => player.id !== viewerId);
   if (!opponent) return emptyOpponentResponseProfile();
   const belief = inferOpponentDeckBelief(game, viewerId, model?.knowledge || model);
   const candidates = belief.cardProbabilities
     .map((item) => {
       const card = CARD_BY_NUMBER.get(item.cardNumber);
-      if (!card || !isInherentReaction(card)) return null;
+      if (!card || !(isInherentReaction(card) || (game.showdown && !game.showdown.chain?.length && isActionResponse(card)))) return null;
       const affordability = publicCardAffordability(game, opponent, card);
       const probability = affordability.payable ? clamp01(item.probability) : 0;
       return {
@@ -90,7 +115,8 @@ export function opponentResponseProfile(game, viewerId, model = {}) {
     observedPasses: belief.responseEvidence?.observedPasses || 0,
     recentPasses: belief.responseEvidence?.recentPasses || 0,
     passEvidenceStrength: belief.responseEvidence?.strength || 0,
-    topResponses: candidates.slice(0, 5)
+    topResponses: candidates.slice(0, 5),
+    ...(options.includeCandidates ? { responses: candidates } : {})
   };
 }
 
@@ -170,30 +196,9 @@ export function resourceSourceOpportunityCost(before, after, playerId) {
 }
 
 function assessReactionReserve(game, player, card) {
-  const energyCost = Math.max(0, Number(card.energy) || 0);
-  const requirements = powerRequirements(card);
-  const sources = resourceSources(game, player, card).filter((source) => source.ready);
-  const readyRunes = player.runes.filter((rune) => !rune.exhausted);
-  const powerResources = [
-    ...player.runes.map((rune) => ({ domain: rune.domain || "Any", usesReadyRune: !rune.exhausted })),
-    ...sources.flatMap((source) => source.power.map((resource) => ({ ...resource, usesReadyRune: false })))
-  ];
-  const powerMatch = matchPower(powerResources, requirements);
-  // A ready Basic Rune can become either Energy or Power for this payment,
-  // never both. Power allocated from a ready Rune therefore reduces the
-  // remaining Energy capacity; generated resources and exhausted Runes do not.
-  const energyCapacity = sources.reduce((sum, source) => sum + source.energy, 0)
-    + Math.max(0, readyRunes.length - powerMatch.readyRunesUsed);
-  const powerCost = requirements.reduce((sum, requirement) => sum + requirement.amount, 0);
-  const energyCoverage = energyCost ? Math.min(1, energyCapacity / energyCost) : 1;
-  const powerCoverage = powerCost ? Math.min(1, powerMatch.matched / powerCost) : 1;
-  const coverage = Math.min(energyCoverage, powerCoverage);
-  return {
-    cardNumber: card.cardNumber || null,
-    payable: coverage >= 1,
-    coverage,
-    reserveValue: coverage * (1 + Math.min(0.5, energyCost * 0.06 + powerCost * 0.1))
-  };
+  const {energyCost, powerCost, coverage} = publicCardAffordability(game, player, card);
+  return {cardNumber:card.cardNumber||null, payable:coverage>=1, coverage,
+    reserveValue:coverage*(1+Math.min(0.5,energyCost*0.06+powerCost*0.1))};
 }
 
 function publicCardAffordability(game, player, card) {
@@ -355,7 +360,7 @@ function cardIncludesType(card, type) {
 function opponentThreat(game, opponent, playerId) {
   if (!opponent) return 0;
   const units = (game?.battlefields || []).flatMap((field) => (field.units || []).filter((unit) => unit.controllerId === opponent.id));
-  const might = units.reduce((sum, unit) => sum + Math.max(0, Number(unit.might || 0) + Number(unit.mightModifier || 0) + Number(unit.buffs || 0) - Number(unit.damage || 0)), 0);
+  const might = units.reduce((sum, unit) => sum + currentMight(game, unit), 0);
   const controlled = (game?.battlefields || []).filter((field) => field.controlledBy === opponent.id).length;
   const victoryPressure = (opponent.score || 0) >= (game?.victoryScore || 8) - 2 ? 0.5 : 0;
   const activePressure = game?.currentPlayerId === opponent.id && opponent.id !== playerId ? 0.15 : 0;

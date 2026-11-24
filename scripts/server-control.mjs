@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { loadProjectEnv } from "./load-project-env.mjs";
+import { configureBugReportProxyTrust } from "./server-control-config.mjs";
 
 const root = process.cwd();
 loadProjectEnv(root);
@@ -10,6 +11,7 @@ const port = Number(process.env.PORT || 4173);
 const command = process.argv[2] || "restart";
 const flags = new Set(process.argv.slice(3));
 const useTunnel = process.env.TAILSCALE_FUNNEL !== "0" && !flags.has("--no-tunnel");
+if (command === "restart") configureBugReportProxyTrust(process.env, { useTunnel });
 
 if (!["stop", "restart"].includes(command)) {
   console.error("Usage: node scripts/server-control.mjs stop|restart [--no-tunnel]");

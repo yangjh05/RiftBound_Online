@@ -35,6 +35,16 @@ function clickFirst(actions) {
 NativeApp.addListener("backButton", () => {
   if (typeof window.__riftboundDismissTopUiLayer === "function" && window.__riftboundDismissTopUiLayer()) return;
 
+  const emergencyStop = visibleAction("stop-after-ui-error")
+    || [...document.querySelectorAll("[data-ui-exception-stop]")].find((element) => {
+      const style = getComputedStyle(element);
+      return !element.disabled && style.display !== "none" && style.visibility !== "hidden" && element.getClientRects().length > 0;
+    });
+  if (emergencyStop) {
+    emergencyStop.click();
+    return;
+  }
+
   for (const [containerSelector, action] of DISMISS_TARGETS) {
     if (document.querySelector(containerSelector) && clickFirst([action])) return;
   }
@@ -46,6 +56,8 @@ NativeApp.addListener("backButton", () => {
   }
 
   if (clickFirst(["tutorial-menu-back", "menu-home"])) return;
+
+  if (clickFirst(["exit-completed-game"])) return;
 
   const surrender = visibleAction("surrender");
   if (surrender) {

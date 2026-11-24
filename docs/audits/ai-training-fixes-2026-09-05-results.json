@@ -1,0 +1,98 @@
+{
+  "date": "2026-09-05",
+  "status": "passed",
+  "uniqueTests": 361,
+  "suites": {
+    "neural": 259,
+    "existingAiSafetyPerformance": 55,
+    "corrections": 19,
+    "integration": 28
+  },
+  "runs": [
+    {
+      "name": "final-ai-suite",
+      "tests": 331,
+      "passed": 331,
+      "failed": 0,
+      "skipped": 0,
+      "durationMs": 174314.2386
+    },
+    {
+      "name": "final-ai-integration2",
+      "tests": 47,
+      "passed": 47,
+      "failed": 0,
+      "skipped": 0,
+      "durationMs": 4391.675
+    },
+    {
+      "name": "final-corrections",
+      "tests": 26,
+      "passed": 26,
+      "failed": 0,
+      "skipped": 0,
+      "durationMs": 4347.6646
+    },
+    {
+      "name": "final-head-verification",
+      "tests": 259,
+      "passed": 5,
+      "failed": 0,
+      "skipped": 254,
+      "durationMs": 10288.6579
+    }
+  ],
+  "encoding": {
+    "stateDim": 6018,
+    "actionDim": 464,
+    "vocabularySize": 990,
+    "unknownRegisteredCards": 0,
+    "maximumActions": 192,
+    "forcedDecisionActionTensorBytes": 1856,
+    "previousForcedDecisionActionTensorBytes": 356352
+  },
+  "compatibility": {
+    "modelVersion": 6,
+    "learningTargetVersion": 9,
+    "structuredEvidenceVersion": 6,
+    "humanSampleVersion": 3,
+    "legacyChampionLoaded": true,
+    "legacyEvaluatorFamiliesTested": [
+      "flat-v1",
+      "structured-set-v1",
+      "structured-set-v2"
+    ],
+    "checkpointsOverwritten": false
+  },
+  "limits": {
+    "longTrainingOrWinRateEvaluationPerformed": false,
+    "largeBoardMovementEnumeration": "bounded"
+  },
+  "sourceSha256": {
+    "src/ai/actions.mjs": "5548ebedf0bc0f65e9a519710dccb199650ba409f155c79a58a587610deafad7",
+    "src/ai/action-tactics.mjs": "6d5f4022fa942cb86f52b0c0f9893578921fd0ca5601080279e2200f008b0e89",
+    "src/ai/belief.mjs": "0cb2cca4eee5fe975840e4740b20f673e98dbbbf552da564246ac07168f35823",
+    "src/ai/deck-inventory.mjs": "68123796a66a157d11ec2ba80dc811697f00137310e940ea475acb2a509bd981",
+    "src/ai/human-data.mjs": "d909396b4ff84a9726c97e9a55670a0e1c52cb229f1e0ac565b5f779ad128980",
+    "src/ai/observation.mjs": "7b5e0bceb08f2ee77a8b50f8caa5fe8fc84566c2fd31f08038f3310bcacf1fbb",
+    "src/ai/resource-strategy.mjs": "d8fe0ba57ed6f5215a624e16f510342eec16811e93c3333a928b020f0a7c6060",
+    "src/ai/rollout.mjs": "32c5b63164c126158f02ecfc998c2efe85d6f138f19fd04e608b0cfa8cb7a9ab",
+    "src/ai/neural/action-manifest.mjs": "fc55c54634484b8a77a5b64b48458b65d3cc13f33e6217d5e5885e1a47c297b6",
+    "src/ai/neural/encoding.mjs": "89c3c486a8f3d0f9316baf401ee544ec8dcc5668c972b99f2163dc94cca4be4c",
+    "src/ai/neural/imitation.mjs": "c9aee6f1bdd21b0bd566be38d9f71cf8e074a0da42daa0cf34f933791a0b8fcf",
+    "src/ai/neural/model.mjs": "b735a6e475462d0bb9ffd68257551e138087cf71f361a5222790bdcfde3671d6",
+    "src/ai/neural/postmortem.mjs": "32ba1571e3ead7b67a2e81bc29b65be4aa1148f2bd4d39157b0521d7db6e3a36",
+    "src/ai/neural/quality.mjs": "219d277c8cee11708dac1d3333e829c3afda8f31dbb55f10480955f10708f9b0",
+    "src/ai/neural/selfplay.mjs": "c1d3b3001a0b5ff6b5003bc1780115cc89d4d6757a229abf7569b0be94e35e7f",
+    "src/ai/neural/structured-evidence.mjs": "613892e6e5cd864b9f146cc37ef351571462fde18a459d06cc1b36a7c5cead68",
+    "src/ai/neural/teacher.mjs": "707526c3fccde1dc2eb92dc6ca2a76cf2e869b7580d782aa56170b318b6c951b",
+    "src/ai/neural/trainer.mjs": "afff806b2ad565ced050620d6d3c5d0a18617aa39895e5b8f3f0fe16f763cab9",
+    "scripts/train-neural-ai.mjs": "81d336fd00212d7914b66f6754f2b0be7a6d170fad86efad0c23016b7a3c6d82",
+    "scripts/numeric-argument.mjs": "2b5371d90a8a155540de6fe60eed2da114b173903817b4fc47d4e062029c776b",
+    "scripts/training-safety.mjs": "6920928e0b94bb5bab4d8b6e3d37fd4560c8712622b3f342c3f9e2b91ed35d78",
+    "scripts/ai-selfplay-process-pool.mjs": "2a7fffeaacc795c7f70aec0f485384b6ef297fe378437c231307850ecc2fd2dc",
+    "tests/ai-training-corrections.test.mjs": "c26b59cf0fd086ce1e1ef57c217d0b4ba89c20906cb0e76f9084d61dcd9f1481",
+    "tests/ai-neural.test.mjs": "0c5bd0cf4b7951feae99edbfa43e9feb739e312ccd3e96df560fca64674e205c",
+    "tests/ai-turn-worker.test.mjs": "8773fabad033ee15129028ff5be7962be8c51bb8c0e5ef43e2a37bdc62bb8f7d"
+  }
+}

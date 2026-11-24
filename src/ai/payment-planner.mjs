@@ -8,6 +8,7 @@ import {
 } from "./actions.mjs";
 import { DEFAULT_AI_MODEL, evaluateState } from "./policy.mjs";
 import { reactionReserveProfile, resourceSourceOpportunityCost } from "./resource-strategy.mjs";
+import {needsPaymentOptionDecision} from './payment-options.mjs';
 
 const PAYMENT_PLAN_KINDS = new Set([
   "activateCard",
@@ -90,23 +91,19 @@ export function enumeratePaymentPlans(source, options = {}) {
 }
 
 export function choosePaymentPlan(source, options = {}) {
-  // Paying a printed cost is mechanical: spend already-generated pool
-  // resources first, satisfy colored Power, then use any ready Runes for
-  // colorless Energy. Rune color does not change Energy and exhausted Runes
-  // remain usable for later Power, so neural comparison of thousands of
-  // equivalent allocations only wastes self-play time.
+  // Compare complete outcomes for the direct payment and at most eight ADD
+  // sources. Being payable is not a reason to recycle a durable Rune when a
+  // reusable source can pay the same cost at a lower opportunity cost.
   const direct = greedyPaymentPlan(source, options, { allowResourceActivations: false });
-  if (direct) return direct;
-  // Only activate a Legend/Seal resource source when the existing pool and
-  // Basic Runes cannot complete the payment. Execution replans immediately
-  // after the authoritative generated resource ids exist.
-  return fastestResourceActivation(source, options) || greedyPaymentPlan(source, options);
+  const activation = bestResourceActivation(source, options);
+  if (activation && (!direct || activation.score > direct.score + 1e-6)) return activation;
+  return direct || greedyPaymentPlan(source, options);
 }
 
-function fastestResourceActivation(source, options) {
+function bestResourceActivation(source, options) {
   const actorId = source?.pendingPayment?.playerId || activeActorId(source);
   const player = source?.players?.find((candidate) => candidate.id === actorId);
-  if (!actorId || !player) return [];
+  if (!actorId || !player) return null;
   const directRuneIds = new Set((player.runes || []).map((rune) => rune.instanceId));
   const maxBranches = Math.max(1, options.maxResourceBranches || 8);
   const actions = enumerateCommandCandidates(source, actorId)
@@ -116,16 +113,20 @@ function fastestResourceActivation(source, options) {
   for (const action of actions) {
     const branch = cloneGame(source);
     if (!applyAiAction(branch, action, actorId)?.ok || !branch.pendingPayment || branch.pendingChoice) continue;
-    const beforePlayer = source.players.find((candidate) => candidate.id === actorId);
-    const afterPlayer = branch.players.find((candidate) => candidate.id === actorId);
-    const gainedEnergy = Math.max(0, (afterPlayer?.runePool?.energy?.length || 0) - (beforePlayer?.runePool?.energy?.length || 0));
-    const gainedPower = Math.max(0, (afterPlayer?.runePool?.power?.length || 0) - (beforePlayer?.runePool?.power?.length || 0));
-    const opportunity = resourceSourceOpportunityCost(source, branch, actorId);
+    const completed = greedyPaymentPlan(branch, options, { allowResourceActivations: false });
+    if (!completed) continue;
+    // A source with an inapplicable restriction must not be activated merely
+    // because it generated a resource. Verify that the engine used it to pay.
+    const generated = new Set([
+      ...(branch.players.find(p => p.id === actorId)?.runePool?.energy || []),
+      ...(branch.players.find(p => p.id === actorId)?.runePool?.power || [])
+    ].filter(resource => resource.sourceCardId === action.cardId).map(resource => resource.id));
+    if (!completed.actions.some(a => generated.has(a.energyId || a.powerId))) continue;
     plans.push({
       actions: [action],
       game: branch,
       outcomeKey: pendingPaymentKey(branch),
-      score: gainedEnergy * 0.12 + gainedPower * 0.1 - opportunity,
+      score: scorePaymentOutcome(source, completed.game, actorId, options),
       resourceActivation: true
     });
   }
@@ -151,10 +152,14 @@ export function executePaymentPlan(game, plan, actorId = game?.pendingPayment?.p
 }
 
 export function resolvePlannedPayment(game, options = {}) {
+  if (needsPaymentOptionDecision(game)) return {ok:true,complete:false,
+    requiresStrategicChoice:true,actionsApplied:0,plans:[]};
   const plans = [];
   let actionsApplied = 0;
   const maxWindows = Math.max(1, options.maxWindows || 8);
   while (game?.pendingPayment && plans.length < maxWindows) {
+    if (needsPaymentOptionDecision(game)) return {ok:true,complete:false,
+      requiresStrategicChoice:true,actionsApplied,plans};
     const actorId = game.pendingPayment.playerId || activeActorId(game);
     const plan = choosePaymentPlan(game, options);
     if (!plan) {
@@ -251,7 +256,7 @@ function pendingPaymentKey(game) {
   });
 }
 
-function paymentOutcomeKey(game, actorId) {
+export function paymentOutcomeKey(game, actorId) {
   const clone = cloneGame(game);
   delete clone.log;
   delete clone.aiDecisionContext;
@@ -260,7 +265,22 @@ function paymentOutcomeKey(game, actorId) {
   // strategically different.
   delete clone.random;
   delete clone.updatedAt;
-  return `${actorId}:${JSON.stringify(clone)}`;
+  try { return `${actorId}:${JSON.stringify(clone)}`; }
+  catch (error) {
+    // Nested ADD payments can point back to their owning continuation. These
+    // are valid engine graphs, not invalid games. Keep the existing tree key
+    // exactly; encode references only when a graph cannot be JSON serialized.
+    if (!(error instanceof TypeError) || !/circular/i.test(error.message)) throw error;
+    const seen = new Map();
+    const encode = value => {
+      if (value === null || typeof value !== 'object') return ['value', value];
+      if (seen.has(value)) return ['reference', seen.get(value)];
+      const id = seen.size; seen.set(value, id);
+      return [Array.isArray(value) ? 'array' : 'object', id,
+        Object.keys(value).map(key => [key, encode(value[key])])];
+    };
+    return `${actorId}:graph-v1:${JSON.stringify(encode(clone))}`;
+  }
 }
 
 function planKey(actions) {

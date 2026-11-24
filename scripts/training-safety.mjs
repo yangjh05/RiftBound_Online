@@ -1,3 +1,4 @@
+import { validateActionManifest } from "../src/ai/neural/action-manifest.mjs";
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
@@ -16,9 +17,20 @@ const FINGERPRINT_ROOTS = [
   "src/effects",
   "src/rules",
   "src/ai/actions.mjs",
+  "src/ai/clone-state.mjs",
+  "src/ai/combat-safety.mjs",
+  "src/ai/attack-plan.mjs",
+  "src/ai/ready-entry-order.mjs",
+  "src/ai/payment-options.mjs",
+  "src/ai/score-race.mjs",
+  "src/ai/turn-planner.mjs",
+  "src/ai/removal-combo.mjs",
+  "src/ai/tactical-baseline.mjs",
   "src/ai/action-tactics.mjs",
+  "src/ai/damage-context.mjs",
   "src/ai/belief.mjs",
   "src/ai/deck-memory.mjs",
+  "src/ai/deck-inventory.mjs",
   "src/ai/observation.mjs",
   "src/ai/human-data.mjs",
   "src/ai/hand-opportunity.mjs",
@@ -33,6 +45,42 @@ const FINGERPRINT_ROOTS = [
 ];
 
 export function computeEngineFingerprint(root = PROJECT_ROOT) {
+  const raw = computeRawEngineFingerprint(root);
+  let compatibility;
+  try {
+    compatibility = JSON.parse(readFileSync(path.join(root,
+      "scripts", "training-fingerprint-compatibility.json"), "utf8"));
+  } catch { return raw; }
+  return canonicalTrainingFingerprint(raw, compatibility);
+}
+
+// Only a complete, reviewed source digest can reuse a data lineage. Any
+// subsequent engine/AI edit has a different raw digest and fails closed.
+export function canonicalTrainingFingerprint(raw, compatibility) {
+  if (compatibility?.version !== 1 || !/^sha256:[0-9a-f]{64}$/.test(raw)) return raw;
+  const entry = compatibility.entries?.find(item => item.rawFingerprint === raw);
+  const tacticalOnly=entry?.kind==='training-only-tactical-demonstration-v1'
+    && entry.policyActionsPreserved===true && entry.evaluationBehaviorPreserved===true
+    && entry.savedTargetsPreserved===true;
+  const equivalentInference=entry?.kind==='equivalent-evaluation-inference-v1'
+    && entry.policyActionsPreserved===true && entry.evaluationBehaviorPreserved===true
+    && entry.savedTargetsPreserved===true && entry.recurrentMemoryPreserved===true;
+  const equivalentArchive=entry?.kind==='equivalent-archive-io-v1'
+    && entry.policyActionsPreserved===true && entry.evaluationBehaviorPreserved===true
+    && entry.savedTargetsPreserved===true && entry.archivePayloadPreserved===true;
+  const prospectiveReview=entry?.kind==='prospective-evaluation-review-v1'
+    && entry.onPolicyBehaviorPreserved===true && entry.defaultEvaluationBehaviorPreserved===true
+    && entry.savedTargetsPreserved===true && entry.explicitNewRequestIdentity===true;
+  const retentionRepair=entry?.kind==='cycle-safe-payment-key-and-training-retention-v1'
+    && entry.previouslyCompletedGameBehaviorPreserved===true && entry.frozenEvaluationRuntimePinned===true
+    && entry.savedTargetsPreserved===true && entry.encodingsPreserved===true;
+  return (["additive-natural-audit-sampling-v3", "additive-detached-leaf-audit-v1"].includes(entry?.kind) || tacticalOnly || equivalentInference || equivalentArchive || prospectiveReview || retentionRepair)
+    && /^sha256:[0-9a-f]{64}$/.test(entry.compatibleFingerprint || "")
+    && typeof entry.auditReport === "string" && entry.auditReport.length > 0
+    ? entry.compatibleFingerprint : raw;
+}
+
+export function computeRawEngineFingerprint(root = PROJECT_ROOT) {
   const hash = createHash("sha256");
   hash.update(`riftbound-engine-semantics-v${SAFETY_VERSION}\n`);
   for (const relative of listTrainingFingerprintFiles(root)) {
@@ -106,12 +154,8 @@ export function validateTrainingTrajectories(trajectories, engineFingerprint) {
         failures.push(`${key}:${stepIndex}: public information-set hash is missing or invalid.`);
       }
       if (step.decisionType === "sideboard") continue;
-      if (!step.selectedActionKey || !step.legalActionKeys?.includes(step.selectedActionKey)) {
-        failures.push(`${key}:${stepIndex}: 선택 행동을 당시 합법 행동 목록에서 확인할 수 없습니다.`);
-      }
-      if (step.legalActionKeys?.length !== step.originalLegalCount) {
-        failures.push(`${key}:${stepIndex}: 합법 행동 목록이 잘렸거나 손상되었습니다.`);
-      }
+      const manifestError = validateActionManifest(step);
+      if (manifestError) failures.push(`${key}:${stepIndex}: ${manifestError}`);
       if (failures.length >= 100) return failures;
     }
   }
@@ -121,12 +165,26 @@ export function validateTrainingTrajectories(trajectories, engineFingerprint) {
 export function migrateCompatibleTrainingTrajectory(trajectory, engineFingerprint, options = {}) {
   if (!trajectory || trajectory.completed !== true || !trajectory.engineFingerprint) return null;
   if (!(trajectory.steps || []).every((step) => step.state?.length === STATE_DIM
-    && step.actions?.length === MAX_ACTIONS * ACTION_DIM
+    && [step.legalCount * ACTION_DIM, MAX_ACTIONS * ACTION_DIM].includes(step.actions?.length)
     && Number.isInteger(step.selectedIndex)
     && step.selectedIndex >= 0
     && step.selectedIndex < Math.max(1, step.legalCount || 0))) return null;
   const migrated = structuredClone(trajectory);
   const fromEngineFingerprint = migrated.engineFingerprint;
+  if (options.preserveEquivalentTargets === true) {
+    if (options.verifiedEquivalentSemantics !== true
+      || Number(options.learningTargetVersion) !== Number(trajectory.learningTargetVersion)
+      || validateTrainingTrajectories([trajectory], fromEngineFingerprint).length) return null;
+    migrated.engineFingerprint = engineFingerprint;
+    migrated.replayCompatibility = {
+      version: 3,
+      fromEngineFingerprint,
+      toEngineFingerprint: engineFingerprint,
+      policyReturnsPreserved: true,
+      reason: "Verified equivalent runtime; original actions, labels and numerical targets preserved exactly."
+    };
+    return migrated;
+  }
   let strippedTeacherSteps = 0;
   for (const step of migrated.steps || []) {
     step.behaviorTemperature = Math.max(0.05,

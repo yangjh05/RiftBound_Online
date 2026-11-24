@@ -111,6 +111,21 @@ test("match completion emits a viewer-relative victory cue and ranks the finishe
   assert.equal(ranked[0].playerId, "p1");
 });
 
+test("presentation highlight identity tracking is pruned with the bounded highlight history", () => {
+  const state = createPresentationState();
+  advancePresentation(state, snapshot({ scores: [0, 0], turnSequence: 1 }), "p1");
+  for (let score = 1; score <= 24; score += 1) {
+    advancePresentation(state, snapshot({ scores: [score, 0], turnSequence: score + 1 }), "p1");
+  }
+
+  assert.equal(state.highlights.length, 18);
+  assert.equal(state.highlightIds.size, state.highlights.length);
+  assert.deepEqual(
+    [...state.highlightIds].sort(),
+    state.highlights.map((highlight) => highlight.id).sort()
+  );
+});
+
 function snapshot({
   scores = [0, 0],
   phase = "action",

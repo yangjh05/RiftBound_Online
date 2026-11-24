@@ -1,0 +1,132 @@
+✔ PF selection: A reveals first, B can see it, and the other four cards are recycled (42.5717ms)
+✔ PF queues both cards B then A before asking B to pay Power; Energy is waived (25.2061ms)
+✔ PF leaves an unaffordable selected card banished (9.4434ms)
+✔ PF lets both players decline required Power and keeps both cards banished (13.446ms)
+✖ PF Aurora A / Salvage B: Salvage cannot acquire Aurora as a new target on resolution (19.902ms)
+✖ PF Salvage A / Aurora B: Aurora must enter before A declares Salvage targets (10.2095ms)
+✖ PF Aurora A / Disarming Rake B: the later finalized play trigger can destroy Aurora (26.4541ms)
+✖ PF Elder Dragon A / Harnessed Dragon B: both declared play triggers survive their sources dying (17.7654ms)
+✖ PF Lux / Progress Day A / Sabotage B: A draws six before Sabotage inspects the hand (17.2228ms)
+✔ PF Aurora A / Ravenbloom Prefect B: Prefect can banish itself and Aurora (16.3681ms)
+✖ PF double Star-Crossed: B still returns B1 after the shared enemy A1 has left (15.8711ms)
+ℹ tests 11
+ℹ suites 0
+ℹ pass 5
+ℹ fail 6
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 904.4216
+
+✖ failing tests:
+
+test at docs\audits\promising-future-2026-09-25.test.mjs:101:1
+✖ PF Aurora A / Salvage B: Salvage cannot acquire Aurora as a new target on resolution (19.902ms)
+  AssertionError [ERR_ASSERTION]: Aurora must survive: it was not on the board when Salvage finalized
+      at TestContext.<anonymous> (file:///C:/Users/USER/Documents/RiftBound_Online/docs/audits/promising-future-2026-09-25.test.mjs:105:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at docs\audits\promising-future-2026-09-25.test.mjs:108:1
+✖ PF Salvage A / Aurora B: Aurora must enter before A declares Salvage targets (10.2095ms)
+  AssertionError [ERR_ASSERTION]: B gear must enter immediately when its own finalization completes
+      at TestContext.<anonymous> (file:///C:/Users/USER/Documents/RiftBound_Online/docs/audits/promising-future-2026-09-25.test.mjs:112:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at docs\audits\promising-future-2026-09-25.test.mjs:117:1
+✖ PF Aurora A / Disarming Rake B: the later finalized play trigger can destroy Aurora (26.4541ms)
+  AssertionError [ERR_ASSERTION]: Rake must retain its trigger until after Aurora enters
+      at TestContext.<anonymous> (file:///C:/Users/USER/Documents/RiftBound_Online/docs/audits/promising-future-2026-09-25.test.mjs:121:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at docs\audits\promising-future-2026-09-25.test.mjs:124:1
+✖ PF Elder Dragon A / Harnessed Dragon B: both declared play triggers survive their sources dying (17.7654ms)
+  AssertionError [ERR_ASSERTION]: Harnessed Dragon trigger must then kill Elder Dragon
+      at TestContext.<anonymous> (file:///C:/Users/USER/Documents/RiftBound_Online/docs/audits/promising-future-2026-09-25.test.mjs:129:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at docs\audits\promising-future-2026-09-25.test.mjs:132:1
+✖ PF Lux / Progress Day A / Sabotage B: A draws six before Sabotage inspects the hand (17.2228ms)
+  AssertionError [ERR_ASSERTION]: One initial card + PF Lux draw + Progress Day four draws + Progress Day Lux draw
+  
+  6 !== 7
+  
+      at TestContext.<anonymous> (file:///C:/Users/USER/Documents/RiftBound_Online/docs/audits/promising-future-2026-09-25.test.mjs:140:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 6,
+    expected: 7,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at docs\audits\promising-future-2026-09-25.test.mjs:152:1
+✖ PF double Star-Crossed: B still returns B1 after the shared enemy A1 has left (15.8711ms)
+  AssertionError [ERR_ASSERTION]: The second spell must resolve its remaining legal friendly target
+      at TestContext.<anonymous> (file:///C:/Users/USER/Documents/RiftBound_Online/docs/audits/promising-future-2026-09-25.test.mjs:162:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }

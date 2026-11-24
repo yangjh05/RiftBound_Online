@@ -46,6 +46,10 @@ async function openReadyBoard(page) {
     await roll.click();
   }
 
+  await expect(page.locator(".initial-sideboarding-shell")).toBeVisible();
+  for (let playerIndex = 0; playerIndex < 2; playerIndex += 1) {
+    await page.locator('[data-action="sideboard-submit"]:enabled').click();
+  }
   await expect(page.locator(".champion-setup")).toBeVisible();
   for (let playerIndex = 0; playerIndex < 2; playerIndex += 1) {
     const champion = page.locator('[data-action="choose-champion"]:enabled');
@@ -338,14 +342,31 @@ async function installReadableTriggerOrderFixture(page) {
     const game = window.__riftboundGame;
     const player = game.players[0];
     const sources = [player.legend, player.champion].filter(Boolean);
-    const triggers = sources.map((source, index) => ({
-      id: `readability-trigger-order-${index}`,
-      playerId: player.id,
-      kind: "onPlay",
-      sourceCardId: source.instanceId,
-      sourceCardSnapshot: structuredClone(source),
-      data: {}
-    }));
+    if (!sources.length) throw new Error("installReadableTriggerOrderFixture requires an identity card");
+    for (const [index, source] of sources.entries()) {
+      const longName = `아주 긴 동시 유발 카드 이름 ${index + 1}`;
+      const longText = `${Array.from({ length: 14 }, (_, line) => `긴 규칙 문장 ${line + 1}: 선택 순서와 대상, 비용 및 해결 조건을 확인합니다.`).join("\n")}\nLONG_RULE_END`;
+      source.cardNumber = `READABILITY-LONG-TRIGGER-${index + 1}`;
+      source.collectorNumber = source.cardNumber;
+      source.name = longName;
+      source.text = longText;
+      source.translations ||= {};
+      source.translations.ko ||= {};
+      source.translations.ko.name = longName;
+      source.translations.ko.text = longText;
+    }
+    const triggers = Array.from({ length: 8 }, (_, index) => {
+      const source = sources[index % sources.length];
+      return ({
+        id: `readability-trigger-order-${index}`,
+        playerId: player.id,
+        kind: "onPlay",
+        sourceCardId: source.instanceId,
+        sourceCardSnapshot: structuredClone(source),
+        data: {}
+      });
+    });
+    const selectedCount = 4;
     game.phase = "action";
     game.currentPlayerId = player.id;
     game.turnPlayerId = player.id;
@@ -360,12 +381,13 @@ async function installReadableTriggerOrderFixture(page) {
       effect: "triggerOrder",
       prompt: "동시에 유발된 효과의 처리 순서를 선택하세요.",
       options: [
-        ...triggers.map((trigger) => ({
+        ...triggers.map((trigger, index) => ({
           id: trigger.id,
           label: trigger.sourceCardSnapshot?.translations?.ko?.name || trigger.sourceCardSnapshot?.name || "트리거",
           cardId: trigger.sourceCardId,
           optionalTrigger: false,
-          selected: false
+          selected: index < selectedCount,
+          selectionOrder: index < selectedCount ? index + 1 : undefined
         })),
         {
           id: "confirm-readability-trigger-order",
@@ -378,12 +400,12 @@ async function installReadableTriggerOrderFixture(page) {
       data: {
         triggerOrderState: {
           groupIndex: 0,
-          groups: [{ playerId: player.id, triggers, orderedTriggers: [] }]
+          groups: [{ playerId: player.id, triggers, orderedTriggers: triggers.slice(0, selectedCount) }]
         }
       }
     };
     window.__riftboundRender();
-    return { optionCount: triggers.length };
+    return { optionCount: triggers.length, selectedCount };
   });
 }
 
@@ -993,6 +1015,7 @@ test("an active Chain floats over the board center without covering right-side s
 test("complex trigger-order choices float over the board without covering the right action rail", async ({ page }) => {
   const runtimeFailures = captureRuntimeFailures(page);
   await openReadyBoard(page);
+  await page.setViewportSize({ width: 1280, height: 640 });
   await installReadabilityFixture(page);
   const fixture = await installReadableTriggerOrderFixture(page);
 
@@ -1007,6 +1030,72 @@ test("complex trigger-order choices float over the board without covering the ri
   expect.soft(Math.abs(panelCenter - availableCenter), "trigger-order panel must be centered in the board area left of the action rail").toBeLessThanOrEqual(12);
   await expect(panel.locator(".trigger-order-option")).toHaveCount(fixture.optionCount);
   await expect(panel.locator(".trigger-order-effect")).toHaveCount(fixture.optionCount);
+  await expect(panel.locator(".trigger-order-selected li")).toHaveCount(fixture.selectedCount);
+
+  const reachability = await panel.evaluate((element) => {
+    const grid = element.querySelector(".trigger-order-grid");
+    const selected = element.querySelector(".trigger-order-selected ol");
+    return {
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+      gridClientWidth: grid?.clientWidth || 0,
+      gridScrollWidth: grid?.scrollWidth || 0,
+      gridOverflowX: grid ? getComputedStyle(grid).overflowX : "",
+      selectedClientWidth: selected?.clientWidth || 0,
+      selectedScrollWidth: selected?.scrollWidth || 0,
+      selectedOverflowX: selected ? getComputedStyle(selected).overflowX : ""
+    };
+  });
+  expect.soft(reachability.clientHeight, "trigger-order panel must use the available short-screen height").toBeGreaterThanOrEqual(500);
+  expect.soft(reachability.scrollHeight, "trigger-order children must fit inside their fixed workspace").toBeLessThanOrEqual(reachability.clientHeight + 1);
+  expect(["auto", "scroll"]).toContain(reachability.gridOverflowX);
+  expect.soft(reachability.gridScrollWidth, "all trigger cards belong to a horizontal scroller").toBeGreaterThan(reachability.gridClientWidth);
+  expect(["auto", "scroll"]).toContain(reachability.selectedOverflowX);
+  expect.soft(reachability.selectedScrollWidth, "the chosen Chain order remains horizontally reachable").toBeGreaterThan(reachability.selectedClientWidth);
+
+  const optionTrack = panel.locator(".trigger-order-grid");
+  const lastOption = panel.locator(".trigger-order-option-wrap").last();
+  const lastViewButton = lastOption.locator('[data-action="view-choice-card"]');
+  await lastOption.scrollIntoViewIfNeeded();
+  const trackBox = await visibleBox(optionTrack, "trigger-order card track");
+  const lastOptionBox = await visibleBox(lastOption, "last trigger-order option");
+  const lastViewBox = await visibleBox(lastViewButton, "last trigger full-card button");
+  expectContained(lastOptionBox, trackBox, "last trigger option inside its scroller");
+  expectContained(lastViewBox, lastOptionBox, "full-card action inside its trigger option");
+  expectContained(lastViewBox, panelBox, "full-card action inside trigger-order panel");
+
+  await lastViewButton.click();
+  const fullCard = page.locator(".full-card-modal");
+  await expect(fullCard).toBeVisible();
+  const fullCardBox = await visibleBox(fullCard, "full-card modal from trigger order");
+  const closeFullCard = fullCard.locator('[data-action="close-full-card"]');
+  const closeBefore = await visibleBox(closeFullCard, "full-card close button");
+  const fullCardOverflow = await fullCard.evaluate((element) => ({
+    overflowX: getComputedStyle(element).overflowX,
+    overflowY: getComputedStyle(element).overflowY
+  }));
+  const viewport = page.viewportSize();
+  expect(fullCardOverflow).toEqual({ overflowX: "hidden", overflowY: "hidden" });
+  expectContained(fullCardBox, { x: 0, y: 0, width: viewport.width, height: viewport.height }, "full-card modal inside viewport");
+  expectContained(closeBefore, fullCardBox, "full-card close button inside modal");
+  const copyScroll = await fullCard.locator(".full-card-copy").evaluate((element) => {
+    const before = element.scrollTop;
+    element.scrollTop = element.scrollHeight;
+    return {
+      before,
+      after: element.scrollTop,
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+      overflowY: getComputedStyle(element).overflowY
+    };
+  });
+  expect(copyScroll.overflowY).toBe("auto");
+  expect.soft(copyScroll.scrollHeight).toBeGreaterThan(copyScroll.clientHeight);
+  expect.soft(copyScroll.after).toBeGreaterThan(copyScroll.before);
+  const closeAfter = await visibleBox(closeFullCard, "fixed full-card close button after copy scroll");
+  expect.soft(Math.abs(closeAfter.y - closeBefore.y), "copy scrolling must not move the modal header").toBeLessThanOrEqual(1);
+  await closeFullCard.click();
+  await expect(fullCard).toHaveCount(0);
   await assertNoLiteralInvalidValues(page, runtimeFailures);
 });
 

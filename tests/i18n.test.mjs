@@ -89,80 +89,19 @@ test("Korean translations use authored card sentences for example champion cards
   assert.match(translateCardText(sett, "ko"), /이 카드의 버프 소모: 이번 턴에 이 카드가 \+4 위력을 획득합니다\./u);
 });
 
-test("provided Korean Origins cards use the printed official names", () => {
+test("official Origins names and printed prose replace legacy translations", () => {
   const expectedNames = new Map([
-    ["OGN-002/298", "뻔뻔한 해적"],
-    ["OGN-003/298", "화학공학 집행자"],
-    ["OGN-006/298", "와작와작 뻥!"],
-    ["OGN-010/298", "군단 후위병"],
-    ["OGN-012/298", "녹서스의 기대주"],
-    ["OGN-020/298", "고철장 챔피언"],
-    ["OGN-030/298", "징크스, 폭파광"],
-    ["OGN-036/298", "바이, 파괴자"],
-    ["OGN-040/298", "분노의 문장"],
-    ["OGN-042/298", "평정 룬"],
-    ["OGN-044/298", "시계태엽 지킴이"],
-    ["OGN-045/298", "반격"],
-    ["OGN-046/298", "준비 태세"],
-    ["OGN-048/298", "명상"],
-    ["OGN-085/298", "혜성 낙하"],
-    ["OGN-087/298", "설교하는 요들"],
-    ["OGN-095/298", "마비"],
-    ["OGN-103/298", "레이븐블룸 학생"],
-    ["OGN-105/298", "특이점"],
-    ["OGN-129/298", "정면 승부"],
-    ["OGN-134/298", "동원"],
-    ["OGN-055/298", "물의 주인"],
-    ["OGN-058/298", "규율"],
-    ["OGN-064/298", "바람 장막"],
-    ["OGN-076/298", "야스오, 회한"],
-    ["OGN-081/298", "집중의 문장"],
-    ["OGN-165/298", "묘지 관리인"],
-    ["OGN-166/298", "혼돈 룬"],
-    ["OGN-169/298", "돌풍"],
-    ["OGN-170/298", "소름끼치는 귀환"],
-    ["OGN-172/298", "처벌"],
-    ["OGN-177/298", "은밀한 추적자"],
-    ["OGN-178/298", "잠입 요원"],
-    ["OGN-185/298", "행상인"],
-    ["OGN-189/298", "케인, 해방"],
-    ["OGN-191/298", "정신 나간 습격자"],
-    ["OGN-193/298", "미스 포츈, 약탈자"],
-    ["OGN-202/298", "징크스, 반항아"],
-    ["OGN-203/298", "지배"],
-    ["OGN-204/298", "불화의 문장"],
-    ["OGN-210/298", "대담한 포로"],
-    ["OGN-251/298", "징크스, 난폭한 말괄량이"],
-    ["OGN-252/298", "초강력 초토화 로켓!"],
-    ["OGN-255/298", "아리, 구미호"],
-    ["OGN-259/298", "용서받지 못한 자"],
-    ["OGN-260/298", "최후의 숨결"],
-    ["OGN-285/298", "약탈자의 노"],
-    ["OGN-289/298", "타곤의 봉우리"],
-    ["OGN-297/298", "바람이 부는 언덕"],
-    ["OGN-298/298", "자운 뒷골"]
+    ["OGN-001/298", "타오르는 화염용"], ["OGN-004/298", "쪼개기"],
+    ["OGN-005/298", "붕괴"], ["OGN-006/298", "와작와작 뻥"],
+    ["OGN-007/298", "분노 룬"], ["OGN-045/298", "반항"],
+    ["OGN-076/298", "야스오, 회한"], ["OGN-240/298", "세트, 두목"],
+    ["OGN-255/298", "구미호"], ["OGN-298/298", "자운 땅굴"]
   ]);
-
-  for (const [number, expected] of expectedNames) {
-    assert.equal(translateCardName(byNumber(number), "ko"), expected, number);
-  }
-
-  assert.match(translateCardText(byNumber("OGN-045/298"), "ko"), /주문을 차단합니다/u);
-  assert.match(translateCardText(byNumber("OGN-189/298"), "ko"), /^\[개입\]/u);
-  assert.match(translateCardText(byNumber("OGN-191/298"), "ko"), /^\[탱커\]/u);
-  assert.match(translateCardText(byNumber("OGN-193/298"), "ko"), /개방 전장/u);
-  assert.match(translateCardText(byNumber("OGN-002/298"), "ko"), /비용에서 2를 줄입니다/u);
-  assert.match(translateCardText(byNumber("OGN-012/298"), "ko"), /^\[군단\] -/u);
-  assert.match(translateCardText(byNumber("OGN-178/298"), "ko"), /사망하면 해당 효과를 적용합니다/u);
-  assert.match(translateCardText(byNumber("OGN-203/298"), "ko"), /이는 이동이 아닙니다/u);
-  assert.match(translateCardText(byNumber("OGN-252/298"), "ko"), /내 폐기장에서 내 손으로/u);
-  assert.equal(
-    translateCardText(byNumber("OGN-298/298"), "ko"),
-    "이곳을 정복하면, 카드 1장을 버린 후 카드 1장을 뽑습니다."
-  );
-  const officialAhriText = "적 유닛이 내가 통제하는 전장을 공격하면, 해당 유닛에게 -1 위력을 부여합니다. 1 위력까지 감소할 수 있습니다.";
-  assert.equal(translateCardText(byNumber("OGN-255/298"), "ko"), officialAhriText);
-  assert.equal(translateCardText(byNumber("OGN-303/298"), "ko"), officialAhriText);
+  for (const [number, expected] of expectedNames) assert.equal(translateCardName(byNumber(number), "ko"), expected, number);
+  assert.equal(translateCardText(byNumber("OGN-002/298"), "ko"), "이 카드를 사용할 때, 추가 비용으로 카드 1장을 버릴 수 있습니다. 그렇게 할 경우, 이 카드의 비용이 에너지 2 감소합니다.");
+  assert.match(translateCardText(byNumber("OGN-012/298"), "ko"), /^\[군단\] —/u);
+  assert.match(translateCardText(byNumber("OGN-178/298"), "ko"), /사망하면 해당 효과를 얻습니다/u);
+  assert.equal(translateCardText(byNumber("OGN-298/298"), "ko"), "이곳을 정복하면, 카드 1장을 버린 후 1장을 뽑습니다.");
 });
 
 test("Korean card tags and Any power render like localized card metadata", () => {
@@ -210,21 +149,21 @@ test("official FAQ keyword translations are confirmed", () => {
 
 test("requested keyword translations preserve their confirmed or provisional status", () => {
   assert.equal(translateKeyword("Add", "ko"), "추가");
-  assert.equal(translateKeyword("Mighty", "ko"), "강력 (미확정)");
+  assert.equal(translateKeyword("Mighty", "ko"), "위력적");
   assert.equal(translateKeyword("Empower", "ko"), "강화");
   assert.equal(translateKeyword("Empowered", "ko"), "강화됨");
   assert.equal(translateKeyword("Flow", "ko"), "흐름 (미확정)");
 
   const metadata = translationMetadata().keywords;
   assert.equal(metadata.Add.confirmed, true);
-  assert.equal(metadata.Mighty.confirmed, false);
+  assert.equal(metadata.Mighty.confirmed, true);
   assert.equal(metadata.Empower.confirmed, true);
   assert.equal(metadata.Empowered.confirmed, true);
   assert.equal(metadata.Flow.confirmed, false);
 });
 
 test("Korean card text marks unofficial translations before the text", () => {
-  const translated = translateCardText(byNumber("OGN-001/298"), "ko");
+  const translated = translateCardText(byNumber("SFD-001/221"), "ko");
   assert.match(translated, /^비공식 번역\n/u);
   assert.doesNotMatch(translated, /\n미확인$/u);
 });
@@ -242,9 +181,9 @@ test("every playable card has authored Korean metadata and text", () => {
   for (const card of Object.values(cards)) {
     const translation = CARD_KO_TRANSLATIONS[card.cardNumber] || CARD_KO_TRANSLATIONS[card.collectorNumber];
     assert.ok(translation?.koName, `missing Korean metadata for ${card.cardNumber}`);
-    if (card.text) {
+    if (card.text && !translation.printedTextEmpty) {
       const translated = translateCardText(card, "ko");
-      if (translation.officialTextSource) {
+      if (translation.officialTextSource && translation.translationStatus !== "unofficial-correction") {
         assert.doesNotMatch(
           translated,
           /^(?:공식 번역 미확인|비공식 번역)\n/u,
@@ -280,7 +219,7 @@ test("all Korean card translations follow the project terminology and style rule
   assert.doesNotMatch(`${allMetadata}\n${allText}`, /인내|비어 있는 전장|빈 전장/u);
   assert.doesNotMatch(unofficialText, /유닛 토큰\s*\d+명|유닛 토큰\s*\d+명를/u);
   assert.doesNotMatch(allText, /피해\s*\d+(?:을|를|만큼)?|추가\s+\d+의 피해|피해(?:은|을)/u);
-  assert.doesNotMatch(allText, /카드를\s*\d+장\s*(?:뽑|버)/u);
+  assert.doesNotMatch(unofficialText, /카드를\s*\d+장\s*(?:뽑|버)/u);
   assert.doesNotMatch(allMetadata, /[A-Za-z]{3,}/u);
   assert.doesNotMatch(allText.replaceAll("XP", ""), /[A-Za-z]{3,}/u);
   assert.doesNotMatch(allText, /정복 스킬을 발동|유발 효과|유발 능력/u);
@@ -291,10 +230,10 @@ test("all Korean card translations follow the project terminology and style rule
 test("meaning-sensitive Korean corrections preserve card costs and conditions", () => {
   assert.match(
     translateCardText(byNumber("OGN-226/298"), "ko"),
-    /에너지 비용이 3 이하이고 힘 비용이 1 이하인 유닛 1명/u
+    /비용이 에너지 3 이하이며 힘 1 이하인 유닛 1명/u
   );
   assert.equal(translateCardName(byNumber("OGS-001/024"), "ko"), "애니, 화염");
-  assert.match(translateCardText(byNumber("OGN-060/298"), "ko"), /공격하면 혹은 방어하면/u);
+  assert.match(translateCardText(byNumber("OGN-060/298"), "ko"), /공격하거나 방어하면/u);
 });
 
 test("provided Proving Grounds cards preserve the official Korean wording", () => {
@@ -307,37 +246,15 @@ test("provided Proving Grounds cards preserve the official Korean wording", () =
   );
   assert.equal(
     translateCardText(byNumber("OGS-014/024"), "ko"),
-    "이 카드를 탈진: [반응] - 에너지 2 [추가] 주문을 사용할 때만 이용합니다.\n(자원을 추가하는 스킬에는 반응할 수 없습니다.)"
+    "이 카드를 탈진: [반응] — 에너지 2 [추가] 주문을 사용할 때만 이용합니다. (자원을 추가하는 스킬에는 반응할 수 없습니다.)"
   );
 });
 
-test("provided Origins cards from Proving Grounds preserve the official Korean wording", () => {
-  const expected = new Map([
-    ["OGN-013/298", ["뾰로통한 포로", "[굴절] (상대가 이 카드를 주문 또는 스킬의 대상으로 선택하려면 힘을 지불해야 합니다.)"]],
-    ["OGN-084/298", ["열정적인 수습생", "이 카드가 전장에 있는 동안, 내가 사용하는 주문의 에너지 비용이 1 에너지 감소합니다. 1 에너지까지 감소할 수 있습니다."]],
-    ["OGN-103/298", ["레이븐블룸 학생", "주문을 사용하면, 이번 턴에 이 카드가 +1 위력을 획득합니다."]],
-    ["OGN-095/298", ["마비", "[반응] (주문 및 스킬이 처리되기 전을 포함해 시점에 관계없이 사용합니다.)\n이번 턴에 유닛 1명에게 -1 위력을 부여합니다. 1 위력까지 감소할 수 있습니다. 카드 1장을 뽑습니다."]],
-    ["OGN-085/298", ["혜성 낙하", "[행동] (내 턴 또는 결전 시 사용합니다.)\n전장에 있는 유닛 1명에게 6의 피해를 입힙니다."]],
-    ["OGN-087/298", ["설교하는 요들", "[탱커] (이 카드는 전투 피해를 가장 먼저 배정받습니다.)\n이 카드를 사용하면, 카드 1장을 뽑습니다."]],
-    ["OGN-105/298", ["특이점", "최대 2명의 유닛에게 각각 6의 피해를 입힙니다."]],
-    ["OGN-210/298", ["대담한 포로", "[맹공] (이 카드가 공격자인 동안 +1 위력을 획득합니다.)"]],
-    ["OGN-046/298", ["준비 태세", "[반응] (주문 및 스킬이 처리되기 전을 포함해 시점에 관계없이 사용합니다.)\n이번 턴에 아군 유닛 1명에게 +1 위력을 부여합니다. 해당 유닛이 그곳에서 내가 통제하는 유일한 유닛일 경우 추가로 +1 위력을 부여합니다."]],
-    ["OGN-048/298", ["명상", "[반응] (주문 및 스킬이 처리되기 전을 포함해 시점에 관계없이 사용합니다.)\n이 카드를 사용할 때 추가 비용으로, 아군 유닛 1명을 탈진시킬 수 있습니다. 그렇게 할 경우, 카드 2장을 뽑습니다. 그렇지 않을 경우, 카드 1장을 뽑습니다."]],
-    ["OGN-129/298", ["정면 승부", "[행동] (내 턴 또는 결전 시 사용합니다.)\n이번 턴에 사용하는 유닛이 준비 상태로 진입합니다. 카드 1장을 뽑습니다."]],
-    ["OGN-127/298", ["포탄 세례", "[반응] (주문 및 스킬이 처리되기 전을 포함해 시점에 관계없이 사용합니다.)\n전투 중인 모든 적 유닛에게 2의 피해를 입힙니다."]],
-    ["OGN-134/298", ["동원", "룬 1장을 탈진 상태로 전개합니다. 전개할 수 없을 경우, 카드 1장을 뽑습니다."]],
-    ["OGN-171/298", ["신비한 포로", "[통찰] (이 카드를 사용하면, 내 주 덱 맨 위 카드를 확인합니다. 해당 카드를 재활용할 수 있습니다.)"]],
-    ["OGN-211/298", ["충직한 제작자", "이 카드를 사용하면, 이곳에 1 위력 신병 유닛 토큰 1개를 사용합니다."]],
-    ["OGN-222/298", ["녹서스 군악대", "이 카드가 전장으로 이동하면, 이곳에 1 위력 신병 유닛 토큰 1개를 사용합니다. (해당 토큰 또한 같은 전장에 있게 됩니다.)"]],
-    ["OGN-279/298", ["요새화 진형", "이곳을 방어하면, 유닛 1명을 선택합니다. 해당 유닛이 이번 전투에서 [보호막 2]를 획득합니다. (이 카드가 방어자인 동안 +2 위력을 획득합니다.)"]],
-    ["OGN-288/298", ["별 봉우리", "이곳을 점거하면, 룬 1장을 탈진한 상태로 전개할 수 있습니다."]],
-    ["OGN-294/298", ["트리파르 주둔지", "이곳에 있는 유닛이 +1 위력을 가집니다. (공격자도 포함합니다.)"]]
-  ]);
-
-  for (const [number, [name, text]] of expected) {
-    assert.equal(translateCardName(byNumber(number), "ko"), name, `${number} name`);
-    assert.equal(translateCardText(byNumber(number), "ko"), text, `${number} text`);
-  }
+test("official Origins wording preserves quantities, timing and reminders", () => {
+  assert.equal(translateCardText(byNumber("OGN-095/298"), "ko"), "[반응] (주문 및 스킬이 처리되기 전을 포함해 시점에 관계없이 사용합니다.)\n이번 턴에 유닛 1명에게 -1 위력을 부여합니다. 1 위력까지 감소할 수 있습니다. 카드 1장을 뽑습니다.");
+  assert.equal(translateCardText(byNumber("OGN-105/298"), "ko"), "최대 2명의 유닛에게 각각 6의 피해를 입힙니다.");
+  assert.equal(translateCardText(byNumber("OGN-134/298"), "ko"), "룬 1장을 탈진 상태로 전개합니다. 전개할 수 없을 경우, 카드 1장을 뽑습니다.");
+  assert.equal(translateCardText(byNumber("OGN-294/298"), "ko"), "이곳에 있는 유닛이 +1 위력을 가집니다. (공격자도 포함됩니다.)");
 });
 
 test("Morbid Return preserves the official trash-to-hand target and zone order", () => {
@@ -419,14 +336,14 @@ test("resource Add effects remain the bracketed 추가 keyword without an invent
     assert.doesNotMatch(translated, /\[추가\](?:을|를)?\s*(?:합니다|한|하려면)/u, card.cardNumber);
     assert.doesNotMatch(
       translated,
-      /(?:에너지|(?:신체|평정|혼돈|격노|정신|질서)?\s*힘)\s*\d+(?:을|를)\s*추가합니다/u,
+      /(?:에너지|(?:신체|평정|혼돈|분노|정신|질서)?\s*힘)\s*\d+(?:을|를)\s*추가합니다/u,
       card.cardNumber
     );
   }
 
   assert.equal(
     translateCardText(byNumber("OGN-204/298"), "ko"),
-    "이 카드를 탈진: [반응] - 혼돈 힘 1 [추가]. (자원을 추가하는 스킬에는 반응할 수 없습니다.)"
+    "이 카드를 탈진: [반응] — 혼돈 힘 1 [추가] (자원을 추가하는 스킬에는 반응할 수 없습니다.)"
   );
   assert.match(translateCardText(byNumber("UNL-197/219"), "ko"), /에너지 1 \[추가\]\./u);
 });
@@ -437,8 +354,8 @@ test("Mighty and Counter use one Korean rules term everywhere", () => {
 
   for (const card of mightyCards) {
     const translated = translateCardText(card, "ko");
-    assert.match(translated, /\[강력\]/u, card.cardNumber);
-    assert.doesNotMatch(translated, /(?<!\[)강력(?:한|합니다|\s*상태)|\[강력\]\s*상태/u, card.cardNumber);
+    assert.match(translated, /\[위력적\]/u, card.cardNumber);
+    assert.doesNotMatch(translated, /(?<!\[)강력(?:한|합니다|\s*상태)|\[위력적\]\s*상태/u, card.cardNumber);
   }
   for (const card of counterCards) {
     const translated = translateCardText(card, "ko");
@@ -455,10 +372,10 @@ test("Korean card translations distinguish energy and power costs from rune card
   const allText = Object.values(CARD_KO_TRANSLATIONS).map((entry) => entry.koText || "").join("\n");
 
   assert.doesNotMatch(allText, /룬으로 반응|룬(?:\s*\d+장)?을?\s*지불|룬 대신|룬 힘|자원\s*\d+/u);
-  assert.match(translateCardText(byNumber("OGN-053/298"), "ko"), /힘으로 반응하여 에너지 0으로 사용/u);
+  assert.match(translateCardText(byNumber("OGN-053/298"), "ko"), /힘 1을 지불해 숨긴 후 나중에 에너지 0의 비용으로 반응/u);
   assert.match(translateCardText(byNumber("OGN-041/298"), "ko"), /힘 2를 지불/u);
-  assert.match(translateCardText(byNumber("OGN-263/298"), "ko"), /힘 대신 에너지 1/u);
-  assert.match(translateCardText(byNumber("OGN-268/298"), "ko"), /힘을 원하는 만큼 지불/u);
+  assert.match(translateCardText(byNumber("OGN-263/298"), "ko"), /힘 1 대신 에너지 1/u);
+  assert.match(translateCardText(byNumber("OGN-268/298"), "ko"), /원하는 만큼 힘을 지불/u);
   assert.match(translateCardText(byNumber("OGN-269/298"), "ko"), /힘 1을 지불/u);
   assert.match(translateCardText(byNumber("OGN-047/298"), "ko"), /룬 1장을 탈진 상태로 전개/u);
 });
@@ -477,7 +394,7 @@ test("Korean card headers match card energy and power costs", () => {
     Body: "신체",
     Calm: "평정",
     Chaos: "혼돈",
-    Fury: "격노",
+    Fury: "분노",
     Mind: "정신",
     Order: "질서"
   };

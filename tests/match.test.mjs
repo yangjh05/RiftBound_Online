@@ -15,11 +15,13 @@ import {
   skipMulligan
 } from "../src/engine.mjs";
 import { DECK_FORMATS, DECK_RULES, validateDeckRecord } from "../src/decks/rules.mjs";
-import { normalizeSubmittedDeck, validateSubmittedDeck } from "../server/decks.mjs";
+import { normalizeSubmittedDeck, resolveDeckRecord, validateSubmittedDeck } from "../server/decks.mjs";
 import {
+  beginInitialSideboarding,
   beginNextMatchGame,
   createMatchState,
   recordMatchGame,
+  sideboardExchangeCounts,
   submitSideboardConfiguration,
   validateSideboardConfiguration
 } from "../src/match.mjs";
@@ -68,6 +70,105 @@ test("sideboarding preserves the registered pool and immutable deck zones", () =
   assert.equal(validateSideboardConfiguration(registered, candidate, cardByNumber).playable, true);
   candidate.battlefields[0] = registered.battlefields[0];
   assert.equal(validateSideboardConfiguration(registered, candidate, cardByNumber).playable, false);
+});
+
+test("single-game tournament setup reveals random Battlefields before sideboarding and preserves setup through Champion reveal", () => {
+  const decks = [rawDecklists.originsMissFortune, rawDecklists.originsKaisa].map((deck) => structuredClone(deck));
+  const match = createMatchState({
+    decks,
+    sideboardingEnabled: false,
+    setupProcedure: "single-game-sideboard"
+  });
+  const pregame = createGame({
+    decks: decks.map(resolveDeckRecord),
+    format: "duel",
+    setupProcedure: "single-game-sideboard",
+    firstPlayerId: "p2",
+    interactive: true,
+    randomSeed: 31,
+    playerRandomSeeds: { p1: 41, p2: 59 }
+  });
+  assert.equal(pregame.phase, "sideboarding");
+  assert.equal(pregame.firstPlayerId, "p2");
+  assert.equal(pregame.battlefields.length, 2);
+  assert.deepEqual(pregame.players.map((player) => player.champion), [null, null]);
+  assert.deepEqual(pregame.players.map((player) => player.hand.length), [0, 0]);
+  const revealedBattlefields = Object.fromEntries(pregame.players.map((player) => [
+    player.id,
+    pregame.battlefields.find((field) => field.ownerId === player.id).cardNumber
+  ]));
+  assert.equal(beginInitialSideboarding(match, {
+    firstPlayerId: pregame.firstPlayerId,
+    battlefields: revealedBattlefields
+  }).ok, true);
+  assert.equal(match.phase, "initial-sideboarding");
+  assert.equal(submitSideboardConfiguration(match, "p1", decks[0], cardByNumber).ready, false);
+  assert.equal(submitSideboardConfiguration(match, "p1", decks[0], cardByNumber).ok, false, "a locked sideboard cannot be replaced before the opponent submits");
+  assert.equal(submitSideboardConfiguration(match, "p2", decks[1], cardByNumber).ready, true);
+  const next = beginNextMatchGame(match);
+  assert.equal(match.gameNumber, 1, "initial sideboarding does not start game two");
+  assert.equal(next.initialSideboardingComplete, true);
+  assert.equal(next.firstPlayerId, "p2");
+  assert.deepEqual(next.lockedBattlefields, revealedBattlefields);
+
+  const game = createGame({
+    decks: next.decks.map(resolveDeckRecord),
+    format: "duel",
+    setupProcedure: "single-game-sideboard",
+    initialSideboardingComplete: true,
+    firstPlayerId: next.firstPlayerId,
+    lockedBattlefields: next.lockedBattlefields,
+    interactive: true
+  });
+  assert.equal(game.phase, "champion-select");
+  assert.deepEqual(Object.fromEntries(game.battlefields.map((field) => [field.ownerId, field.cardNumber])), revealedBattlefields);
+  const firstSelector = game.players.find((player) => player.id === game.championSelectPlayerId);
+  assert.equal(selectChampion(game, firstSelector.id, firstSelector.availableChampions[0].instanceId).ok, true);
+  assert.deepEqual(game.players.map((player) => player.champion), [null, null], "the first locked Champion is not revealed early");
+  const secondSelector = game.players.find((player) => player.id === game.championSelectPlayerId);
+  assert.equal(selectChampion(game, secondSelector.id, secondSelector.availableChampions[0].instanceId).ok, true);
+  assert.equal(game.players.every((player) => player.champion?.zone === "champion"), true);
+  assert.equal(game.phase, "mulligan");
+  assert.deepEqual(game.players.map((player) => player.hand.length), [4, 4]);
+  assert.equal(game.mulligan.playerId, "p2");
+});
+
+test("a drawn single game completes instead of entering an unreachable second sideboarding cycle", () => {
+  const decks = [rawDecklists.originsMissFortune, rawDecklists.originsKaisa].map((deck) => structuredClone(deck));
+  const match = createMatchState({
+    decks,
+    sideboardingEnabled: false,
+    setupProcedure: "single-game-sideboard"
+  });
+  const result = recordMatchGame(match, {
+    winnerId: null,
+    firstPlayerId: "p1",
+    battlefields: { p1: decks[0].battlefields[0], p2: decks[1].battlefields[0] }
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.complete, true);
+  assert.equal(match.phase, "complete");
+  assert.equal(match.winnerId, null);
+  assert.equal(match.gameNumber, 1);
+});
+
+test("sideboard exchange counts allow either edit order but reject an unfinished imbalance", () => {
+  const registered = structuredClone(rawDecklists.originsKaisa);
+  const draft = structuredClone(registered);
+  const [mainNumber] = draft.main[0];
+  const sideEntry = draft.sideboard.find(([number]) => !draft.main.some(([main]) => main === number));
+  assert.ok(sideEntry);
+  const [sideNumber] = sideEntry;
+  draft.main[0][1] -= 1;
+  if (draft.main[0][1] === 0) draft.main.splice(0, 1);
+  draft.sideboard.push([mainNumber, 1]);
+  assert.deepEqual(sideboardExchangeCounts(registered, draft), { in: 0, out: 1 });
+  assert.equal(validateSideboardConfiguration(registered, draft, cardByNumber).playable, false);
+  sideEntry[1] -= 1;
+  if (sideEntry[1] === 0) draft.sideboard.splice(draft.sideboard.indexOf(sideEntry), 1);
+  draft.main.push([sideNumber, 1]);
+  assert.deepEqual(sideboardExchangeCounts(registered, draft), { in: 1, out: 1 });
+  assert.equal(validateSideboardConfiguration(registered, draft, cardByNumber).playable, true);
 });
 
 test("best-of-three sideboard match lets the loser choose first and ends at two wins", () => {

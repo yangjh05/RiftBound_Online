@@ -45,6 +45,9 @@ const replacements = Object.freeze([
 for (const file of files) {
   const absolute = path.resolve(file);
   const before = fs.readFileSync(absolute, "utf8");
+  if (/translationStatus|officialKoText|officialTextSource/u.test(before)) {
+    throw new Error(`Refusing to rewrite sourced Korean wording in ${file}. Edit unofficial entries separately.`);
+  }
   const after = replacements.reduce((text, [pattern, replacement]) => text.replace(pattern, replacement), before);
   if (after === before) {
     console.log(`${path.relative(process.cwd(), absolute)}: already normalized`);

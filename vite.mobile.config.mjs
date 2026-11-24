@@ -49,6 +49,9 @@ export default defineConfig({
   base: "./",
   publicDir: false,
   plugins: [browserTensorflowRuntime(), mobileBuildInfo()],
+  worker: {
+    format: "es"
+  },
   build: {
     outDir: path.join(root, "mobile-dist"),
     emptyOutDir: true,

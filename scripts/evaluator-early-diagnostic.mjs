@@ -212,6 +212,17 @@ export function splitEvaluatorEarlyDiagnosticRecords(records = [], options = {})
       training.push(record);
       continue;
     }
+    if (record.resultIndex?.naturalLeafAuditCollection === true
+      || Number(record.resultIndex?.leafActionEffectAudit?.natural) > 0) {
+      // Natural records must not compete with outcome-dependent discordant
+      // leaf labels in the multilabel balancer. Keep their split hash-based,
+      // including natural jobs that produced no usable audit reference.
+      const priority = createHash("sha256")
+        .update(`${seed}:natural-validation-v1:${recordKey}`)
+        .digest().readUInt32BE(0) / 0x100000000;
+      (priority < validationFraction ? validation : training).push(record);
+      continue;
+    }
     unassigned.push(record);
   }
   const targetValidationCount = records.length > 1

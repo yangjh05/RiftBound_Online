@@ -114,6 +114,7 @@ export class AccountStore {
   }
 
   async createAuthenticatedResult(user) {
+    this.pruneExpiredSessions();
     const token = randomBytes(32).toString("base64url");
     const expiresAt = Date.now() + SESSION_TTL_MS;
     this.sessions.set(sessionKey(token), {
@@ -126,6 +127,16 @@ export class AccountStore {
       user: publicUser(user),
       deckStore: publicDeckStore(user)
     };
+  }
+
+  pruneExpiredSessions(now = Date.now()) {
+    let removed = 0;
+    for (const [key, session] of this.sessions) {
+      if (session.expiresAt > now) continue;
+      this.sessions.delete(key);
+      removed += 1;
+    }
+    return removed;
   }
 
   async mutate(action) {

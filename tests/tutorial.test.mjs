@@ -8,6 +8,7 @@ import {
   TUTORIAL_CARD_IDS,
   TUTORIAL_IDS,
   tutorialActionAllowed,
+  tutorialLessonSteps,
   tutorialStep
 } from "../src/tutorial.mjs";
 import {
@@ -89,6 +90,25 @@ test("tutorial only permits the action required by the current lesson", () => {
 
 test("all tutorial shells use Origins-era decks and scenario cards", () => {
   assert.equal(TUTORIAL_CATALOG.length, 4);
+  assert.equal(TUTORIAL_CATALOG.find((lesson) => lesson.id === TUTORIAL_IDS.power)?.title, "에너지와 힘");
+  const koreanStepCopy = TUTORIAL_CATALOG.flatMap((lesson) =>
+    tutorialLessonSteps(lesson.id).flatMap((step) => [step.title, step.body, step.hint, step.actionLabel || ""]));
+  assert.doesNotMatch(
+    [
+      ...TUTORIAL_CATALOG.map((lesson) => `${lesson.title} ${lesson.summary} ${lesson.focus}`),
+      ...koreanStepCopy
+    ].join(" "),
+    /파워|메인 덱|점령/u,
+    "all Korean tutorial copy uses the current official terms"
+  );
+  const englishStepCopy = TUTORIAL_CATALOG.flatMap((lesson) =>
+    tutorialLessonSteps(lesson.id, "en").flatMap((step) => [step.title, step.body, step.hint, step.actionLabel || ""]));
+  const englishCatalogCopy = TUTORIAL_CATALOG.flatMap((lesson) =>
+    [lesson.englishTitle, lesson.englishSummary, lesson.englishFocus, lesson.englishDuration]);
+  assert.doesNotMatch([...englishCatalogCopy, ...englishStepCopy].join(" "), /[가-힣]/u,
+    "English tutorial catalog and steps do not fall back to Korean copy");
+  assert.equal(TUTORIAL_CATALOG[0].englishDuration, "About 3 min");
+  assert.equal(tutorialLessonSteps(TUTORIAL_IDS.firstVictory, "en")[0].actionLabel, "Start Practice");
   for (const lesson of TUTORIAL_CATALOG) {
     const game = createTutorialGame(lesson.id);
     const cardsInTutorial = [
@@ -138,6 +158,11 @@ test("spell tutorial declares its target, pays Energy, and resolves the Chain", 
   assert.equal(tutorialStep(game, { handOpen: true }).id, "play-spell");
   assert.equal(beginPlayCard(game, TUTORIAL_CARD_IDS.spell.card, "base").ok, true);
   assert.equal(tutorialStep(game).id, "choose-spell-target");
+  assert.equal(tutorialStep(game, { stagedChoiceId: TUTORIAL_CARD_IDS.spell.target }).id, "confirm-spell-target");
+  assert.equal(tutorialActionAllowed(game, "choose-effect", {
+    choice: TUTORIAL_CARD_IDS.spell.target,
+    card: TUTORIAL_CARD_IDS.spell.target
+  }, { stagedChoiceId: TUTORIAL_CARD_IDS.spell.target }), true);
   assert.equal(chooseEffectOption(game, TUTORIAL_CARD_IDS.spell.target).ok, true);
   assert.equal(tutorialStep(game).id, "select-runes");
   for (const runeId of TUTORIAL_CARD_IDS.spell.runes) {

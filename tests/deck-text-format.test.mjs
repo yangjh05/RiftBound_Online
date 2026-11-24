@@ -72,6 +72,41 @@ test("TXT deck parser accepts the requested section layout and quantities", () =
   assert.equal(sections.sideboard.reduce((total, { count }) => total + count, 0), 10);
 });
 
+test("Legend import accepts both the printed title and Champion-prefixed title", () => {
+  const fixtureCards = [
+    { cardNumber: "TST-001/002", name: "Storm of the Tempest", type: "legend", tags: ["Yordle", "Kennen"] },
+    { cardNumber: "TST-002/002", name: "Kennen, Swift Shuriken", type: "unit", isChampion: true, tags: ["Yordle", "Kennen"] }
+  ];
+  const list = (legendName) => `Legend:
+1 ${legendName}
+
+Champion:
+1 Kennen, Swift Shuriken
+
+MainDeck:
+
+Battlefields:
+
+Rune Pool:
+
+Sideboard:
+`;
+
+  const printedTitle = deckRecordFromText(list("Storm of the Tempest"), { cards: fixtureCards, championMatchesLegend });
+  const prefixedTitle = deckRecordFromText(list("Kennen, Storm of the Tempest"), { cards: fixtureCards, championMatchesLegend });
+  assert.equal(printedTitle.legend, "TST-001/002");
+  assert.equal(prefixedTitle.legend, printedTitle.legend);
+  const registeredKennen = deckRecordFromText(
+    list("Kennen, Heart of the Tempest").replace("Kennen, Swift Shuriken", "Kennen, Storm of Shuriken"),
+    { cards: cardList, championMatchesLegend }
+  );
+  assert.equal(cardByNumber(registeredKennen.legend).name, "Heart of the Tempest");
+  assert.throws(
+    () => deckRecordFromText(list("Ahri, Storm of the Tempest"), { cards: fixtureCards, championMatchesLegend }),
+    (error) => error instanceof DeckTextFormatError && error.issues.some((issue) => issue.includes("unknown card"))
+  );
+});
+
 test("TXT deck export uses the canonical section order and round-trips an existing deck", () => {
   const raw = rawDecklists.provingGroundsMasterYi;
   const record = {

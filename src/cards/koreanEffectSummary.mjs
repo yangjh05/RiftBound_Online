@@ -6,7 +6,7 @@ const TIMING_KO = Object.freeze({
   attackOrDefend: "공격 또는 방어 시",
   beginning: "시작 단계에",
   battlefieldControl: "이 전장을 조종하는 동안",
-  becomesMighty: "유닛이 [강력]이 되면",
+  becomesMighty: "유닛이 [위력적]이 되면",
   buffSpent: "버프를 소모하면",
   cardPlayed: "카드를 사용하면",
   cardHidden: "카드가 숨겨지면",
@@ -223,8 +223,8 @@ const KIND_KO = Object.freeze({
   doubleMightOneOnOneCombat: "일대일 전투에서 자신의 위력을 두 배로 만듭니다",
   draw: "카드를 뽑습니다",
   drawIfAlone: "혼자 죽었다면 카드를 뽑습니다",
-  drawIfMighty: "[강력]인 상태로 죽었다면 카드를 뽑습니다",
-  drawPerFriendlyMightyUnit: "아군 [강력] 유닛 수만큼 카드를 뽑습니다",
+  drawIfMighty: "[위력적]인 상태로 죽었다면 카드를 뽑습니다",
+  drawPerFriendlyMightyUnit: "아군 [위력적] 유닛 수만큼 카드를 뽑습니다",
   drawPerOtherControlledBattlefield: "자신이나 아군이 조종하는 다른 전장 수만큼 카드를 뽑습니다",
   duelFriendlyEnemy: "아군 유닛과 적 유닛이 서로 위력만큼 피해를 입힙니다",
   eachPlayerChannelRunes: "각 플레이어가 룬을 전개합니다",
@@ -280,7 +280,7 @@ const KIND_KO = Object.freeze({
   optionalAdditionalCostReduction: "선택 추가 비용을 줄입니다",
   otherFriendlyNonHandUnitsHaveAccelerate: "손 이외에서 사용하는 다른 아군 유닛에게 가속을 부여합니다",
   payEnergyDraw: "에너지를 지불해 카드를 뽑습니다",
-  payEnergyDrawIfMighty: "[강력] 유닛과 함께 정복했다면 에너지를 지불해 카드를 뽑습니다",
+  payEnergyDrawIfMighty: "[위력적] 유닛과 함께 정복했다면 에너지를 지불해 카드를 뽑습니다",
   payEnergyExhaustDraw: "에너지를 지불하고 자신을 탈진시켜 카드를 뽑습니다",
   payEnergyPlayToken: "에너지를 지불해 토큰을 만듭니다",
   payEnergyReadyLegend: "에너지를 지불해 전설을 준비시킵니다",
@@ -374,7 +374,7 @@ const TOKEN_KO = Object.freeze({
   baronPit: "내셔 남작 둥지 전장", brush: "수풀 전장"
 });
 
-const DOMAIN_KO = Object.freeze({ Body: "신체", Calm: "평정", Chaos: "혼돈", Fury: "격노", Mind: "정신", Order: "질서", Any: "범용" });
+const DOMAIN_KO = Object.freeze({ Body: "신체", Calm: "평정", Chaos: "혼돈", Fury: "분노", Mind: "정신", Order: "질서", Any: "범용" });
 
 export function buildUnofficialCardTranslation(card, koName, printedTextKo = "") {
   return {
@@ -454,7 +454,7 @@ function describeAdditionalCost(cost) {
   if (cost.kind === "optionalXp") return `선택 추가 비용: XP ${cost.amount || 1}을 지불할 수 있습니다.`;
   if (cost.kind === "killFriendlyUnit") return "추가 비용: 아군 유닛 하나를 처치합니다.";
   if (cost.kind === "killFriendlyTaggedUnit") return `추가 비용: 지정 태그의 아군 유닛 하나를 처치합니다 (${(cost.tags || []).map(tagKo).join(", ")}).`;
-  if (cost.kind === "killFriendlyMightyUnit") return `추가 비용: 아군 [강력] 유닛 하나를 처치합니다 (위력 ${cost.minMight || 5} 이상).`;
+  if (cost.kind === "killFriendlyMightyUnit") return `추가 비용: 아군 [위력적] 유닛 하나를 처치합니다 (위력 ${cost.minMight || 5} 이상).`;
   if (cost.kind === "optionalKillFriendlyUnitForCostReduction") return "선택 추가 비용: 아군 유닛 하나를 처치해 사용 비용을 줄일 수 있습니다.";
   return `추가 비용: ${camelKindKo(cost.kind)}.`;
 }
@@ -479,7 +479,7 @@ function effectDetailsKo(effect) {
   if (Number.isFinite(effect.level)) details.push(`필요 XP ${effect.level}`);
   if (Number.isFinite(effect.maxEnergy)) details.push(`에너지 비용 최대 ${effect.maxEnergy}`);
   if (Number.isFinite(effect.maxMight)) details.push(`위력 최대 ${effect.maxMight}`);
-  if (Number.isFinite(effect.mightyThreshold)) details.push(`[강력] 기준 위력 ${effect.mightyThreshold}`);
+  if (Number.isFinite(effect.mightyThreshold)) details.push(`[위력적] 기준 위력 ${effect.mightyThreshold}`);
   if (Number.isFinite(effect.readyCount)) details.push(`최대 ${effect.readyCount}개 준비`);
   if (Number.isFinite(effect.look)) details.push(`덱 위 ${effect.look}장 확인`);
   if (Number.isFinite(effect.repeat)) details.push(`${effect.repeat}회 처리`);
@@ -518,7 +518,7 @@ function effectDetailsKo(effect) {
     channel: "전개할 룬", channelOwner: "소유자가 전개할 룬", controlGearAtLeast: "필요한 도구 수",
     costDiscard: "비용으로 버릴 카드", costEnergyReductionPerFriendlyTemporary: "아군 일시적 유닛 하나당 에너지 감소",
     enemyEnergy: "적 대상 에너지", enemyPower: "적 대상 힘", energyReduction: "에너지 감소",
-    energyPerCardPlayed: "이번 턴 사용한 카드 하나당 에너지 변경", energyPerFriendlyMighty: "아군 [강력] 유닛 하나당 에너지 변경",
+    energyPerCardPlayed: "이번 턴 사용한 카드 하나당 에너지 변경", energyPerFriendlyMighty: "아군 [위력적] 유닛 하나당 에너지 변경",
     energyPerHoldPoint: "이번 턴 점거 점수 하나당 에너지 변경", energyPerTag: "태그 하나당 에너지 변경", energyPerTrash: "폐기장 카드 하나당 에너지 변경",
     excessDamage: "필요 초과 피해", friendlyEnergy: "아군 대상 에너지", friendlyPower: "아군 대상 힘",
     hand: "손의 정확한 카드 수", handSizeAtMost: "손 카드 최대", levelAmount: "레벨 조건 수치", max: "최대 수량",

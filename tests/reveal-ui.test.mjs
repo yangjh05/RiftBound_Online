@@ -25,3 +25,12 @@ test("reveal confirmation keeps its card list scrollable and its confirm action 
   const actions = cssRule(".reveal-confirmation-actions");
   assert.match(actions, /flex:\s*0 0 auto/);
 });
+
+test("revealed hands use a tall card gallery instead of collapsing to a narrow strip", () => {
+  const panel = cssRule(".reveal-confirmation-panel");
+  assert.match(panel, /height:\s*min\(82dvh,\s*720px\)/);
+
+  const cards = cssRule(".revealed-card-grid");
+  assert.match(cards, /grid-auto-rows:\s*max-content/);
+  assert.match(cards, /align-content:\s*start/);
+});

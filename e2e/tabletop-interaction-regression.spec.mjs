@@ -29,6 +29,10 @@ async function openReadyBoard(page) {
     await roll.click();
   }
 
+  await expect(page.locator(".initial-sideboarding-shell")).toBeVisible();
+  for (let playerIndex = 0; playerIndex < 2; playerIndex += 1) {
+    await page.locator('[data-action="sideboard-submit"]:enabled').click();
+  }
   await expect(page.locator(".champion-setup")).toBeVisible();
   for (let playerIndex = 0; playerIndex < 2; playerIndex += 1) {
     const champion = page.locator('[data-action="choose-champion"]:enabled');

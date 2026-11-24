@@ -6,7 +6,7 @@ import { legalMoveDestinationIds, sharedLegalMoveDestinationIds } from "../src/u
 
 const appSource = readFileSync(fileURLToPath(new URL("../src/app.mjs", import.meta.url)), "utf8");
 
-test("movement buttons use the engine-enumerated legal destinations", () => {
+test("movement buttons use the indexed UI legal destinations", () => {
   const legalActions = [
     { kind: "moveUnit", unitId: "ganking-field-unit", destinationId: "field-2" },
     { kind: "moveUnit", unitId: "base-unit", destinationId: "field-1" },
@@ -15,7 +15,8 @@ test("movement buttons use the engine-enumerated legal destinations", () => {
   ];
 
   assert.deepEqual(legalMoveDestinationIds(legalActions, "ganking-field-unit"), ["field-2"]);
-  assert.match(appSource, /legalMoveDestinationIds\(uiLegalActions, card\.instanceId\)/);
+  assert.match(appSource, /function uiUnitMoveDestinationIds\(unitId\)/);
+  assert.match(appSource, /function moveButtons\(card\)[\s\S]{0,220}?uiUnitMoveDestinationIds\(card\.instanceId\)/);
 });
 
 test("a base unit and a Ganking battlefield unit share a standard-move destination", () => {
@@ -30,5 +31,10 @@ test("a base unit and a Ganking battlefield unit share a standard-move destinati
     sharedLegalMoveDestinationIds(legalActions, ["base-unit", "ganking-field-unit"]),
     ["field-2"]
   );
-  assert.match(appSource, /sharedLegalMoveDestinationIds\([\s\S]*?uiLegalActions/);
+  const batchMoveSource = appSource.slice(
+    appSource.indexOf("function batchMoveDestinations"),
+    appSource.indexOf("function logDrawer")
+  );
+  assert.match(batchMoveSource, /enumerateUiMoveUnitsActions\(\s*game,\s*units\.map\(\(unit\) => unit\.instanceId\),\s*viewerPlayerId\(\)\s*\)/);
+  assert.doesNotMatch(batchMoveSource, /sharedLegalMoveDestinationIds|enumerateLegalActions/);
 });

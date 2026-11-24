@@ -1434,7 +1434,9 @@ test("Policy-Q shadow demand collects uncertain action effects before model tuni
   assert.equal(naturalItems.length, 4);
   assert.ok(naturalItems.every((item) =>
     item.missingMetric === "population-regret-confidence-precision"
-      && item.requiredAdditionalGames === 12));
+      && item.targetValidationGames >= 85
+      && item.additionalValidationGames >= 65
+      && item.requiredAdditionalGamesUnit === "collection-games"));
   assert.equal(naturalDemand.items.some((item) =>
     item.evidenceKind === "model-tuning"), false);
 
@@ -1555,7 +1557,9 @@ test("Policy-Q shadow retry expands only Training evidence and targets weak stra
           requiredAdditionalGames: 12
         }]
       }
-    }
+    },
+    POLICY_Q_SHADOW_READINESS_GRID,
+    { trainingAudit: { acceptedGames: base.minimumGames } }
   );
   assert.equal(
     actionEffectExpanded.minimumLeafValuePairs,
@@ -1587,7 +1591,7 @@ test("Policy-Q shadow retry expands only Training evidence and targets weak stra
       }
     },
     POLICY_Q_SHADOW_READINESS_GRID,
-    { currentAcceptedGames: 640 }
+    { trainingAudit: { acceptedGames: 640 } }
   );
   assert.equal(resumedActionEffectExpanded.minimumGames, 656);
   assert.equal(
@@ -1596,7 +1600,7 @@ test("Policy-Q shadow retry expands only Training evidence and targets weak stra
   );
   assert.equal(
     resumedActionEffectExpanded.shadowActionEffectDemand.contract,
-    "policy-q-shadow-action-effect-collection-v2"
+    "policy-q-shadow-training-action-effect-collection-v3"
   );
   const naturalActionEffectFocus = evaluatorBootstrapDiagnosticFocus({
     version: 2,
@@ -2935,7 +2939,8 @@ test("terminal proofs and complete declaration macros bypass only the gates they
     neuralLeafWinRate: 0.7,
     heuristicLeafWinRate: 0.68,
     independentEvaluatorLeafWinRate: 0.66,
-    independentEvaluatorAvailable: true
+    independentEvaluatorAvailable: true,
+    independentEvaluatorPolicyCorrectionEligible: true
   }, [], {
     simulations: 8,
     determinizationAudit: { version: 1, complete: true },
@@ -2946,7 +2951,8 @@ test("terminal proofs and complete declaration macros bypass only the gates they
       neuralLeafWinRate: 0.5,
       heuristicLeafWinRate: 0.48,
       independentEvaluatorLeafWinRate: 0.47,
-      independentEvaluatorAvailable: true
+      independentEvaluatorAvailable: true,
+    independentEvaluatorPolicyCorrectionEligible: true
     }
   });
   assert.equal(macro.correctionEligible, true);
@@ -3689,7 +3695,7 @@ test("critical decision routing preserves a paired multi-unit alternative for te
   const profile = criticalTacticalDecisionProfile(game, actor.id, decision);
   assert.equal(profile.critical, true);
   assert.equal(profile.types.includes("movement-group-comparison"), true);
-  assert.deepEqual(profile.requiredActions, [group]);
+  assert.deepEqual(profile.requiredActions, [{ kind: "endTurn" }, group]);
   const postmortemTeacher = simulationTeacherDecision(game, actor.id, decision.legalActions, {
     requiredAction: single,
     requiredActions: profile.requiredActions,
@@ -3702,6 +3708,8 @@ test("critical decision routing preserves a paired multi-unit alternative for te
   });
   assert.ok(postmortemTeacher.alternatives.some((alternative) =>
     actionKey(alternative.action) === actionKey(group)));
+  assert.ok(postmortemTeacher.alternatives.some((alternative) =>
+    alternative.action.kind === "endTurn"));
   assert.ok(postmortemTeacher.search.stages[0].simulations <= 4);
   assert.equal(postmortemTeacher.correctionEligible !== true
     || (postmortemTeacher.confirmation?.independent === true
@@ -6202,8 +6210,8 @@ test("compatible evaluator migration preserves structured v2 evidence under the 
 test("action certification queue reserves only the estimated current-role work and prefetches the next holdout", () => {
   const complete = {
     acceptedGames: 100,
-    actionReferenceCount: 50,
-    actionReferenceGameCount: 50,
+    actionReferenceCount: 50,    structuredV2ActionReferenceCount: 50,
+    actionReferenceGameCount: 50,    structuredV2ActionReferenceGameCount: 50,
     missingActionReferenceCoverage: [],
     samplingModes: { "action-ranking-audit": 300 }
   };
@@ -6211,20 +6219,20 @@ test("action certification queue reserves only the estimated current-role work a
     certificationPartitions: {
       development: {
         ...complete,
-        actionReferenceCount: 48,
+        actionReferenceCount: 48,        structuredV2ActionReferenceCount: 48,
         actionReferenceGameCount: 48
       },
       confirmation: {
         acceptedGames: 20,
-        actionReferenceCount: 4,
-        actionReferenceGameCount: 4,
+        actionReferenceCount: 4,        structuredV2ActionReferenceCount: 4,
+        actionReferenceGameCount: 4,        structuredV2ActionReferenceGameCount: 4,
         missingActionReferenceCoverage: [],
         samplingModes: { "action-ranking-audit": 24 }
       },
       "final-audit": {
         acceptedGames: 0,
-        actionReferenceCount: 0,
-        actionReferenceGameCount: 0,
+        actionReferenceCount: 0,        structuredV2ActionReferenceCount: 0,
+        actionReferenceGameCount: 0,        structuredV2ActionReferenceGameCount: 0,
         missingActionReferenceCoverage: [],
         samplingModes: {}
       }
@@ -6250,8 +6258,8 @@ test("action certification queue reserves only the estimated current-role work a
 test("action certification queue does not pad unused capacity with completed-role work", () => {
   const nearlyComplete = (phase) => ({
     acceptedGames: 100,
-    actionReferenceCount: 50,
-    actionReferenceGameCount: 50,
+    actionReferenceCount: 50,    structuredV2ActionReferenceCount: 50,
+    actionReferenceGameCount: 50,    structuredV2ActionReferenceGameCount: 50,
     actionReferencePhaseCoverage: {
       early: 5,
       mid: 5,
@@ -6287,8 +6295,8 @@ test("action certification queue does not pad unused capacity with completed-rol
 test("action evidence collection uses full bulk windows until the remaining yield fits inside the previous bulk", () => {
   const complete = {
     acceptedGames: 100,
-    actionReferenceCount: 50,
-    actionReferenceGameCount: 50,
+    actionReferenceCount: 50,    structuredV2ActionReferenceCount: 50,
+    actionReferenceGameCount: 50,    structuredV2ActionReferenceGameCount: 50,
     missingActionReferenceCoverage: [],
     missingActionReferencePhaseCoverage: [],
     missingActionReferenceActionClassCoverage: [],
@@ -6297,8 +6305,8 @@ test("action evidence collection uses full bulk windows until the remaining yiel
   };
   const largeGap = {
     ...complete,
-    actionReferenceCount: 40,
-    actionReferenceGameCount: 40,
+    actionReferenceCount: 40,    structuredV2ActionReferenceCount: 40,
+    actionReferenceGameCount: 40,    structuredV2ActionReferenceGameCount: 40,
     samplingModes: { "action-ranking-audit": 80 }
   };
   const audit = {
@@ -6319,7 +6327,7 @@ test("action evidence collection uses full bulk windows until the remaining yiel
     certificationPartitions: {
       development: {
         ...largeGap,
-        actionReferenceCount: 46,
+        actionReferenceCount: 46,        structuredV2ActionReferenceCount: 46,
         actionReferenceGameCount: 46
       },
       confirmation: complete,
@@ -6497,10 +6505,11 @@ test("leaf certification demand counts quantitative phase deficits", () => {
       [focus.phaseBand]: (counts[focus.phaseBand] || 0) + 1
     }), {});
   assert.deepEqual(phaseAllocations, {
-    mulligan: 28,
-    early: 21,
-    mid: 20,
-    late: 1
+    mulligan: 14,
+    early: 10,
+    mid: 10,
+    late: 1,
+    undefined: 35
   });
 });
 
@@ -6577,7 +6586,7 @@ test("balanced evaluator records preserve the complete role evidence contract", 
             workerIndex: gameIndex % 4,
             gameIndex,
             samplingMode: "action-ranking-audit",
-            resultIndex: {
+            resultIndex: currentEvidenceIndexFixture({
               version: 5,
               valid: true,
               gameCoverage: { [coverageKey]: 1 },
@@ -6600,7 +6609,7 @@ test("balanced evaluator records preserve the complete role evidence contract", 
               actionAuditRacing: {},
               logicalGames: 1,
               physicalGames: 1
-            }
+            })
           });
           gameIndex += 1;
         }
@@ -7017,7 +7026,7 @@ test("evaluator bootstrap requires action and leaf evidence in every phase", () 
         workerIndex: index,
         gameIndex: `${phase}-${index}`,
         samplingMode: "uniform-balanced",
-        resultIndex: {
+        resultIndex: currentEvidenceIndexFixture({
           version: EVALUATOR_BOOTSTRAP_RESULT_INDEX_VERSION,
           valid: true,
           gameCoverage: {},
@@ -7038,7 +7047,7 @@ test("evaluator bootstrap requires action and leaf evidence in every phase", () 
           actionAuditRacing: {},
           logicalGames: 1,
           physicalGames: 1
-        }
+        })
       };
     })
   );
@@ -7083,7 +7092,7 @@ test("evaluator bootstrap requires each deck to contribute mid and late evidence
         workerIndex: index,
         gameIndex: `${phase}-${index}`,
         samplingMode: "uniform-balanced",
-        resultIndex: {
+        resultIndex: currentEvidenceIndexFixture({
           version: EVALUATOR_BOOTSTRAP_RESULT_INDEX_VERSION,
           valid: true,
           gameCoverage: { [`${deckId}:p1`]: 1 },
@@ -7105,7 +7114,7 @@ test("evaluator bootstrap requires each deck to contribute mid and late evidence
           actionAuditRacing: {},
           logicalGames: 1,
           physicalGames: 1
-        }
+        })
       };
     })
   );
@@ -7142,7 +7151,7 @@ test("evaluator bootstrap requires each deck to contribute mid and late evidence
 });
 
 test("evaluator bootstrap deduplicates phase and action-class counts by reference identity", () => {
-  const resultIndex = (gameIndex) => ({
+  const resultIndex = (gameIndex) => currentEvidenceIndexFixture({
     version: EVALUATOR_BOOTSTRAP_RESULT_INDEX_VERSION,
     valid: true,
     gameCoverage: { "deck:p1": 1 },
@@ -7958,7 +7967,7 @@ test("human coaching decisions persist as sparse public training samples", () =>
 
 test("released card pools are cumulative and Origins excludes later packs", () => {
   const counts = CARD_POOL_FORMATS.map((pool) => cardNumbersForPool(pool.id).size);
-  assert.deepEqual(counts, [383, 395, 413]);
+  assert.deepEqual(counts, [384, 605, 824, 990]);
   assert.equal(counts.every((count, index) => index === 0 || count > counts[index - 1]), true);
   const spiritforgedCard = Object.values(cards).find((card) => card.cardNumber.startsWith("SFD-"));
   assert.equal(cardAllowedInPool(spiritforgedCard, "origins-era"), false);
@@ -8934,7 +8943,10 @@ test("evaluator early shadow development warns first and only stops repeated fix
     reason: "observed-performance-risk",
     deckSeat: "origins-leona:p2",
     phaseBand: "mid",
-    actionClass: "target-effect-choice"
+    actionClass: "target-effect-choice",
+    auditDistribution: null,
+    missingMetric: null,
+    requiredAdditionalGames: 0
   });
   assert.equal(evaluatorBootstrapDiagnosticTaskFocus(atomicFocus, 3), null);
   assert.deepEqual(
@@ -9825,9 +9837,9 @@ test("self-play dynamic scaling preserves the reserve and observed worker headro
 });
 
 test("self-play process pool scales up and retires a busy worker after memory pressure", async () => {
-  const startedAt = Date.now();
   let sawScaleUp = false;
   let sawScaleDown = false;
+  let memoryPressure = false;
   const collected = await collectProcessPoolSelfPlay({
     games: 20,
     workers: 4,
@@ -9837,12 +9849,9 @@ test("self-play process pool scales up and retires a busy worker after memory pr
     dynamicScaleIntervalMs: 1_000,
     dynamicWorkerHeadroomBytes: 256 * 1024 ** 2,
     minimumFreeMemoryBytes: 100,
-    freeMemoryBytes: () => {
-      const elapsed = Date.now() - startedAt;
-      return elapsed >= 1_500 && elapsed < 2_800
-        ? 50
-        : 10 * 1024 ** 3;
-    },
+    // Apply pressure once two workers are actually busy. Model initialization
+    // and loaded machines can outlast a short wall-clock pressure window.
+    freeMemoryBytes: () => memoryPressure ? 50 : 10 * 1024 ** 3,
     workerPath: path.resolve(
       "tests/fixtures/ai-selfplay-delayed-worker.mjs"
     ),
@@ -9858,6 +9867,7 @@ test("self-play process pool scales up and retires a busy worker after memory pr
         && snapshot.peakProcessCount >= 2;
       sawScaleDown ||= snapshot.desiredProcessCount === 1
         && snapshot.peakProcessCount >= 2;
+      memoryPressure = !sawScaleDown && sawScaleUp && snapshot.active.length >= 2;
     }
   });
   assert.equal(collected.workerStats.collectedGames, 20);
@@ -12208,3 +12218,21 @@ test("advanced deck mutations preserve card count, rune count and unique battlef
   assert.equal(sideboardMutated.sideboard.length <= DECK_RULES.sideboardMax, true);
   assert.equal(sideboardMutated.main.length, deck.main.length);
 });
+
+function currentEvidenceIndexFixture(overrides) {
+  const empty = createEvaluatorBootstrapResultIndex({
+    summaries: [{ completed: true, naturallyCompleted: true }], trajectories: []
+  });
+  const index = { ...empty, ...overrides,
+    version: EVALUATOR_BOOTSTRAP_RESULT_INDEX_VERSION,
+    stratumVersion: EVALUATOR_AUDIT_STRATUM_VERSION };
+  for (const suffix of ["Coverage", "PhaseCoverage", "ActionClassCoverage", "DeckPhaseCoverage"]) {
+    index["structuredV2ActionReference" + suffix] = { ...(index["actionReference" + suffix] || {}) };
+  }
+  for (const suffix of ["Coverage", "PhaseCoverage", "DeckPhaseCoverage"]) {
+    index["structuredV2LeafValue" + suffix] = { ...(index["leafValue" + suffix] || {}) };
+  }
+  index.structuredV2ActionReferenceIdentities = (index.actionReferenceIdentities || []).map((item) => item.identity);
+  index.structuredV2LeafValuePairCount = index.leafValuePairCount || 0;
+  return index;
+}

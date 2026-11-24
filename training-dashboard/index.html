@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Riftbound AI의 실시간 학습 세대, 평가 승률, 덱별 변화와 승급평가를 확인합니다.">
+  <meta name="color-scheme" content="dark">
+  <title>AI 학습 현황 · Riftbound</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='10' fill='%230f1725'/%3E%3Cpath d='M10 29V11h11l7 7-7 6 8 5M10 22h11' fill='none' stroke='%235ee7cd' stroke-width='3'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/dashboard.css">
+  <script type="module" src="/dashboard.mjs"></script>
+</head>
+<body>
+  <header class="topbar"><a class="brand" href="/" aria-label="Riftbound AI 학습 현황"><span class="brand-mark">R</span><span>RIFTBOUND <span class="brand-light">/ AI LAB</span></span></a><div class="connection"><span id="connection-dot" class="dot"></span><span id="connection">연결 중</span><span class="divider">|</span><time id="updated">—</time><button id="refresh" class="icon-button" aria-label="지금 새로고침">↻</button></div></header>
+  <main>
+    <div class="page-title"><div><div class="eyebrow">LEARNING CONTROL ROOM</div><h1>AI 학습 현황 <span class="title-tag">학습 · 비교 · 검증</span></h1></div><div class="run-label"><span id="run-name">현재 학습 기록을 확인하고 있습니다.</span><span class="muted">3초 간격 자동 갱신</span></div></div>
+    <div id="notice" class="notice" role="status" hidden></div>
+    <div id="loading" class="loading">학습 데이터와 평가 기록을 불러오고 있습니다…</div>
+    <div id="workspace" hidden>
+      <nav class="view-tabs" role="tablist" aria-label="학습 대시보드 화면">
+        <button role="tab" id="tab-overview" data-view="overview" aria-controls="view-overview" aria-selected="true">진행 상황 <span>Overview</span></button>
+        <button role="tab" id="tab-evaluation" data-view="evaluation" aria-controls="view-evaluation" aria-selected="false" tabindex="-1">공식 승급평가 <span>Promotion</span></button>
+        <button role="tab" id="tab-decks" data-view="decks" aria-controls="view-decks" aria-selected="false" tabindex="-1">덱 · 별도 학습 <span>Decks</span></button>
+        <button role="tab" id="tab-diagnostics" data-view="diagnostics" aria-controls="view-diagnostics" aria-selected="false" tabindex="-1">학습 기록 <span>Diagnostics</span></button>
+      </nav>
+      <section id="view-overview" role="tabpanel" aria-labelledby="tab-overview">
+        <div id="system-summary" class="system-summary"></div>
+        <div class="section-label"><span>01 / CONTINUOUS LEARNING</span><h2>본학습과 검증된 기준점</h2></div>
+        <div class="learning-grid"><section class="panel main-learning" id="main-learning"></section><section class="panel anchor-panel" id="anchor-summary"></section></div>
+        <section class="panel comparison-panel" aria-labelledby="comparison-title">
+          <div class="panel-heading"><div><div class="eyebrow">02 / STARTING POINT COMPARISON</div><h2 id="comparison-title">어디서 다시 배우는 것이 나을까요?</h2></div><span id="comparison-status" class="badge"></span></div>
+          <p class="section-intro">챔피언과 현재 학습 모델을 같은 조건으로 훈련하고, 새 대전으로 더 나은 학습 출발점을 확인합니다.</p>
+          <div id="comparison-flow"></div><div id="comparison-arms" class="comparison-arms"></div>
+          <div id="comparison-evidence"></div>
+          <details class="structure-details"><summary>학습 조건과 교정 사례 보존 검사</summary><div id="comparison-contract"></div></details>
+        </section>
+        <div class="section-label"><span>03 / PARALLEL WORK</span><h2>함께 진행 중인 작업</h2></div>
+        <div id="parallel-work" class="parallel-work"></div>
+      <section class="priority-panel" aria-labelledby="priority-title"><div><h2 id="priority-title">학습 프로세스 우선순위</h2><p>실행 중인 학습과 이후 생성되는 프로세스에 적용됩니다.</p></div><div class="priority-controls"><div id="priority-buttons" class="segmented" role="group" aria-label="학습 프로세스 우선순위"><button data-priority="low">낮음</button><button data-priority="below-normal">낮은 보통</button><button data-priority="normal">보통</button><button data-priority="above-normal">높은 보통</button><button data-priority="high">높음</button></div><div id="priority-status" class="muted" role="status">프로세스를 확인하고 있습니다.</div></div></section>
+      </section>
+      <section id="view-evaluation" role="tabpanel" aria-labelledby="tab-evaluation" hidden>
+<div class="section-label"><span>FROZEN CANDIDATE · OFFICIAL GATE</span><h2>고정된 후보와 챔피언의 공식 대전</h2></div><p class="section-intro">학습 중인 모델과 평가 중인 후보는 다를 수 있습니다. 출발점 비교 실험의 성적은 이 승률에 섞이지 않습니다.</p>
+      <section class="metrics" aria-label="주요 학습 지표">
+        <article class="metric accent"><span class="metric-label">평가 후보 · 고정 모델</span><div class="metric-value"><span id="generation">—</span><small>세대</small></div><p id="generation-detail">—</p></article>
+        <article class="metric"><span class="metric-label">상대 챔피언 <span id="stage-badge" class="badge">—</span></span><div class="metric-value"><span id="progress-percent">—</span><small id="progress-unit">세대</small></div><p id="progress-detail">—</p></article>
+        <article class="metric"><span class="metric-label">공식 평가대전</span><div class="metric-value"><span id="evaluation-games">—</span><small>경기</small></div><p id="evaluation-detail">—</p></article>
+        <article class="metric"><span class="metric-label">공식 평가 승률</span><div class="metric-value"><span id="win-rate">—</span><small>%</small></div><p id="win-detail">—</p></article>
+      </section>
+      <section class="forecast-grid" aria-label="예상 결과와 종료시간">
+        <article class="panel forecast-panel"><div class="panel-heading"><h2>현재 평가 예상 결과</h2><span class="badge">추정</span></div><div id="forecast-outcome" class="forecast-value">추정 자료 수집 중</div><p id="forecast-result" class="forecast-detail"></p><p id="forecast-method" class="forecast-note"></p></article>
+        <article class="panel forecast-panel"><div class="panel-heading"><h2>평가 예상 종료시간</h2><span id="evaluation-eta-badge" class="badge">추정</span></div><div id="evaluation-eta" class="forecast-value">계산 중</div><p id="evaluation-eta-detail" class="forecast-detail"></p><p id="evaluation-eta-range" class="forecast-note"></p></article>
+        <article class="panel forecast-panel"><div class="panel-heading"><h2>현재 세대 예상 완료</h2><span class="badge">추정</span></div><div id="training-eta" class="forecast-value">계산 중</div><p id="training-eta-detail" class="forecast-detail"></p><p class="forecast-note">연속 학습 전체에는 정해진 종료시간이 없습니다.</p></article>
+      </section>
+      <div class="main-grid">
+        <section class="panel live-panel"><div class="panel-heading"><div><div class="eyebrow">LIVE EVALUATION</div><h2 id="live-title">평가 중 누적 승률</h2></div><span id="live-badge" class="badge">—</span></div><div id="live-summary" class="chart-summary"></div><div id="live-chart" class="chart" aria-label="평가 경기 수에 따른 누적 승률"></div><div class="chart-footer"><span>승률 = 승리 / 유효 경기 · 점선 50%</span><span id="live-progress"></span></div><div class="meter"><span id="evaluation-meter"></span></div></section>
+        <section class="panel promotion-panel"><div class="panel-heading"><div><div class="eyebrow">PROMOTION</div><h2>최근 승급평가 결과</h2></div><span id="promotion-badge" class="badge">—</span></div><div id="promotion-content"></div></section>
+      </div>
+      <section class="panel"><div class="panel-heading"><h2>현재 평가의 덱 조합</h2><span id="matchup-format" class="badge"></span></div><p id="matchup-summary" class="note"></p><div class="table-wrap"><table><thead><tr><th>덱 조합</th><th>유형</th><th>경기</th><th>후보 승률</th></tr></thead><tbody id="matchup-stats"></tbody></table></div><p class="note">두 모델의 상대 평가입니다. 다른 덱 대전은 두 모델이 덱과 선후공을 번갈아 맡습니다. 조합별 소수 경기의 승률만으로 해당 상성의 우위를 확정하지 않습니다.</p></section>
+      <section class="panel deck-panel"><div class="panel-heading"><div><div class="eyebrow">DECK PERFORMANCE</div><h2>덱별 승률 변화</h2></div><div class="segmented compact" role="group" aria-label="평가 종류"><button data-purpose="champion-promotion" aria-pressed="true">승급평가</button><button data-purpose="tactical-baseline-progress" aria-pressed="false">고정 기준 AI</button></div></div><div id="deck-legend" class="legend"></div><div id="deck-chart" class="chart deck-chart" aria-label="평가 후보 세대별 덱 승률"></div><p class="chart-footer" id="deck-note"></p><div id="deck-stats" class="deck-stats"></div></section>
+      <section class="panel history-panel"><div class="panel-heading"><div><div class="eyebrow">EVALUATION HISTORY</div><h2>평가 기록</h2></div><span id="history-total" class="muted"></span></div><div class="table-wrap"><table><caption class="sr-only">현재 학습 실행의 평가 이력</caption><thead><tr><th>평가</th><th>종류</th><th>후보 / 상대 세대</th><th>경기 수</th><th>승률</th><th>통계 판정 구간</th><th>결과</th></tr></thead><tbody id="history"></tbody></table></div></section>
+      </section>
+      <section id="view-decks" role="tabpanel" aria-labelledby="tab-decks" hidden>
+      <section id="main-integration" class="panel integration-panel" aria-labelledby="main-integration-title" hidden>
+        <div class="panel-heading"><h2 id="main-integration-title">본학습 편입 상태</h2><span id="main-integration-badge" class="badge"></span></div>
+        <p id="main-integration-detail" class="integration-detail"></p>
+        <div id="main-integration-metrics" class="integration-metrics" hidden>
+          <div><span>본학습에서 완료한 교차 대전</span><strong id="main-integration-games">—</strong></div>
+          <div><span>가중치 학습에 사용</span><strong id="main-integration-trained">—</strong></div>
+          <div><span>학습에서 제외한 검증용</span><strong id="main-integration-held">—</strong></div>
+        </div>
+        <p id="main-integration-note" class="muted"></p>
+      </section>
+      <section id="pilot-panel" class="panel pilot-panel" aria-labelledby="pilot-title" hidden>
+        <div class="panel-heading"><div><div class="eyebrow">DECK TRAINING · INTEGRATION</div><h2 id="pilot-title">빅토르 · 학습 현황</h2></div><div class="pilot-heading-status"><strong id="pilot-generation">—세대</strong><span id="pilot-badge" class="badge">기록 대기</span></div></div>
+        <p id="pilot-status" class="search-lead"></p>
+        <ol id="pilot-roadmap" class="pilot-roadmap" aria-label="별도 학습에서 본학습 통합까지의 단계"></ol>
+        <div class="search-metrics pilot-metrics">
+          <div><span id="pilot-collection-label">미러전 수집</span><strong id="pilot-collected">—</strong><div class="meter"><span id="pilot-collection-meter"></span></div><small id="pilot-iteration"></small><small id="pilot-collected-total"></small></div>
+          <div><span>누적 학습 완료</span><strong id="pilot-trained">—</strong><div id="pilot-policy-meter" class="meter"><span id="pilot-training-meter"></span></div><small id="pilot-policy-progress"></small><small id="pilot-source"></small></div>
+          <div><span id="pilot-evaluation-label">최근 평가</span><strong id="pilot-evaluation">—</strong><div class="meter"><span id="pilot-evaluation-meter"></span></div><small id="pilot-evaluation-state"></small><small id="pilot-mirror"></small></div>
+          <div><span>수집 워커 / 상한</span><strong id="pilot-workers">—</strong><small id="pilot-resources"></small><small id="pilot-updated"></small></div>
+        </div>
+        <div class="pilot-bottom">
+          <div><div class="panel-heading"><h3>회차별 미러 학습</h3><span id="pilot-window" class="muted">수집 → 가중치 저장</span></div><div id="pilot-iterations" class="pilot-iterations" role="img" aria-label="회차별 수집 경기와 학습 완료 상태"></div></div>
+          <div class="pilot-outlook"><h3 id="pilot-outlook-title">평가 일정 · 예상 종료</h3><strong id="pilot-outcome">검증 자료 수집 중</strong><p id="pilot-eta"></p><p id="pilot-schedule"></p><p id="pilot-integration" class="muted"></p></div>
+        </div>
+        <details class="pilot-details" id="pilot-evaluation-details"><summary id="pilot-comparison-title">최근 교차 평가 · 상대별 학습 전후 승률</summary><p id="pilot-comparison-context" class="search-disclaimer"></p><p class="search-disclaimer">후보 모델의 승률입니다. 후보가 빅토르 덱을 잡은 경기와 상대 덱을 잡은 경기를 분리합니다. 같은 조건의 전후 각 16경기가 모두 저장되면 변화량을 표시합니다. 이 진단은 본학습 승급평가와 별개입니다.</p><div id="pilot-comparison" class="pilot-comparison"></div></details>
+        <details class="pilot-details" id="pilot-deck-details"><summary id="pilot-deck-title">빅토르 덱 구성 확인</summary><div id="pilot-deck"></div></details>
+        <div class="pilot-release"><div><span class="badge">9월 29일 반영</span><p>AI 대전에 <strong>빅토르 컨트롤</strong>과 <strong>비오로라 마스터 이</strong> 덱이 추가되었습니다. 실험 덱 사용 가능 여부와 해당 모델의 학습 이력을 구분해 표시합니다.</p></div><a href="https://punchfirst.site" target="_blank" rel="noopener noreferrer">게임 웹에서 확인 ↗</a></div>
+      </section>
+      <section id="deck-search-panel" class="panel search-panel" aria-labelledby="search-title" hidden>
+        <div class="panel-heading"><div><div class="eyebrow">ORIGINS DECK SEARCH</div><h2 id="search-title">플레이와 함께 배우는 덱 구성</h2></div><span id="search-pool" class="badge good">오리진 환경</span></div>
+        <p id="search-status" class="search-lead"></p>
+        <div class="search-metrics">
+          <div><span>덱 탐색 완료</span><strong id="search-iterations">—</strong><small id="search-since"></small></div>
+          <div><span>저장된 자가대전</span><strong id="search-games">—</strong><small id="search-holdout"></small></div>
+          <div><span>기준 / 변형 덱</span><strong id="search-population">—</strong><small id="search-legality"></small></div>
+          <div><span>현재 확정된 배정</span><strong id="search-current">—</strong><small id="search-current-detail"></small></div>
+        </div>
+        <div class="search-mixture"><div class="mixture-bar" aria-hidden="true"><span class="anchor"></span><span class="local"></span><span class="broad"></span></div><p id="search-mixture"></p><small>시험 덱 배정 비율입니다. 상대는 기준 덱이며, 승급 평가는 고정된 덱 목록으로 별도 진행합니다. 아래에서 마이 두 버전을 포함한 현재 평가의 덱 조합을 확인할 수 있습니다.</small></div>
+        <div class="search-heading"><h3>후보별 비교</h3><label>전설 <select id="search-legend-filter" aria-label="탐색 덱 전설 선택"><option value="all">전체 전설</option></select></label></div>
+        <p class="search-disclaimer">탐색 점수는 상대·좌석·선후공을 균등하게 보정한 0~100점 지표입니다. 검증 경기의 승패는 후보 선택에서 제외합니다. 실제 승률이나 최강 덱 인증이 아닙니다.</p>
+        <div class="table-wrap search-table"><table><caption class="sr-only">덱 구성 후보별 탐색 점수와 비교 경기 수</caption><thead><tr><th>덱</th><th>유형</th><th>오로라</th><th>비교 경기</th><th>상대 전설</th><th>탐색 점수</th><th>구성</th></tr></thead><tbody id="search-decks"></tbody></table></div>
+        <div class="search-bottom"><div><div class="panel-heading"><h3 id="search-chart-title">선택 덱 탐색 점수</h3><span class="muted">최근 40회차</span></div><div id="search-chart" class="chart small-chart" aria-label="선택한 덱의 회차별 탐색 점수"></div></div><div><h3>오로라 채용 기준 덱 비교</h3><div id="search-aurora" class="aurora-comparison"></div><p class="search-disclaimer">두 덱은 여러 카드가 다릅니다. 점수 차이를 오로라 한 장의 효과로 해석하지 않습니다.</p></div></div>
+        <details id="search-inspector"><summary id="search-inspector-title">선택한 덱 구성 보기</summary><div id="search-inspector-content"></div></details>
+      </section>
+      </section>
+      <section id="view-diagnostics" role="tabpanel" aria-labelledby="tab-diagnostics" hidden>
+      <div class="bottom-grid"><section class="panel"><div class="panel-heading"><div><div class="eyebrow">LEARNING</div><h2>본학습 손실 변화</h2></div><span id="loss-status" class="muted">학습 기록 대기</span></div><p class="muted">각 회차 마지막 시도 · 파랑: 기존 학습 · 보라: 교정 복습 · 빨강 점: 거부된 합계. 거부된 시도는 모델에 반영되지 않습니다.</p><div id="loss-chart" class="chart small-chart" aria-label="기존 학습과 교정 복습 손실 및 갱신 거부"></div></section><section class="panel"><div class="panel-heading"><div><div class="eyebrow">THROUGHPUT</div><h2>본학습 수집 추이</h2></div><span id="games-saved" class="badge"></span></div><div id="throughput-chart" class="chart small-chart" aria-label="시간에 따른 자가대전 수집 경기 수"></div></section></div>
+<section class="panel"><div class="panel-heading"><h2>학습 기준점 변경 이력</h2></div><div id="anchor-history"></div></section>
+      </section>
+      <footer><span id="footer-status"></span><span>학습 기록 기준 · <span id="data-time">—</span></span></footer>
+    </div>
+  </main>
+  <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
+</body>
+</html>

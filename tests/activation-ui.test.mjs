@@ -13,9 +13,11 @@ test("payment-window Add buttons preserve the exact legal ability id", () => {
 });
 
 test("the payment step uses the board Runes directly and keeps both payment modes visible", () => {
-  assert.match(appSource, /function paymentPanel[\s\S]{0,3600}?class="payment-stage-banner payment-panel"/);
-  assert.match(appSource, /Left-click Runes for Energy and right-click for Power/);
-  assert.match(appSource, /Legend, Seal, or another resource ability/);
+  const paymentPanelSource = appSource.slice(appSource.indexOf("function paymentPanel"), appSource.indexOf("function paymentDisplayCard"));
+  assert.match(paymentPanelSource, /class="payment-stage-banner payment-panel"/);
+  assert.match(paymentPanelSource, /Click or tap a Rune to pay Energy/);
+  assert.match(paymentPanelSource, /press Shift\+Enter on a Rune to pay Power/);
+  assert.match(paymentPanelSource, /Legend, Seal, or another resource ability/);
   assert.match(appSource, /function directRunePaymentState\(rune, playerId\)/);
   assert.match(appSource, /"payment-rune-choice"[\s\S]{0,500}?"is-energy-selected"[\s\S]{0,200}?"is-power-selected"/);
   assert.match(appSource, /data-action="\$\{payment\.active \? "pay-rune" : "select-card"\}"/);
@@ -23,10 +25,11 @@ test("the payment step uses the board Runes directly and keeps both payment mode
   assert.doesNotMatch(appSource, /function paymentRuneSection/);
 });
 
-test("left-click spends board Runes as Energy and right-click spends them as Power", () => {
+test("click, context, touch-hold, and keyboard inputs pay with board Runes", () => {
   assert.match(appSource, /button\[data-direct-payment-rune='true'\]\[data-rune\]/);
-  assert.match(appSource, /runeButton\.dataset\.paymentPower !== "true"/);
+  assert.match(appSource, /runeButton\?\.dataset\?\.paymentPower !== "true"/);
   assert.match(appSource, /togglePaymentRune\(game, runeId, "power"\)/);
+  assert.match(appSource, /aria-keyshortcuts=\\"Shift\+Enter\\"/);
   assert.match(appSource, /action === "pay-rune"[\s\S]{0,280}?button\.dataset\.paymentEnergy === "true"/);
 });
 
@@ -69,7 +72,11 @@ test("online commands are validated only by the authoritative server game", () =
     appSource.indexOf("// Online snapshots are intentionally redacted"),
     appSource.indexOf("function resolveCurrentGameCommand")
   );
-  assert.match(onlineBranch, /const resolvedCommand = command;/);
+  assert.match(
+    onlineBranch,
+    /const resolvedCommand = command\.kind === "surrender"[\s\S]{0,160}?guardedOnlineSurrenderCommand\(command, commandSession\)[\s\S]{0,80}?: command;/
+  );
+  assert.match(onlineBranch, /sendOnlineCommand\(commandSession\.roomId, commandSession\.playerToken, resolvedCommand\)/);
   assert.doesNotMatch(onlineBranch, /resolveLegalAction\(/);
 });
 
@@ -77,11 +84,16 @@ test("online action gating uses the actor published by the authoritative snapsho
   assert.match(appSource, /function activePlayerId\(\) \{\s*if \(isOnlineGame\(\) && game\.authoritativeActorId\) return game\.authoritativeActorId;/);
 });
 
-test("play, hide, champion, and move controls use the shared legal-action manifest", () => {
-  assert.match(appSource, /if \(viewerCanAct\(\)\) uiLegalActions = enumerateLegalActions\(game, nextViewerPlayerId\);/);
+test("play, hide, champion, and move controls use the cached UI legal-action manifest", () => {
+  assert.match(appSource, /cachedUiLegalActions = enumerateUiLegalActions\(game, viewerId\);/);
+  assert.match(appSource, /if \(viewerCanAct\(\)\) uiLegalActions = legalActionsForCurrentUi\(nextViewerPlayerId\);/);
+  assert.match(appSource, /indexUiLegalActions\(uiLegalActions\);/);
+  assert.match(appSource, /function uiCardActions\(cardId\)/);
+  assert.match(appSource, /function uiUnitMoveDestinationIds\(unitId\)/);
   assert.match(appSource, /action\.kind === "beginPlayCard"/);
   assert.match(appSource, /action\.kind === "hideCard"/);
-  assert.match(appSource, /action\.kind === "beginPlayChampion"/);
-  assert.match(appSource, /action\.kind === "moveUnit"/);
+  assert.match(appSource, /action\?\.kind === "beginPlayChampion"/);
+  assert.match(appSource, /action\?\.kind === "moveUnit"/);
+  assert.doesNotMatch(appSource, /\benumerateLegalActions\s*\(/);
   assert.doesNotMatch(appSource, /function canPayCard\(/);
 });

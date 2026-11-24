@@ -127,7 +127,7 @@ test("shared movement preflight preserves the authoritative legal action set", (
   }
 });
 
-test("AI rejects a no-impact solo attack while retaining the simultaneous breakthrough", () => {
+test("AI excludes unsupported solo losses and retains simultaneous breakthroughs", () => {
   const { game, actor, field } = createActionGame();
   const solo = { kind: "moveUnit", unitId: "friendly-1", destinationId: field.instanceId };
   const batch = { kind: "moveUnits", unitIds: ["friendly-1", "friendly-2"], destinationId: field.instanceId };
@@ -142,10 +142,20 @@ test("AI rejects a no-impact solo attack while retaining the simultaneous breakt
 
   const actions = enumerateAiPolicyActions(game, actor.id);
   assert.equal(actions.some((action) => action.kind === "moveUnit"
-    && action.unitId === solo.unitId && action.destinationId === field.instanceId), false);
+    && action.unitId === solo.unitId && action.destinationId === field.instanceId), false,
+  "a verified no-payoff solo loss cannot borrow the value of an unchosen group attack");
   assert.equal(actions.some((action) => action.kind === "moveUnits"
     && action.destinationId === field.instanceId
     && action.unitIds.length === 2), true);
+});
+
+test("a weak Deathknell attack stays available even when it cannot remove the enemy", () => {
+  const {game,actor,field}=createActionGame({friendlyMight:[],enemyMight:4});
+  const sentry=battlefieldUnit(cards.watchfulSentry,actor.id,"deathknell-attacker",1);
+  sentry.zone="base";actor.base=[sentry];
+  const attack={kind:"moveUnit",unitId:sentry.instanceId,destinationId:field.instanceId};
+  assert.equal(movementProfile(game,actor.id,attack).noOpponentImpact,true);
+  assert.equal(enumerateAiPolicyActions(game,actor.id).some(a=>actionKey(a)===actionKey(attack)),true);
 });
 
 test("AI retains a weak-looking attack when a payable Reaction creates an enemy removal threat", () => {
@@ -263,7 +273,7 @@ test("temporary buff target choices keep the breakthrough unit and reject a wast
   assert.equal(field.units.some((unit) => unit.controllerId !== actor.id), true);
 });
 
-test("AI does not end the turn while an expiring buff creates a clean immediate breakthrough", () => {
+test("AI can learn to hold even when an expiring buff creates a no-response breakthrough", () => {
   const { game, actor, field } = createActionGame({ friendlyMight: [3], enemyMight: 4, enemyExtra: { stunned: true } });
   actor.base[0].mightModifier = 1;
   actor.base[0].temporaryMight = 1;
@@ -272,18 +282,18 @@ test("AI does not end the turn while an expiring buff creates a clean immediate 
   assert.equal(profile.temporaryCreatesCleanBreakthrough, true);
 
   const actions = enumerateAiPolicyActions(game, actor.id);
-  assert.equal(actions.some((action) => action.kind === "endTurn"), false);
+  assert.equal(actions.some((action) => action.kind === "endTurn"), true);
   assert.equal(actions.some((action) => action.kind === "moveUnit"
     && action.destinationId === field.instanceId), true);
 });
 
-test("AI does not end the turn while a risk-free scoring or removal move is available", () => {
+test("AI keeps hold available beside a publicly profitable scoring or removal move", () => {
   const { game, actor, field } = createActionGame({ friendlyMight: [4], enemyMight: 2 });
   const attack = { kind: "moveUnit", unitId: actor.base[0].instanceId, destinationId: field.instanceId };
   const profile = movementProfile(game, actor.id, attack);
   assert.equal(profile.strictlyBeneficial, true);
   const actions = enumerateAiPolicyActions(game, actor.id);
-  assert.equal(actions.some((action) => action.kind === "endTurn"), false);
+  assert.equal(actions.some((action) => action.kind === "endTurn"), true);
   assert.equal(actions.some((action) => action.kind === "moveUnit"
     && action.destinationId === field.instanceId), true);
 });

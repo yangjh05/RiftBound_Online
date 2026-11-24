@@ -1,0 +1,17 @@
+[Unit]
+Description=Back up Riftbound Online persistent data
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/backup-riftbound-online
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/var/lib/riftbound-online
+ReadWritePaths=/var/backups/riftbound-online
+

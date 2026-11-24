@@ -59,6 +59,10 @@ async function openReadyBoard(page) {
     await roll.click();
   }
 
+  await expect(page.locator(".initial-sideboarding-shell")).toBeVisible();
+  for (let playerIndex = 0; playerIndex < 2; playerIndex += 1) {
+    await page.locator('[data-action="sideboard-submit"]:enabled').click();
+  }
   await expect(page.locator(".champion-setup")).toBeVisible();
   for (let playerIndex = 0; playerIndex < 2; playerIndex += 1) {
     const champion = page.locator('[data-action="choose-champion"]:enabled');
@@ -1775,7 +1779,9 @@ test("mobile tabletop keeps the permanent hand and primary action reachable", as
   await expect(hand.locator("[data-hand-card]")).toHaveCount(Number(await hand.getAttribute("data-count")));
   await expect(actionRail).toBeVisible();
   await expect(actionRail).toBeInViewport();
-  await expect(page.locator('.context-action-dock').locator('[data-action="end-turn"], [data-action="pass-showdown"]')).toBeVisible();
+  await expect(page.locator(
+    '.table-action-rail [data-action="end-turn"], .context-action-dock [data-action="pass-showdown"]'
+  )).toBeVisible();
 
   const horizontalOverflow = await page.evaluate(() => ({
     clientWidth: document.documentElement.clientWidth,

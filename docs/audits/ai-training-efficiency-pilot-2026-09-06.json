@@ -1,0 +1,198 @@
+{
+  "diagnosticOnly": true,
+  "policyPromotionEligible": false,
+  "protectedDevelopmentOpened": false,
+  "confirmationOpened": false,
+  "finalAuditOpened": false,
+  "sourceDatasetKey": "99a06a5ae5ee23a0537616f2f35770b95d572120837cce93148a8127684d56f9",
+  "sourceModelHash": "8029a2fde44bbe336e91f7031c6c5f0316242b947a39c3031f1db18bfd40e3e7",
+  "split": {
+    "trainingRecords": 116,
+    "validationRecords": 29,
+    "overlap": 0
+  },
+  "version": 1,
+  "officialSelectionEligible": false,
+  "confirmationEligible": false,
+  "finalAuditEligible": false,
+  "failed": false,
+  "status": "pipeline-valid",
+  "strengthConclusion": "requires-formal-shadow-and-protected-evaluation",
+  "candidates": [
+    {
+      "architecture": "structured-set-v2-128",
+      "history": [
+        {
+          "epoch": 1,
+          "stage": "legacy-v1-common-pretraining",
+          "samples": 119,
+          "batches": 4,
+          "loss": 0.41689451038837433,
+          "rankingLoss": 0.16020217537879944,
+          "outcomeLoss": 1.026769369840622,
+          "meanPreferredMargin": -0.010202163306530565
+        },
+        {
+          "epoch": 2,
+          "stage": "structured-v2-only-finetune",
+          "samples": 119,
+          "batches": 4,
+          "loss": 0.4071488678455353,
+          "rankingLoss": 0.14787602797150612,
+          "outcomeLoss": 1.0370913445949554,
+          "meanPreferredMargin": 0.009551964700222015
+        },
+        {
+          "epoch": 3,
+          "stage": "structured-v2-finetune-with-legacy-rehearsal",
+          "samples": 119,
+          "batches": 4,
+          "loss": 0.38272813707590103,
+          "rankingLoss": 0.13479392044246197,
+          "outcomeLoss": 0.9917368739843369,
+          "meanPreferredMargin": 0.02309646410867572
+        }
+      ],
+      "pipelineValid": true,
+      "trainingAccuracy": 0.5971136757978862,
+      "validationAccuracy": 0.6416666666666666,
+      "validationPairs": 30,
+      "rankingValid": true,
+      "overfitWarning": false,
+      "validationGames": 29,
+      "validationAccuracyInterval": {
+        "lowerBound": 0.3603177641401746,
+        "upperBound": 0.9230155691931589,
+        "mean": 0.6416666666666667,
+        "contributingGames": 26,
+        "strata": 10,
+        "samples": 2000,
+        "alpha": 0.05,
+        "effectiveGames": 23.300970873786397,
+        "bootstrapLowerBound": 0.4833333333333333,
+        "bootstrapUpperBound": 0.8166666666666667,
+        "weightedHoeffdingLowerBound": 0.3603177641401746,
+        "weightedHoeffdingUpperBound": 0.9230155691931589,
+        "weightedHoeffdingRadius": 0.28134890252649214,
+        "method": "deck-seat-stratified-game-bootstrap-hoeffding-v2"
+      }
+    },
+    {
+      "architecture": "structured-attention-v2-128",
+      "history": [
+        {
+          "epoch": 1,
+          "stage": "legacy-v1-common-pretraining",
+          "samples": 119,
+          "batches": 4,
+          "loss": 0.39100364595651627,
+          "rankingLoss": 0.13715260103344917,
+          "outcomeLoss": 1.0154041647911072,
+          "meanPreferredMargin": 0.014811542234383523
+        },
+        {
+          "epoch": 2,
+          "stage": "structured-v2-only-finetune",
+          "samples": 119,
+          "batches": 4,
+          "loss": 0.41359688341617584,
+          "rankingLoss": 0.15796585008502007,
+          "outcomeLoss": 1.022524118423462,
+          "meanPreferredMargin": 0.004336698912084103
+        },
+        {
+          "epoch": 3,
+          "stage": "structured-v2-finetune-with-legacy-rehearsal",
+          "samples": 119,
+          "batches": 4,
+          "loss": 0.3848065435886383,
+          "rankingLoss": 0.13500003144145012,
+          "outcomeLoss": 0.9992260485887527,
+          "meanPreferredMargin": 0.02212170627899468
+        }
+      ],
+      "pipelineValid": true,
+      "trainingAccuracy": 0.6193426310531573,
+      "validationAccuracy": 0.5416666666666666,
+      "validationPairs": 30,
+      "rankingValid": true,
+      "overfitWarning": false,
+      "validationGames": 29,
+      "validationAccuracyInterval": {
+        "lowerBound": 0.2603177641401746,
+        "upperBound": 0.8230155691931589,
+        "mean": 0.5416666666666667,
+        "contributingGames": 26,
+        "strata": 10,
+        "samples": 2000,
+        "alpha": 0.05,
+        "effectiveGames": 23.300970873786397,
+        "bootstrapLowerBound": 0.42833333333333334,
+        "bootstrapUpperBound": 0.675,
+        "weightedHoeffdingLowerBound": 0.2603177641401746,
+        "weightedHoeffdingUpperBound": 0.8230155691931589,
+        "weightedHoeffdingRadius": 0.28134890252649214,
+        "method": "deck-seat-stratified-game-bootstrap-hoeffding-v2"
+      }
+    },
+    {
+      "architecture": "structured-attention-v2-256",
+      "history": [
+        {
+          "epoch": 1,
+          "stage": "legacy-v1-common-pretraining",
+          "samples": 119,
+          "batches": 4,
+          "loss": 0.39142385870218277,
+          "rankingLoss": 0.14145848900079727,
+          "outcomeLoss": 0.9998614639043808,
+          "meanPreferredMargin": 0.008583561168052256
+        },
+        {
+          "epoch": 2,
+          "stage": "structured-v2-only-finetune",
+          "samples": 119,
+          "batches": 4,
+          "loss": 0.3942980468273163,
+          "rankingLoss": 0.1421164534986019,
+          "outcomeLoss": 1.0087263882160187,
+          "meanPreferredMargin": 0.011161353439092636
+        },
+        {
+          "epoch": 3,
+          "stage": "structured-v2-finetune-with-legacy-rehearsal",
+          "samples": 119,
+          "batches": 4,
+          "loss": 0.3605695590376854,
+          "rankingLoss": 0.11638771183788776,
+          "outcomeLoss": 0.9767274111509323,
+          "meanPreferredMargin": 0.04539727512747049
+        }
+      ],
+      "pipelineValid": true,
+      "trainingAccuracy": 0.6361966980388033,
+      "validationAccuracy": 0.6416666666666667,
+      "validationPairs": 30,
+      "rankingValid": true,
+      "overfitWarning": false,
+      "validationGames": 29,
+      "validationAccuracyInterval": {
+        "lowerBound": 0.36031776414017447,
+        "upperBound": 0.9230155691931587,
+        "mean": 0.6416666666666666,
+        "contributingGames": 26,
+        "strata": 10,
+        "samples": 2000,
+        "alpha": 0.05,
+        "effectiveGames": 23.300970873786397,
+        "bootstrapLowerBound": 0.4683333333333334,
+        "bootstrapUpperBound": 0.8,
+        "weightedHoeffdingLowerBound": 0.36031776414017447,
+        "weightedHoeffdingUpperBound": 0.9230155691931587,
+        "weightedHoeffdingRadius": 0.28134890252649214,
+        "method": "deck-seat-stratified-game-bootstrap-hoeffding-v2"
+      }
+    }
+  ],
+  "completedAt": "2026-09-05T21:07:44.845Z"
+}

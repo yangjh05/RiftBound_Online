@@ -1,6 +1,8 @@
+import {needsPaymentOptionDecision} from './payment-options.mjs';
 import { cards } from "../cards.mjs";
 import { actionKey, activeActorId, applyAiAction, cloneGame, enumerateAiPolicyActions } from "./actions.mjs";
 import { inferOpponentDeckBelief } from "./belief.mjs";
+import { opponentPrivateInformationVisible } from "./observation.mjs";
 import { choosePolicyAction, evaluateState } from "./policy.mjs";
 import {
   createNeuralSession,
@@ -9,7 +11,7 @@ import {
   estimateNeuralValue
 } from "./neural/model.mjs";
 import { EVALUATOR_TARGET_HEADS } from "./neural/evaluator-architecture.mjs";
-import { CARD_INDEX, encodeActionSet, encodeOpponentDeckTarget, encodeState } from "./neural/encoding.mjs";
+import { ACTION_DIM, CARD_INDEX, encodeActionSet, encodeOpponentDeckTarget, encodeState } from "./neural/encoding.mjs";
 import { calibratedProbability } from "./neural/trainer.mjs";
 import { hiddenCardControllerId, hiddenCardIsControlledBy } from "../rules/zones.mjs";
 import { resolvePlannedPayment } from "./payment-planner.mjs";
@@ -301,7 +303,7 @@ function rolloutSampleFromDeterminized(
       simulationSeed
     );
   }
-  const initialChoice = Boolean(determinized.pendingChoice);
+  const initialChoice = Boolean(determinized.pendingChoice)||needsPaymentOptionDecision(determinized);
   const immediateTerminal = determinized.phase === "complete";
   const immediateTerminalWin =
     immediateTerminal && determinized.winnerId === viewerId;
@@ -833,7 +835,7 @@ function validLeafAuditState(value) {
     && Array.from(value).every((item) => Number.isFinite(Number(item)));
 }
 
-function independentSimulationSeeds(count, random, excludedSeeds = []) {
+export function independentSimulationSeeds(count, random, excludedSeeds = []) {
   const excluded = new Set(Array.from(excludedSeeds || [], (value) => Number(value) >>> 0));
   const selected = new Set();
   const seeds = [];
@@ -846,7 +848,9 @@ function independentSimulationSeeds(count, random, excludedSeeds = []) {
       attempts += 1;
     }
     while (excluded.has(seed) || selected.has(seed)) {
-      fallback = (Math.imul(fallback ^ seed, 1664525) + 1013904223) >>> 0;
+      // Advance independently of the rejected seed. XORing fallback with the
+      // seed assigned on the previous iteration collapses to a fixed point.
+      fallback = (Math.imul(fallback, 1664525) + 1013904223) >>> 0;
       seed = fallback;
     }
     selected.add(seed);
@@ -934,7 +938,7 @@ export function buildTeacherMacroDemonstration(game, viewerId, action, macroCont
   }
   const steps = [];
   for (const expectedKey of macroContinuation.actionKeys) {
-    if (!preview.pendingChoice || activeActorId(preview) !== viewerId) {
+    if ((!preview.pendingChoice&&!needsPaymentOptionDecision(preview)) || activeActorId(preview) !== viewerId) {
       return { verified: false, reason: "macro-choice-boundary-changed", steps: [], actionKeys: [] };
     }
     const legal = enumerateAiPolicyActions(preview, viewerId);
@@ -945,12 +949,14 @@ export function buildTeacherMacroDemonstration(game, viewerId, action, macroCont
     if (selectedIndex < 0) return { verified: false, reason: "macro-choice-not-encoded", steps: [], actionKeys: [] };
     steps.push({
       state: encodeState(preview, viewerId),
-      actions: actionSet.encoded,
+      actions: actionSet.encoded.slice(0, actionSet.legalCount * ACTION_DIM),
       selectedIndex,
       legalCount: actionSet.legalCount,
       originalLegalCount: actionSet.originalLegalCount,
       selectedActionKey: expectedKey,
       legalActionKeys: actionSet.actions.map(actionKey),
+      actionManifestVersion: 2,
+      originalLegalActionKeys: legal.map(actionKey),
       beliefTarget: encodeOpponentDeckTarget(preview, viewerId),
       initialMemory: steps.length === 0
         ? Float32Array.from(options.initialMemory || [])
@@ -964,7 +970,7 @@ export function buildTeacherMacroDemonstration(game, viewerId, action, macroCont
       if (!payment?.ok) return { verified: false, reason: "macro-continuation-payment-failed", steps: [], actionKeys: [] };
     }
   }
-  if (preview.pendingChoice) {
+  if (preview.pendingChoice||needsPaymentOptionDecision(preview)) {
     return { verified: false, reason: "macro-choice-incomplete", steps: [], actionKeys: [] };
   }
   return {
@@ -1365,11 +1371,12 @@ export function determinizeGame(game, viewerId, belief = inferOpponentDeckBelief
     requiredPrivateCards: 0,
     availablePrivateCards: 0
   });
+  const privateVisible = opponentPrivateInformationVisible(clone, viewerId, opponent.id);
   const privateSlots = [
-    ...opponent.hand.map((card, index) => ({ zone: opponent.hand, index, original: card })),
+    ...(privateVisible ? [] : opponent.hand.map((card, index) => ({ zone: opponent.hand, index, original: card }))),
     ...opponent.mainDeck.map((card, index) => ({ zone: opponent.mainDeck, index, original: card })),
     ...clone.battlefields.flatMap((field) => (field.hidden || [])
-      .filter((item) => item.ownerId === opponent.id && !hiddenCardIsControlledBy(item, viewerId))
+      .filter((item) => item.ownerId === opponent.id && !privateVisible && !hiddenCardIsControlledBy(item, viewerId))
       .map((item) => ({ hidden: item, original: item.card })))
   ];
   if (!privateSlots.length) return markDeterminization(clone, {
@@ -1399,8 +1406,8 @@ export function determinizeGame(game, viewerId, belief = inferOpponentDeckBelief
     requiredPrivateCards: privateSlots.length,
     availablePrivateCards: remaining.length
   });
-  for (const slot of privateSlots) {
-    const source = remaining.shift();
+  for (const [slotIndex, slot] of privateSlots.entries()) {
+    const source = remaining[slotIndex];
     if (!source) break;
     const replacement = instantiatePrivateCard(source, slot.original,
       slot.hidden?.ownerId || opponent.id,
@@ -1413,7 +1420,7 @@ export function determinizeGame(game, viewerId, belief = inferOpponentDeckBelief
     reason: null,
     deckId: selected.deckId || null,
     requiredPrivateCards: privateSlots.length,
-    availablePrivateCards: remaining.length + privateSlots.length
+    availablePrivateCards: remaining.length
   });
 }
 
@@ -1456,7 +1463,7 @@ function simulateContinuation(game, viewerId, model, planning, random) {
   let macroResolved = !captureInitialMacro;
   const macroActionKeys = [];
   for (; steps < hardLimit && game.phase !== "complete"; steps += 1) {
-    if (game.pendingPayment) {
+    if (game.pendingPayment && !needsPaymentOptionDecision(game)) {
       const payerId = game.pendingPayment.playerId;
       const payerModel = neuralModels[payerId] || planning.neuralModel || null;
       if (!resolvePlannedPayment(game, paymentOptions(model, payerModel))?.ok) break;
@@ -1473,7 +1480,8 @@ function simulateContinuation(game, viewerId, model, planning, random) {
     }
     const legal = enumerateAiPolicyActions(game, actorId);
     const neuralSession = sessionFor(actorId);
-    const selectingMacroChoice = captureInitialMacro && Boolean(game.pendingChoice) && actorId === viewerId;
+    const selectingMacroChoice = captureInitialMacro
+      && (Boolean(game.pendingChoice)||needsPaymentOptionDecision(game)) && actorId === viewerId;
     const selected = neuralSession
       ? neuralSession.decide(game, actorId, legal, selectingMacroChoice
         ? { temperature: 0.2, random, greedy: true }
@@ -1522,14 +1530,12 @@ function simulateContinuation(game, viewerId, model, planning, random) {
     viewerNeuralModel,
     ...independentEvaluatorModels
   ].filter(Boolean))];
-  const evaluatorValues = evaluatorModels.length
-    ? evaluatorModels.map((evaluatorModel) =>
-      evaluatorModel === viewerNeuralModel
-        ? primaryValue
-        : evaluateWinRate(game, viewerId, model, evaluatorModel))
-    : [primaryValue];
+  const valuesByModel = new Map(evaluatorModels.map((evaluatorModel) => [evaluatorModel,
+    evaluatorModel === viewerNeuralModel ? primaryValue
+      : evaluateWinRate(game, viewerId, model, evaluatorModel)]));
+  const evaluatorValues = evaluatorModels.length ? [...valuesByModel.values()] : [primaryValue];
   const independentEvaluatorValues = independentEvaluatorModels.map((evaluatorModel) =>
-    evaluateWinRate(game, viewerId, model, evaluatorModel));
+    valuesByModel.get(evaluatorModel));
   return {
     value: primaryValue,
     evaluatorValues,
@@ -1584,14 +1590,14 @@ function auditProductionLeafState(game, viewerId, model, planning, options = {})
     return sessions.get(actorId);
   };
   const maximumSteps = Math.max(
-    64,
+    1,
     Math.min(1200, Number(planning.productionLeafAuditMaximumSteps) || 1200)
   );
   let continuationSteps = 0;
   let valid = true;
   for (; continuationSteps < maximumSteps
     && auditGame.phase !== "complete"; continuationSteps += 1) {
-    if (auditGame.pendingPayment) {
+    if (auditGame.pendingPayment && !needsPaymentOptionDecision(auditGame)) {
       const payerId = auditGame.pendingPayment.playerId;
       const payerModel = neuralModels[payerId] || planning.neuralModel || null;
       if (!resolvePlannedPayment(

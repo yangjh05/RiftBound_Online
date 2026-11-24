@@ -37,7 +37,7 @@ export const unleashedKoTranslations = Object.freeze({
     "collectorNumber": "UNL-005/219",
     "englishName": "Revna the Lorekeeper",
     "koName": "지식지기 레브나",
-    "koHeader": "[지식지기 레브나], 7 에너지, 1 격노 힘, 7 위력",
+    "koHeader": "[지식지기 레브나], 7 에너지, 1 분노 힘, 7 위력",
     "koTypeLine": "유닛, 프렐요드",
     "koText": "비공식 번역\n[개입] (이 카드는 전장에서 전장으로 이동할 수 있습니다.)\n내가 주문을 사용할 때 에너지를 4 이상 지불했다면, 이 카드를 준비시킵니다."
   },
@@ -47,13 +47,13 @@ export const unleashedKoTranslations = Object.freeze({
     "koName": "아기 상어",
     "koHeader": "[아기 상어], 3 에너지, 1 위력",
     "koTypeLine": "유닛, 빌지워터",
-    "koText": "비공식 번역\n[가속] (추가 비용으로 에너지 1과 격노 힘 1을 지불하면 이 카드가 준비 상태로 진입합니다.)\n[맹공 4] (이 카드가 공격자인 동안 +4 위력을 획득합니다.)"
+    "koText": "비공식 번역\n[가속] (추가 비용으로 에너지 1과 분노 힘 1을 지불하면 이 카드가 준비 상태로 진입합니다.)\n[맹공 4] (이 카드가 공격자인 동안 +4 위력을 획득합니다.)"
   },
   "UNL-007/219": {
     "collectorNumber": "UNL-007/219",
     "englishName": "Smite",
     "koName": "강타",
-    "koHeader": "[강타], 2 에너지, 1 격노 힘",
+    "koHeader": "[강타], 2 에너지, 1 분노 힘",
     "koTypeLine": "주문",
     "koText": "비공식 번역\n[행동] (내 턴 또는 결전 시 사용합니다.)\n전장에 있는 유닛 1명에게 3의 피해를 입힙니다. 해당 유닛이 이번 턴에 사망하려 하면, 대신 추방합니다."
   },
@@ -77,7 +77,7 @@ export const unleashedKoTranslations = Object.freeze({
     "collectorNumber": "UNL-010/219",
     "englishName": "Vault Breaker",
     "koName": "금고 부수기",
-    "koHeader": "[금고 부수기], 1 에너지, 1 격노 힘",
+    "koHeader": "[금고 부수기], 1 에너지, 1 분노 힘",
     "koTypeLine": "주문",
     "koText": "비공식 번역\n[행동] (내 턴 또는 결전 시 사용합니다.)\n이번 턴에 유닛 1명에게 [맹공 2]와 [개입]을 부여합니다. (해당 유닛이 공격자인 동안 +2 위력을 획득합니다. 해당 유닛은 전장에서 전장으로 이동할 수 있습니다.)"
   },
@@ -93,7 +93,7 @@ export const unleashedKoTranslations = Object.freeze({
     "collectorNumber": "UNL-012/219",
     "englishName": "Lord Broadmane",
     "koName": "브로드메인 경",
-    "koHeader": "[브로드메인 경], 5 에너지, 1 격노 힘, 5 위력",
+    "koHeader": "[브로드메인 경], 5 에너지, 1 분노 힘, 5 위력",
     "koTypeLine": "유닛, 녹서스",
     "koText": "비공식 번역\n[기습] (내 유닛이 있는 전장에 [반응]으로 이 카드를 사용할 수 있습니다.)\n이 카드를 사용하면, 이번 턴에 이곳에 있는 다른 내 유닛에게 [맹공]을 부여합니다. (해당 유닛이 공격자인 동안 +1 위력을 획득합니다.)"
   },
@@ -109,7 +109,7 @@ export const unleashedKoTranslations = Object.freeze({
     "collectorNumber": "UNL-014/219",
     "englishName": "Monster Harpoon",
     "koName": "괴물 작살",
-    "koHeader": "[괴물 작살], 1 에너지, 1 격노 힘",
+    "koHeader": "[괴물 작살], 1 에너지, 1 분노 힘",
     "koTypeLine": "주문",
     "koText": "비공식 번역\n[행동] (내 턴 또는 결전 시 사용합니다.)\n전장에 있는 유닛 1명에게 2의 피해를 입힙니다. 내가 뒷면 카드를 통제한다면, 대신 그 유닛에게 4의 피해를 입힙니다."
   },
@@ -117,7 +117,7 @@ export const unleashedKoTranslations = Object.freeze({
     "collectorNumber": "UNL-015/219",
     "englishName": "Right of Conquest",
     "koName": "정복의 권리",
-    "koHeader": "[정복의 권리], 3 에너지, 1 격노 힘",
+    "koHeader": "[정복의 권리], 3 에너지, 1 분노 힘",
     "koTypeLine": "주문",
     "koText": "비공식 번역\n카드 1장을 뽑은 후, 나 또는 아군이 통제하는 전장 1곳당 카드 1장을 뽑습니다."
   },
@@ -125,7 +125,7 @@ export const unleashedKoTranslations = Object.freeze({
     "collectorNumber": "UNL-016/219",
     "englishName": "Scorchclaw",
     "koName": "불꽃발톱",
-    "koHeader": "[불꽃발톱], 3 에너지, 1 격노 힘, 3 위력",
+    "koHeader": "[불꽃발톱], 3 에너지, 1 분노 힘, 3 위력",
     "koTypeLine": "유닛, 개, 녹서스",
     "koText": "비공식 번역\n[추적 2] (이 카드가 정복하거나 점거하면, XP 2를 획득합니다.)\n[레벨 3+] 이 카드가 +1 위력을 가지고 준비 상태로 진입합니다. (내가 XP를 3 이상 보유하는 동안, 이 효과를 적용합니다.)"
   },
@@ -151,13 +151,13 @@ export const unleashedKoTranslations = Object.freeze({
     "koName": "황폐한 전투도끼",
     "koHeader": "[황폐한 전투도끼], 4 에너지",
     "koTypeLine": "도구, 장착물",
-    "koText": "비공식 번역\n[장착] 에너지 1, 격노 힘 1 (에너지 1, 격노 힘 1: 이 카드를 내가 통제하는 유닛 1명에게 부착합니다.)\n내 턴 종료 시 이 카드가 이번 턴에 정복하지 않았다면, 이 카드를 분리하고 이 카드에 4의 피해를 입힙니다."
+    "koText": "비공식 번역\n[장착] 에너지 1, 분노 힘 1 (에너지 1, 분노 힘 1: 이 카드를 내가 통제하는 유닛 1명에게 부착합니다.)\n내 턴 종료 시 이 카드가 이번 턴에 정복하지 않았다면, 이 카드를 분리하고 이 카드에 4의 피해를 입힙니다."
   },
   "UNL-020/219": {
     "collectorNumber": "UNL-020/219",
     "englishName": "Dancing Grenade",
     "koName": "춤추는 유탄",
-    "koHeader": "[춤추는 유탄], 2 에너지, 1 격노 힘",
+    "koHeader": "[춤추는 유탄], 2 에너지, 1 분노 힘",
     "koTypeLine": "주문",
     "koText": "비공식 번역\n유닛 1명에게 2의 피해를 입힙니다. 그 조종자는 힘 1을 지불하여 이 주문을 다시 사용할 수 있습니다. 그렇게 하면, 이번 턴에 이 주문이 피해를 입힌 횟수 1회당 이 주문이 1의 추가 피해를 입힙니다."
   },
@@ -173,7 +173,7 @@ export const unleashedKoTranslations = Object.freeze({
     "collectorNumber": "UNL-022/219",
     "englishName": "Jhin, Murderous Artist",
     "koName": "진, 살인의 예술가",
-    "koHeader": "[진, 살인의 예술가], 4 에너지, 1 격노 힘, 4 위력",
+    "koHeader": "[진, 살인의 예술가], 4 에너지, 1 분노 힘, 4 위력",
     "koTypeLine": "챔피언 유닛, 진, 아이오니아",
     "koText": "비공식 번역\n[굴절] (상대가 주문 또는 스킬로 이 카드를 선택하려면 힘을 지불해야 합니다.)\n[개입] (이 카드는 전장에서 전장으로 이동할 수 있습니다.)\n이 카드가 이동하면, 에너지 1과 힘 1 [추가]. (자원을 추가하는 스킬에는 반응할 수 없습니다.)"
   },
@@ -181,7 +181,7 @@ export const unleashedKoTranslations = Object.freeze({
     "collectorNumber": "UNL-023/219",
     "englishName": "Katarina, Reckless",
     "koName": "카타리나, 무모한 자",
-    "koHeader": "[카타리나, 무모한 자], 5 에너지, 1 격노 힘, 5 위력",
+    "koHeader": "[카타리나, 무모한 자], 5 에너지, 1 분노 힘, 5 위력",
     "koTypeLine": "챔피언 유닛, 카타리나, 녹서스",
     "koText": "비공식 번역\n내가 카드를 숨기면, 이 카드를 준비시킵니다.\n뒷면으로 놓인 카드를 사용하면, 적 유닛 1명에게 2의 피해를 입힙니다."
   },
@@ -189,9 +189,9 @@ export const unleashedKoTranslations = Object.freeze({
     "collectorNumber": "UNL-024/219",
     "englishName": "Rengar, Unseen",
     "koName": "렝가, 보이지 않는 자",
-    "koHeader": "[렝가, 보이지 않는 자], 4 에너지, 1 격노 힘, 4 위력",
+    "koHeader": "[렝가, 보이지 않는 자], 4 에너지, 1 분노 힘, 4 위력",
     "koTypeLine": "챔피언 유닛, 고양이, 렝가, 이쉬탈",
-    "koText": "비공식 번역\n[가속] (추가 비용으로 에너지 1과 격노 힘 1을 지불하면 이 카드가 준비 상태로 진입합니다.)\n[맹공 2] (이 카드가 공격자인 동안 +2 위력을 획득합니다.)\n[굴절] (상대가 주문 또는 스킬로 이 카드를 선택하려면 힘을 지불해야 합니다.)\n[개입] (이 카드는 전장에서 전장으로 이동할 수 있습니다.)"
+    "koText": "비공식 번역\n[가속] (추가 비용으로 에너지 1과 분노 힘 1을 지불하면 이 카드가 준비 상태로 진입합니다.)\n[맹공 2] (이 카드가 공격자인 동안 +2 위력을 획득합니다.)\n[굴절] (상대가 주문 또는 스킬로 이 카드를 선택하려면 힘을 지불해야 합니다.)\n[개입] (이 카드는 전장에서 전장으로 이동할 수 있습니다.)"
   },
   "UNL-025/219": {
     "collectorNumber": "UNL-025/219",
@@ -199,7 +199,7 @@ export const unleashedKoTranslations = Object.freeze({
     "koName": "불사의 군단",
     "koHeader": "[불사의 군단], 3 에너지, 3 위력",
     "koTypeLine": "유닛, 영혼, 그림자 군도",
-    "koText": "비공식 번역\n[군단] 내 폐기장에서 이 카드를 에너지 3과 격노 힘 1을 지불하여 사용할 수 있습니다. (이번 턴에 내가 다른 카드를 사용했다면, 이 효과를 적용합니다.)"
+    "koText": "비공식 번역\n[군단] 내 폐기장에서 이 카드를 에너지 3과 분노 힘 1을 지불하여 사용할 수 있습니다. (이번 턴에 내가 다른 카드를 사용했다면, 이 효과를 적용합니다.)"
   },
   "UNL-026/219": {
     "collectorNumber": "UNL-026/219",
@@ -207,13 +207,13 @@ export const unleashedKoTranslations = Object.freeze({
     "koName": "제라스, 해방된 자",
     "koHeader": "[제라스, 해방된 자], 5 에너지, 5 위력",
     "koTypeLine": "챔피언 유닛, 슈리마, 제라스",
-    "koText": "비공식 번역\n격노 힘 1, 이 카드를 탈진: 유닛 1명에게 3의 피해를 입힙니다. 이 카드가 전장에 있는 동안에만 이 스킬을 사용합니다."
+    "koText": "비공식 번역\n분노 힘 1, 이 카드를 탈진: 유닛 1명에게 3의 피해를 입힙니다. 이 카드가 전장에 있는 동안에만 이 스킬을 사용합니다."
   },
   "UNL-027/219": {
     "collectorNumber": "UNL-027/219",
     "englishName": "Inviolus Vox",
     "koName": "인비올러스 복스",
-    "koHeader": "[인비올러스 복스], 8 에너지, 2 격노 힘, 8 위력",
+    "koHeader": "[인비올러스 복스], 8 에너지, 2 분노 힘, 8 위력",
     "koTypeLine": "유닛, 용, 타곤 산",
     "koText": "비공식 번역\n이 카드가 정복하면, 이번 턴에 아군 유닛 1명에게 +8 위력을 부여합니다."
   },
@@ -223,15 +223,15 @@ export const unleashedKoTranslations = Object.freeze({
     "koName": "파이크, 부둣가 도살자",
     "koHeader": "[파이크, 부둣가 도살자], 3 에너지, 2 위력",
     "koTypeLine": "챔피언 유닛, 파이크, 빌지워터",
-    "koText": "비공식 번역\n[숨겨짐] (지금 힘을 지불해 숨기고, 이후 에너지 0으로 반응할 수 있습니다.)\n[개입] (이 카드는 전장에서 전장으로 이동할 수 있습니다.)\n이 카드를 사용할 때, 추가 비용으로 격노 힘 1을 지불할 수 있습니다.\n이 카드를 사용하면, 추가 비용을 지불한 경우 이 카드를 준비시키고 이번 턴에 이 카드가 +2 위력을 획득합니다."
+    "koText": "비공식 번역\n[숨겨짐] (지금 힘을 지불해 숨기고, 이후 에너지 0으로 반응할 수 있습니다.)\n[개입] (이 카드는 전장에서 전장으로 이동할 수 있습니다.)\n이 카드를 사용할 때, 추가 비용으로 분노 힘 1을 지불할 수 있습니다.\n이 카드를 사용하면, 추가 비용을 지불한 경우 이 카드를 준비시키고 이번 턴에 이 카드가 +2 위력을 획득합니다."
   },
   "UNL-029/219": {
     "collectorNumber": "UNL-029/219",
     "englishName": "Red Brambleback",
     "koName": "붉은 덩굴정령",
-    "koHeader": "[붉은 덩굴정령], 4 에너지, 1 격노 힘, 4 위력",
+    "koHeader": "[붉은 덩굴정령], 4 에너지, 1 분노 힘, 4 위력",
     "koTypeLine": "유닛, 아이오니아",
-    "koText": "비공식 번역\n[가속] (추가 비용으로 에너지 1과 격노 힘 1을 지불하면 이 카드가 준비 상태로 진입합니다.)\n내가 이곳을 정복하여 유발하는 정복 효과가 한 번 더 유발됩니다.\n이 카드가 정복하면, 아군 유닛 1명을 [버프]할 수 있습니다. (해당 유닛에 버프가 없는 경우 +1 위력 버프 1개를 부여합니다.)"
+    "koText": "비공식 번역\n[가속] (추가 비용으로 에너지 1과 분노 힘 1을 지불하면 이 카드가 준비 상태로 진입합니다.)\n내가 이곳을 정복하여 유발하는 정복 효과가 한 번 더 유발됩니다.\n이 카드가 정복하면, 아군 유닛 1명을 [버프]할 수 있습니다. (해당 유닛에 버프가 없는 경우 +1 위력 버프 1개를 부여합니다.)"
   },
   "UNL-030/219": {
     "collectorNumber": "UNL-030/219",
@@ -239,7 +239,7 @@ export const unleashedKoTranslations = Object.freeze({
     "koName": "바이, 다혈질",
     "koHeader": "[바이, 다혈질], 4 에너지, 3 위력",
     "koTypeLine": "챔피언 유닛, 바이, 자운",
-    "koText": "비공식 번역\n[굴절] (상대가 주문 또는 스킬로 이 카드를 선택하려면 힘을 지불해야 합니다.)\n에너지 2, 격노 힘 1: 이번 턴에 이 카드의 위력을 두 배로 합니다."
+    "koText": "비공식 번역\n[굴절] (상대가 주문 또는 스킬로 이 카드를 선택하려면 힘을 지불해야 합니다.)\n에너지 2, 분노 힘 1: 이번 턴에 이 카드의 위력을 두 배로 합니다."
   },
   "UNL-031/219": {
     "collectorNumber": "UNL-031/219",
@@ -1383,7 +1383,7 @@ export const unleashedKoTranslations = Object.freeze({
     "koName": "희생",
     "koHeader": "[희생], 1 에너지",
     "koTypeLine": "주문",
-    "koText": "비공식 번역\n[반응] (주문 및 스킬이 처리되기 전을 포함해 시점에 관계없이 사용합니다.)\n이 카드를 사용하기 위한 추가 비용으로, 아군 [강력] 유닛 1명을 처치합니다. (유닛은 위력이 5 이상인 동안 [강력]입니다.)\n카드 2장을 뽑고 룬 1장을 탈진 상태로 전개합니다."
+    "koText": "비공식 번역\n[반응] (주문 및 스킬이 처리되기 전을 포함해 시점에 관계없이 사용합니다.)\n이 카드를 사용하기 위한 추가 비용으로, 아군 [위력적] 유닛 1명을 처치합니다. (유닛은 위력이 5 이상인 동안 [위력적]입니다.)\n카드 2장을 뽑고 룬 1장을 탈진 상태로 전개합니다."
   },
   "UNL-174/219": {
     "collectorNumber": "UNL-174/219",
@@ -1469,7 +1469,7 @@ export const unleashedKoTranslations = Object.freeze({
     "collectorNumber": "UNL-184/219",
     "englishName": "Thrill of the Hunt",
     "koName": "사냥의 전율",
-    "koHeader": "[사냥의 전율], 2 에너지, 1 격노/신체 힘",
+    "koHeader": "[사냥의 전율], 2 에너지, 1 분노/신체 힘",
     "koTypeLine": "주문, 렝가",
     "koText": "비공식 번역\n[반응] (주문 및 스킬이 처리되기 전을 포함해 시점에 관계없이 사용합니다.)\n아군 유닛 1명을 추방한 후, 그 소유자는 비용을 지불하지 않고 해당 유닛을 원하는 전장에 사용합니다."
   },
@@ -1485,7 +1485,7 @@ export const unleashedKoTranslations = Object.freeze({
     "collectorNumber": "UNL-186/219",
     "englishName": "Death from Below",
     "koName": "아래에서 온 죽음",
-    "koHeader": "[아래에서 온 죽음], 4 에너지, 1 격노/혼돈 힘",
+    "koHeader": "[아래에서 온 죽음], 4 에너지, 1 분노/혼돈 힘",
     "koTypeLine": "주문, 파이크",
     "koText": "비공식 번역\n전장에 있는 유닛 1명을 처치합니다. 이후 해당 유닛의 위력이 3 이하였으면 다음을 수행합니다: 내 폐기장에서 힘 1을 지불하여 이 카드를 사용할 수 있습니다."
   },

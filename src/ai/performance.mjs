@@ -20,6 +20,32 @@ const EMPTY_COUNTERS = Object.freeze({
 let enabled = false;
 let counters = { ...EMPTY_COUNTERS };
 let startedAt = now();
+let progressObserver = null;
+
+// These counters are emitted at computation boundaries, including inside
+// synchronous searches where an event-loop heartbeat cannot run. Progress
+// observation is independent of optional timing instrumentation.
+export const AI_PROGRESS_COUNTERS = Object.freeze([
+  "cloneCalls", "legalCalls", "applyCalls", "inferenceCalls",
+  "rolloutCalls", "rolloutSimulations", "rolloutSteps",
+  "productionLeafAuditCalls", "productionLeafAuditSteps"
+]);
+const progressKeys = new Set(AI_PROGRESS_COUNTERS);
+
+export function observeAiProgress(callback, options = {}) {
+  const observer = {
+    callback,
+    clock: options.clock || now,
+    intervalMs: Math.max(0, Number(options.intervalMs ?? 5000) || 0),
+    lastReportedAt: -Infinity,
+    sequence: 0,
+    counters: {}
+  };
+  progressObserver = observer;
+  return () => {
+    if (progressObserver === observer) progressObserver = null;
+  };
+}
 
 export function configureAiPerformance(options = {}) {
   enabled = options === true || options?.enabled === true;
@@ -37,8 +63,25 @@ export function resetAiPerformance() {
 }
 
 export function addAiPerformance(key, amount = 1) {
-  if (!enabled || !Number.isFinite(Number(amount))) return;
-  counters[key] = (Number(counters[key]) || 0) + Number(amount);
+  if (!enabled && !progressObserver) return;
+  const increment = Number(amount);
+  if (!Number.isFinite(increment)) return;
+  if (progressObserver && increment > 0 && progressKeys.has(key)) {
+    const observer = progressObserver;
+    observer.counters[key] = (observer.counters[key] || 0) + increment;
+    observer.sequence += 1;
+    const timestamp = observer.clock();
+    if (timestamp - observer.lastReportedAt >= observer.intervalMs) {
+      observer.lastReportedAt = timestamp;
+      try {
+        observer.callback({ sequence: observer.sequence, counters: { ...observer.counters } });
+      } catch {
+        // Telemetry must never change a game result or consume its RNG.
+      }
+    }
+  }
+  if (!enabled) return;
+  counters[key] = (Number(counters[key]) || 0) + increment;
 }
 
 export function measureAiPerformance(key, fn) {

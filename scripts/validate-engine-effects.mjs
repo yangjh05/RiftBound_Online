@@ -115,6 +115,42 @@ if (engineSource.includes("function cardHasEffect(") || engineSource.includes("c
   errors.push("Effect lookup must use timing-aware helpers, not cardHasEffect(kind).");
 }
 
+// A resolver alone does not make a triggered ability reachable. Check the
+// event collectors that explicitly enumerate kinds, separately from the
+// resolution tables. Generic collectors are covered by their event tests.
+const explicitEventCollectors = {
+  cardPlayed: ["collectPlayedObjectTriggers"],
+  attackOrDefend: ["collectAttackOrDefendTriggers"],
+  conquerHere: ["triggerConquerEventEffects"],
+  death: ["collectDeathknellTriggers", "collectPostDeathTriggers"],
+  stun: ["triggerStunEffects"],
+  defendHere: ["showdownDefendHereTriggers"],
+  firstBeginning: ["collectStartOfBeginningTriggers"]
+};
+const vendettaKinds = parseSetKeys("VENDATTA_EFFECT_KINDS");
+const checkedEventRoutes = new Set();
+for (const card of Object.values(cards)) {
+  for (const effect of card.effects || []) {
+    const key = `${effect.timing}:${effect.kind}`;
+    const collectorNames = card.type === "legend" && effect.timing === "conquer"
+      ? ["triggerConquerEventEffects"] : explicitEventCollectors[effect.timing];
+    if (collectorNames) {
+      const bodies = collectorNames.map(functionSource).join("\n");
+      const dispatched = bodies.includes(`"${effect.kind}"`)
+        || (bodies.includes("VENDATTA_EFFECT_KINDS.has(effect.kind)") && vendettaKinds.has(effect.kind));
+      if (!dispatched) errors.push(`${card.cardNumber} ${card.name}: ${key} has no event dispatch in ${collectorNames.join(" / ")}.`);
+      checkedEventRoutes.add(`${card.type}:${key}`);
+    }
+    if (["cardHidden", "opponentScore"].includes(effect.timing)) {
+      const eventLookup = new RegExp(`cardEffects\\([^\\n]*,\\s*"${effect.timing}"\\)`);
+      if (!eventLookup.test(engineSource) || !effectResolverKeys.has(key)) {
+        errors.push(`${card.cardNumber} ${card.name}: ${key} requires both an event collector and a shared resolver.`);
+      }
+      checkedEventRoutes.add(`${card.type}:${key}`);
+    }
+  }
+}
+
 const unsafeMultiTypeComparisons = [
   /\.type\s*(?:===|!==)\s*(?:spec|effect|continuation|choice\.data|payment|cost)\.(?:cardType|sourceType|recycleTrashType|discardType|countFromControlledType)/gu,
   /(?:cardTypes|sourceCardTypes)\??\.includes\([^\n]*\.type\)/gu,
@@ -159,6 +195,13 @@ if (errors.length) {
 }
 
 console.log(`Validated ${effectResolverKeys.size} effect resolvers, ${choiceResolverKeys.size} choice resolvers, and ${triggerResolverKeys.size} trigger resolvers.`);
+console.log(`Checked ${checkedEventRoutes.size} explicitly dispatched trigger routes against the registered card pool.`);
+
+function functionSource(name) {
+  const start = engineSource.indexOf(`function ${name}(`);
+  const end = engineSource.indexOf("\n}", start);
+  return start < 0 || end < 0 ? "" : engineSource.slice(start, end + 2);
+}
 
 function validateOnMoveContract(key, definition) {
   if (!["sync", "choice"].includes(definition.flow)) {

@@ -140,5 +140,7 @@ test("attached gear uses rotation and accessible metadata on the board but keeps
 test("player identity UI tolerates a champion returned from play to hand", async () => {
   const source = await readFile(new URL("../src/app.mjs", import.meta.url), "utf8");
   assert.match(source, /function miniIdentity\(card, player = null\) \{\s+if \(!card\) return "";/u);
-  assert.match(source, /if \(player\.legend\?\.instanceId === cardId\)/u);
+  assert.match(source, /addCard\(player\.champion\);/u);
+  assert.match(source, /for \(const card of player\.hand \|\| \[\]\) addCard\(card, \{ playerId: player\.id, zone: "hand", location: "hand" \}\);/u);
+  assert.match(source, /player\.champion\?\.zone === "champion" && !player\.championPlayed/u);
 });
