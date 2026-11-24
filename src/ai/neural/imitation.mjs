@@ -2,6 +2,7 @@ import { createGame } from "../../engine.mjs";
 import { activeActorId, applyAiAction, auditDecisionBoundary, auditRecordedDecisionSafety, enumerateAiPolicyActions, actionKey } from "../actions.mjs";
 import { DEFAULT_AI_MODEL, evaluateState, scoreActions } from "../policy.mjs";
 import { resolvePlannedPayment } from "../payment-planner.mjs";
+import {needsPaymentOptionDecision} from '../payment-options.mjs';
 import { ACTION_DIM, encodeActionSet, encodeOpponentDeckTarget, encodeState } from "./encoding.mjs";
 import { NEURAL_HIDDEN_SIZE } from "./model.mjs";
 
@@ -31,7 +32,7 @@ export function collectBaselineImitation(options) {
     let intentTurnSequence = game.turnSequence;
     const attemptedIntents = new Set();
     for (; actionCount < (options.maxActions || 640) && game.phase !== "complete"; actionCount += 1) {
-      if (game.pendingPayment) {
+      if (game.pendingPayment && !needsPaymentOptionDecision(game)) {
         if (!resolvePlannedPayment(game, { model: options.baseline || DEFAULT_AI_MODEL })?.ok) { failure = "payment-plan-failed"; break; }
         continue;
       }
@@ -68,7 +69,9 @@ export function collectBaselineImitation(options) {
         teacherConfidence: confidence,
         selectedKind: selected.action.kind,
         selectedActionKey: selected.key,
-        legalActionKeys: legal.map(actionKey),
+        legalActionKeys: actionSet.actions.map(actionKey),
+        actionManifestVersion: 2,
+        originalLegalActionKeys: legal.map(actionKey),
         originalLegalCount: actionSet.originalLegalCount,
         actionSetTruncated: actionSet.truncated,
         imitation: true

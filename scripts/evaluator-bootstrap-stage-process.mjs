@@ -6,6 +6,7 @@ import {
 } from "./evaluator-bootstrap-stage-handoff.mjs";
 import { withFileLock } from "./file-lock.mjs";
 import { renameWithRetry } from "./file-replace.mjs";
+import { persistEvaluatorBootstrapRestartContract } from "./evaluator-bootstrap-restart-preflight.mjs";
 
 const requestArgument = process.argv[2];
 const resultArgument = process.argv[3];
@@ -62,7 +63,10 @@ try {
   );
   const result = await withFileLock(
     stageLockPath,
-    () => collectEvaluatorBootstrap(options),
+    async () => {
+      await persistEvaluatorBootstrapRestartContract(options, request.metadata);
+      return collectEvaluatorBootstrap(options);
+    },
     {
       // A replacement parent may start while an orphaned child is draining.
       // Waiting here prevents two coordinators from writing the same dataset.

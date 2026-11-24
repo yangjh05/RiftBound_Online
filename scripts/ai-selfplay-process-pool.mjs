@@ -5,6 +5,13 @@ import { availableParallelism, freemem, tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { serializeNeuralModel } from "../src/ai/neural/model.mjs";
+import { SELF_PLAY_REPRESENTATION } from "./ai-training-representation.mjs";
+import {
+  acceptSelfPlayProgress,
+  readSelfPlayProgress,
+  selfPlayProgressPath,
+  selfPlayProgressStatus
+} from "./ai-selfplay-progress.mjs";
 import {
   consumeSelfPlayResultHandoff,
   discardSelfPlayResultHandoff,
@@ -80,10 +87,12 @@ export function selfPlayDynamicScaleDecision(state = {}, options = {}) {
   // sample rather than by treating missing telemetry as infinite headroom.
   const enoughMemory = memoryKnown
     && freeMemoryBytes >= minimumFreeMemoryBytes + requiredHeadroomBytes;
+  const recoverableRetiringProcesses = Math.max(
+    0, Math.floor(Number(state.recoverableRetiringProcesses) || 0)
+  );
   if (state.dynamicScaling !== false
-    && state.retiringProcesses === 0
     && desiredProcessCount < maximumProcessCount
-    && processCount < maximumProcessCount
+    && (recoverableRetiringProcesses > 0 || processCount < maximumProcessCount)
     && queuedTasks > idleProcesses
     && enoughMemory) {
     return {
@@ -97,6 +106,45 @@ export function selfPlayDynamicScaleDecision(state = {}, options = {}) {
     desiredProcessCount,
     requiredHeadroomBytes
   };
+}
+
+// Starting more workers must reserve memory for every new process, not just
+// pass the one-worker scale-up check. Logical game assignments are unchanged.
+export function selfPlayInitialProcessCount(options = {}, taskCount = Infinity) {
+  const limits = selfPlayProcessLimits(options, taskCount);
+  if (options.memoryAwareInitialProcesses !== true) return limits.initialProcessCount;
+  const capacity = selfPlayDynamicCapacityLimit(options, limits.maximumProcessCount);
+  if (!capacity) return 0;
+  const free = Number(typeof options.freeMemoryBytes === "function" ? options.freeMemoryBytes() : freemem());
+  const reserve = Math.max(0, Number(options.minimumFreeMemoryBytes) || 0);
+  const headroom = Math.max(DEFAULT_DYNAMIC_WORKER_HEADROOM_BYTES,
+    Number(options.dynamicWorkerHeadroomBytes) || 0,
+    Math.ceil((Number(options.initialWorkerRssBytes) || 0) * 1.25));
+  const affordable = Number.isFinite(free) ? Math.max(1, Math.floor((free - reserve) / headroom)) : 1;
+  return Math.min(limits.initialProcessCount, capacity, affordable);
+}
+
+export function selfPlayDynamicCapacityLimit(options, maximum) {
+  if (typeof options.dynamicProcessLimit !== "function") return maximum;
+  const supplied = Number(options.dynamicProcessLimit());
+  return Number.isFinite(supplied) ? Math.max(0, Math.min(maximum, Math.floor(supplied))) : 0;
+}
+
+export function selfPlayTaskDurationLimit(options = {}) {
+  const explicitLimit = Number(options.maximumTaskDurationMs);
+  if (Number.isFinite(explicitLimit) && explicitLimit > 0) {
+    return Math.max(60_000, explicitLimit);
+  }
+  // Elapsed time alone is not evidence of a stuck game. Operators may opt
+  // into a whole-task deadline, but collection has no deadline by default.
+  return 0;
+}
+
+export function selfPlayTaskTimedOut(slot = {}, options = {}, now = Date.now()) {
+  if (!slot?.task || slot.startedAt == null
+    || !Number.isFinite(Number(slot.startedAt))) return false;
+  const limit = selfPlayTaskDurationLimit(options);
+  return limit > 0 && now - Number(slot.startedAt) >= limit;
 }
 
 export function buildSelfPlayTaskQueue(games, workers, completedGameIndexes = new Map()) {
@@ -204,10 +252,8 @@ export async function collectProcessPoolSelfPlay(options) {
     });
   }
 
-  const {
-    initialProcessCount,
-    maximumProcessCount
-  } = selfPlayProcessLimits(options, tasks.length);
+  const { maximumProcessCount } = selfPlayProcessLimits(options, tasks.length);
+  const initialProcessCount = selfPlayInitialProcessCount(options, tasks.length);
   const handoffDirectory = await mkdtemp(path.join(
     options.resultHandoffRoot || tmpdir(),
     "riftbound-ai-selfplay-pool-"
@@ -220,6 +266,8 @@ export async function collectProcessPoolSelfPlay(options) {
     ...(options.workerEnvironment || {})
   });
   const commonOptions = {
+    representation: SELF_PLAY_REPRESENTATION,
+    tacticalRefreshSchedule: options.tacticalRefreshSchedule || null,
     decks: options.decks,
     model: serializeNeuralModel(options.model),
     league: (options.league || []).map(serializeNeuralModel),
@@ -232,7 +280,7 @@ export async function collectProcessPoolSelfPlay(options) {
     leagueSamplingWeights: options.leagueSamplingWeights || null,
     gamma: options.gamma ?? 0.997,
     gaeLambda: options.gaeLambda ?? 0.95,
-    longHorizonLambda: options.longHorizonLambda ?? 0.985,
+    longHorizonLambda: options.longHorizonLambda ?? 1,
     longHorizonWeight: options.longHorizonWeight ?? 0.6,
     maxActions: options.maxActions || 600,
     temperature: options.temperature || 0.8,
@@ -254,7 +302,7 @@ export async function collectProcessPoolSelfPlay(options) {
     teacherConfirmationMaxSimulations: options.teacherConfirmationMaxSimulations ?? 32,
     teacherDepth: options.teacherDepth || 10,
     teacherCandidates: options.teacherCandidates || 6,
-    teacherLeafAuditSimulations: options.teacherLeafAuditSimulations ?? 8,
+    teacherLeafAuditSimulations: options.teacherLeafAuditSimulations ?? 128,
     captureIndependentActionAudit:
       options.captureIndependentActionAudit === true,
     deferIndependentActionAudit:
@@ -304,6 +352,7 @@ export async function collectProcessPoolSelfPlay(options) {
     captureProductionLeafAudit: options.captureProductionLeafAudit === true,
     captureIndependentLeafAudit:
       options.captureIndependentLeafAudit !== false,
+    detachedIndependentLeafAudit: options.detachedIndependentLeafAudit === true,
     // Phase-stratified evaluator bootstrap runs must carry their focus all the
     // way into the child. Dropping either list makes the child treat every
     // phase as eligible and lets the small per-game audit budget expire before
@@ -366,17 +415,20 @@ export async function collectProcessPoolSelfPlay(options) {
     0,
     Number(options.maximumWorkerRssBytes) || 0
   );
+  const maximumTaskDurationMs = selfPlayTaskDurationLimit(options);
   const minimumFreeMemoryBytes = Math.max(
     0,
     Number(options.minimumFreeMemoryBytes) || 0
   );
   const results = [];
   const slots = Array.from({ length: maximumProcessCount }, () => null);
+  const childExits = [];
   const retryAttempts = new Map();
   const retryTasks = [];
   const startupRetryAttempts = new Map();
   const startupRetryTimers = new Map();
   let nextTaskIndex = 0;
+  let assignmentSequence = 0;
   let completedTasks = 0;
   let desiredProcessCount = initialProcessCount;
   let peakProcessCount = 0;
@@ -397,8 +449,8 @@ export async function collectProcessPoolSelfPlay(options) {
     finishResolve = resolve;
     finishReject = reject;
   });
-  const dynamicScaling = options.dynamicScaling !== false
-    && maximumProcessCount > initialProcessCount;
+  // Even a pool starting at its ceiling must recover after a temporary dip.
+  const dynamicScaling = options.dynamicScaling !== false;
   const dynamicScaleIntervalMs = Math.max(
     1_000,
     Number(options.dynamicScaleIntervalMs)
@@ -418,6 +470,8 @@ export async function collectProcessPoolSelfPlay(options) {
   const heartbeat = setInterval(() => {
     if (settled) return;
     detectStopRequest();
+    refreshTaskProgress();
+    recoverTimedOutTasks();
     assignAvailableSlots();
     options.onWorkerHeartbeat?.(poolSnapshot(
       slots,
@@ -436,7 +490,8 @@ export async function collectProcessPoolSelfPlay(options) {
         maximumProcessCount,
         desiredProcessCount,
         peakProcessCount,
-        dynamicScaling
+        dynamicScaling,
+        maximumTaskDurationMs
       }
     ));
     finishIfDrained();
@@ -444,6 +499,7 @@ export async function collectProcessPoolSelfPlay(options) {
   heartbeat.unref?.();
   const scheduler = setInterval(() => {
     if (settled) return;
+    refreshTaskProgress();
     assignAvailableSlots();
   }, Math.max(1000, Number(options.memoryBackpressurePollMs) || 5000));
   scheduler.unref?.();
@@ -477,6 +533,16 @@ export async function collectProcessPoolSelfPlay(options) {
     clearInterval(scheduler);
     clearInterval(scaleScheduler);
     clearWorkerStartupRetryTimers();
+    if (options.awaitWorkerExit === true) {
+      // These workers have finished or the pool has failed; this is only an
+      // idle-process shutdown deadline, never a game time limit.
+      const shutdownTimer = setTimeout(() => {
+        for (const slot of slots.filter(Boolean)) {
+          if (slot.child.exitCode == null && slot.child.signalCode == null) slot.child.kill();
+        }
+      }, 5000);
+      try { await Promise.all(childExits); } finally { clearTimeout(shutdownTimer); }
+    }
     await rm(handoffDirectory, { recursive: true, force: true }).catch(() => {});
   }
 
@@ -490,6 +556,10 @@ export async function collectProcessPoolSelfPlay(options) {
       stdio: ["ignore", "ignore", "inherit", "ipc"],
       windowsHide: true
     });
+    if (options.awaitWorkerExit === true) childExits.push(new Promise(resolve => {
+      child.once("exit", resolve);
+      child.once("error", () => { if (!child.pid) resolve(); });
+    }));
     const slot = {
       slotIndex,
       child,
@@ -572,6 +642,15 @@ export async function collectProcessPoolSelfPlay(options) {
       } else {
         assignNext(slot);
       }
+      return;
+    }
+    if (message?.type === "task-started") {
+      if (!slot.task || slot.task.workerIndex !== message.workerIndex
+        || slot.task.gameIndex !== message.gameIndex) {
+        fail(new Error(`Self-play process ${slot.slotIndex} acknowledged an unexpected game.`));
+        return;
+      }
+      slot.appliedAuditSettings = message.appliedAuditSettings;
       return;
     }
     if (message?.type === "game-complete") {
@@ -673,7 +752,8 @@ export async function collectProcessPoolSelfPlay(options) {
             maximumProcessCount,
             desiredProcessCount,
             peakProcessCount,
-            dynamicScaling
+            dynamicScaling,
+            maximumTaskDurationMs
           }
         ));
         if (completedTasks >= tasks.length) {
@@ -727,6 +807,7 @@ export async function collectProcessPoolSelfPlay(options) {
       return;
     }
     if (draining || assignmentClosed) {
+      if (draining && options.releaseIdleOnStop === true) requestSlotRetirement(slot);
       finishIfDrained();
       return;
     }
@@ -752,13 +833,15 @@ export async function collectProcessPoolSelfPlay(options) {
           maximumProcessCount,
           desiredProcessCount,
           peakProcessCount,
-          dynamicScaling
+          dynamicScaling,
+          maximumTaskDurationMs
         }
       ));
       return;
     }
-    const task = tasks[nextTaskIndex++];
+    const task = tasks[nextTaskIndex];
     if (!task) return;
+    nextTaskIndex += 1;
     assignTask(slot, {
       ...task,
       seed: (options.seed || Date.now()) + task.workerIndex * 100003
@@ -767,12 +850,19 @@ export async function collectProcessPoolSelfPlay(options) {
 
   function assignTask(slot, task) {
     if (settled || !slot.ready || slot.task) return;
+    slot.appliedAuditSettings = null;
     slot.waitingForMemory = false;
     slot.task = task;
     slot.startedAt = Date.now();
+    slot.progressToken = `${slot.child.pid}:${++assignmentSequence}`;
+    slot.progressPath = selfPlayProgressPath(handoffDirectory, slot.child.pid);
+    slot.taskProgress = null;
+    slot.lastProgressAt = null;
+    slot.progressWarningEmitted = false;
     if (!sendChildMessage(slot.child, {
       type: "run-game",
-      task
+      task,
+      progressToken: slot.progressToken
     })) {
       recoverWorker(
         slot,
@@ -797,7 +887,8 @@ export async function collectProcessPoolSelfPlay(options) {
         maximumProcessCount,
         desiredProcessCount,
         peakProcessCount,
-        dynamicScaling
+        dynamicScaling,
+        maximumTaskDurationMs
       }
     ));
   }
@@ -826,7 +917,8 @@ export async function collectProcessPoolSelfPlay(options) {
           maximumProcessCount,
           desiredProcessCount,
           peakProcessCount,
-          dynamicScaling
+          dynamicScaling,
+          maximumTaskDurationMs
         }
       ));
     }
@@ -850,6 +942,7 @@ export async function collectProcessPoolSelfPlay(options) {
 
   function ensureDesiredWorkers() {
     if (settled || draining || assignmentClosed) return;
+    desiredProcessCount = Math.min(desiredProcessCount, selfPlayDynamicCapacityLimit(options, maximumProcessCount));
     let needed = Math.max(0, desiredProcessCount - liveProcessCount());
     if (needed === 0) return;
     for (let slotIndex = 0;
@@ -891,11 +984,24 @@ export async function collectProcessPoolSelfPlay(options) {
 
   function evaluateDynamicScale() {
     if (settled || draining || assignmentClosed) return;
+    const dynamicMaximum = selfPlayDynamicCapacityLimit(options, maximumProcessCount);
+    if (desiredProcessCount > dynamicMaximum) {
+      const retiring = desiredProcessCount - dynamicMaximum;
+      desiredProcessCount = dynamicMaximum;
+      for (let i = 0; i < retiring; i++) retireOneWorker();
+    }
+    if (dynamicMaximum === 0) return;
+    if (desiredProcessCount === 0) {
+      desiredProcessCount = selfPlayInitialProcessCount(options, tasks.length);
+      ensureDesiredWorkers();
+    }
     const memory = memoryBackpressureState();
     memoryBackpressured = memory.active;
     lastFreeMemoryBytes = memory.freeBytes;
     const live = liveProcessCount();
     const retiring = slots.filter((slot) => slot?.retireRequested).length;
+    const recoverableRetiring = slots.filter((slot) =>
+      slot?.retireRequested && !slot.expectedExit && slot.task);
     const idle = slots.filter((slot) => slot
       && slot.ready
       && !slot.task
@@ -911,9 +1017,10 @@ export async function collectProcessPoolSelfPlay(options) {
       queuedTasks: queued,
       idleProcesses: idle,
       retiringProcesses: retiring,
+      recoverableRetiringProcesses: recoverableRetiring.length,
       dynamicScaling
     }, {
-      maximumProcessCount,
+      maximumProcessCount: dynamicMaximum,
       minimumFreeMemoryBytes,
       workerHeadroomBytes: dynamicWorkerHeadroomBytes
     });
@@ -931,6 +1038,10 @@ export async function collectProcessPoolSelfPlay(options) {
         healthyScaleSamples = 0;
         desiredProcessCount = decision.desiredProcessCount;
         lastScaleChangeAt = Date.now();
+        // A busy worker has not received shutdown yet. Reuse it before
+        // allocating another process; its current game and seed stay intact.
+        const recovered = recoverableRetiring[0];
+        if (recovered) recovered.retireRequested = false;
         ensureDesiredWorkers();
       }
     } else {
@@ -954,6 +1065,7 @@ export async function collectProcessPoolSelfPlay(options) {
         desiredProcessCount,
         peakProcessCount,
         dynamicScaling,
+        maximumTaskDurationMs,
         dynamicWorkerHeadroomBytes: decision.requiredHeadroomBytes
       }
     ));
@@ -1028,6 +1140,8 @@ export async function collectProcessPoolSelfPlay(options) {
       seed: task.seed,
       retryAttempt: attempts + 1,
       maximumTaskRetries,
+      code: error?.code || null,
+      diagnostic: error?.diagnostic || null,
       reason: error?.message || String(error)
     });
     slot.recovering = false;
@@ -1071,6 +1185,44 @@ export async function collectProcessPoolSelfPlay(options) {
       }
     } else {
       recycleWorker(slot, task);
+    }
+  }
+
+  function refreshTaskProgress() {
+    const now = Date.now();
+    for (const slot of slots.filter(Boolean)) {
+      if (!slot.task || slot.expectedExit || slot.recovering) continue;
+      acceptSelfPlayProgress(slot, readSelfPlayProgress(slot.progressPath), now);
+      const progress = selfPlayProgressStatus(slot, now);
+      if (progress?.state !== "no-recent-progress" || slot.progressWarningEmitted) continue;
+      slot.progressWarningEmitted = true;
+      // A long native operation, a slow search or delayed telemetry is not
+      // proof of deadlock. Report the evidence; do not discard/retry work.
+      options.onTaskProgressWarning?.({
+        workerIndex: slot.task.workerIndex,
+        gameIndex: slot.task.gameIndex,
+        processId: slot.child.pid,
+        progress,
+        action: "continue"
+      });
+    }
+  }
+
+  function recoverTimedOutTasks() {
+    const now = Date.now();
+    for (const slot of slots.filter(Boolean)) {
+      if (!selfPlayTaskTimedOut(slot, { maximumTaskDurationMs }, now)) continue;
+      const elapsedSeconds = Math.max(0, Math.round(
+        (now - Number(slot.startedAt)) / 1000
+      ));
+      const error = new Error(
+        `Self-play process ${slot.slotIndex} exceeded the task time limit `
+        + `(${elapsedSeconds}s / ${Math.round(maximumTaskDurationMs / 1000)}s).`
+      );
+      error.code = "AI_SELFPLAY_TASK_TIMEOUT";
+      error.task = slot.task;
+      error.diagnostic = { task: slot.task, elapsedSeconds, maximumTaskDurationMs };
+      recoverWorker(slot, error);
     }
   }
 
@@ -1195,6 +1347,10 @@ function poolSnapshot(slots, completedTasks, totalTasks, stop = {}) {
   return {
     backend: "child-process-pool",
     processCount: slots.filter(Boolean).length,
+    balancingContract: "memory-recovery-v2",
+    retiringProcessCount: slots.filter((slot) => slot?.retireRequested).length,
+    recoverableRetiringProcessCount: slots.filter((slot) =>
+      slot?.retireRequested && !slot.expectedExit && slot.task).length,
     initialProcessCount: Math.max(
       0,
       Number(stop.initialProcessCount) || 0
@@ -1212,6 +1368,7 @@ function poolSnapshot(slots, completedTasks, totalTasks, stop = {}) {
       Number(stop.peakProcessCount) || 0
     ),
     dynamicScaling: stop.dynamicScaling === true,
+    maximumTaskDurationMs: Number(stop.maximumTaskDurationMs) || 0,
     dynamicWorkerHeadroomBytes: Math.max(
       0,
       Number(stop.dynamicWorkerHeadroomBytes) || 0
@@ -1234,7 +1391,9 @@ function poolSnapshot(slots, completedTasks, totalTasks, stop = {}) {
       workerIndex: slot.task.workerIndex,
       gameIndex: slot.task.gameIndex,
       taskContext: slot.task.taskContext || null,
-      elapsedSeconds: Math.max(0, Math.round((now - slot.startedAt) / 1000))
+      appliedAuditSettings: slot.appliedAuditSettings || null,
+      elapsedSeconds: Math.max(0, Math.round((now - slot.startedAt) / 1000)),
+      progress: selfPlayProgressStatus(slot, now)
     }))
   };
 }
@@ -1250,7 +1409,7 @@ async function finishCollection(options, games, processCount, reusedGames, stop 
     });
     collected.workerStats = {
       total: processCount,
-      initial: Math.max(0, Number(stop.initialProcessCount) || processCount),
+      initial: Math.max(0, Number(stop.initialProcessCount ?? processCount) || 0),
       maximum: Math.max(0, Number(stop.maximumProcessCount) || processCount),
       desired: Math.max(0, Number(stop.desiredProcessCount) || processCount),
       peak: Math.max(0, Number(stop.peakProcessCount) || processCount),
@@ -1274,7 +1433,7 @@ async function finishCollection(options, games, processCount, reusedGames, stop 
     deckLearning: mergeLearningSnapshots(snapshots.map((result) => result.deckLearning)),
     workerStats: {
       total: processCount,
-      initial: Math.max(0, Number(stop.initialProcessCount) || processCount),
+      initial: Math.max(0, Number(stop.initialProcessCount ?? processCount) || 0),
       maximum: Math.max(0, Number(stop.maximumProcessCount) || processCount),
       desired: Math.max(0, Number(stop.desiredProcessCount) || processCount),
       peak: Math.max(0, Number(stop.peakProcessCount) || processCount),

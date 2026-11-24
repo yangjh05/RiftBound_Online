@@ -395,6 +395,7 @@ import missFortuneBountyHunter2 from "./cards/missFortuneBountyHunter2.mjs";
 import missFortuneBountyHunter3 from "./cards/missFortuneBountyHunter3.mjs";
 import settTheBoss2 from "./cards/settTheBoss2.mjs";
 import settTheBoss3 from "./cards/settTheBoss3.mjs";
+import ahriNineTailedFoxKorea from "./cards/ahriNineTailedFoxKorea.mjs";
 
 export const cards = {
   ...ogsCards,
@@ -791,7 +792,8 @@ export const cards = {
   missFortuneBountyHunter2,
   missFortuneBountyHunter3,
   settTheBoss2,
-  settTheBoss3
+  settTheBoss3,
+  ahriNineTailedFoxKorea
 };
 
 assertUniqueCardNumbers(cards);

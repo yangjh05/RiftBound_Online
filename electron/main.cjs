@@ -58,6 +58,40 @@ async function createGameWindow() {
       shell.openExternal(url);
     }
   });
+
+  installRendererRecovery(win);
+}
+
+function installRendererRecovery(win) {
+  let recoveryPromptOpen = false;
+  const offerRecovery = async (detail) => {
+    if (recoveryPromptOpen || win.isDestroyed()) return;
+    recoveryPromptOpen = true;
+    try {
+      const choice = await dialog.showMessageBox(win, {
+        type: "error",
+        title: "게임 화면 오류",
+        message: "게임 화면을 계속 실행할 수 없습니다.",
+        detail: `${detail}\n\n화면을 복구하면 마지막으로 저장된 경기 로그가 오류 중단 상태로 열리고, 서버 전송 여부를 선택할 수 있습니다.`,
+        buttons: ["경기 중단 후 화면 복구", "앱 종료"],
+        defaultId: 0,
+        cancelId: 1,
+        noLink: true
+      });
+      if (choice.response === 0 && !win.isDestroyed()) win.webContents.reload();
+      else if (!win.isDestroyed()) win.close();
+    } finally {
+      recoveryPromptOpen = false;
+    }
+  };
+
+  win.webContents.on("render-process-gone", (_event, details) => {
+    if (details?.reason === "clean-exit") return;
+    void offerRecovery(`화면 프로세스가 종료되었습니다 (${details?.reason || "unknown"}).`);
+  });
+  win.on("unresponsive", () => {
+    void offerRecovery("게임 화면이 응답하지 않습니다.");
+  });
 }
 
 async function runStartup() {
@@ -141,17 +175,23 @@ async function startBundledServer() {
   if (!process.env.RIFTBOUND_AI_DATA_DIR) {
     process.env.RIFTBOUND_AI_DATA_DIR = path.join(app.getPath("userData"), "ai-data");
   }
+  if (!process.env.RIFTBOUND_BUG_REPORT_DATA_DIR) {
+    process.env.RIFTBOUND_BUG_REPORT_DATA_DIR = path.join(app.getPath("userData"), "bug-reports");
+  }
   const modulePath = bundledServerModulePath({
     appRoot: root,
     isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath
   });
-  const { handleMultiplayerRequest } = await import(pathToFileURL(modulePath).href);
+  const [{ handleMultiplayerRequest }, { resolvePublicStaticPath }] = await Promise.all([
+    import(pathToFileURL(modulePath).href),
+    import(pathToFileURL(path.join(path.dirname(modulePath), "public-static.mjs")).href)
+  ]);
   const port = await findAvailablePort(preferredPort);
   const server = http.createServer(async (req, res) => {
     if (await handleMultiplayerRequest(req, res)) return;
 
-    const filePath = resolveRequest(req.url || "/");
+    const filePath = resolvePublicStaticPath(root, req.url || "/");
     if (!filePath) {
       res.writeHead(403);
       res.end("Forbidden");
@@ -173,15 +213,6 @@ async function startBundledServer() {
     server.listen(port, host, resolve);
   });
   return `http://${host}:${port}`;
-}
-
-function resolveRequest(url) {
-  const pathname = decodeURIComponent(new URL(url, `http://${host}`).pathname);
-  if (pathname === "/") return path.join(root, "index.html");
-  const normalized = path.normalize(pathname).replace(/^(\.\.[/\\])+/, "");
-  const filePath = path.join(root, normalized);
-  if (!filePath.startsWith(root)) return null;
-  return filePath;
 }
 
 function findAvailablePort(startPort) {

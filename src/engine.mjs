@@ -28,6 +28,26 @@ import { officialTokenDefinition } from "./rules/tokens.mjs";
 import { hiddenCardControllerId, hiddenCardIsControlledBy } from "./rules/zones.mjs";
 import { cardHasType, cardTypes } from "./cards/shared.mjs";
 
+const TURN_EVENT_HISTORY_KEYS = Object.freeze([
+  "attachmentEvents",
+  "empowerEvents",
+  "damageEvents",
+  "discardEvents",
+  "exhaustEvents",
+  "readyEvents",
+  "banishEvents",
+  "revealEvents",
+  "combatResultEvents",
+  "killEvents",
+  "healEvents",
+  "moveEvents",
+  "channelEvents",
+  "drawEvents",
+  "burnEvents"
+]);
+const RETAINED_EVENT_TURN_WINDOW = 1;
+const LIFECYCLE_EVENT_HISTORY_LIMIT = 256;
+
 export function createGame(options = {}) {
   const sourceDecks = Array.isArray(options.decks) && options.decks.length >= 2
     ? options.decks
@@ -41,6 +61,9 @@ export function createGame(options = {}) {
   }
   const sanctionedFormat = options.format === "match" ? "match" : "duel";
   const officialMatchSetup = sanctionedFormat === "match";
+  const setupProcedure = options.setupProcedure || (officialMatchSetup ? "match" : "core-duel");
+  const singleGameSideboardSetup = setupProcedure === "single-game-sideboard";
+  const initialSideboardingComplete = singleGameSideboardSetup && options.initialSideboardingComplete === true;
   const designatedChooser = players.find((player) => player.id === options.firstPlayerChooserId) || null;
   const requestedFirstPlayer = players.find((player) => player.id === options.firstPlayerId) || null;
   const usesFirstPlayerRoll = Boolean(options.randomFirstPlayer && !requestedFirstPlayer && !designatedChooser);
@@ -54,6 +77,9 @@ export function createGame(options = {}) {
     mode: "duel",
     sanctionedFormat,
     officialMatchSetup,
+    setupProcedure,
+    singleGameSideboardSetup,
+    initialSideboardingComplete,
     battlefieldSelectionMode: options.battlefieldSelectionMode
       || (sanctionedFormat === "match" ? "manual" : "random"),
     victoryScore: 8,
@@ -90,10 +116,10 @@ export function createGame(options = {}) {
       chooserId: null
     },
     championSelectPlayerId: officialMatchSetup ? players[0].id : null,
-    setupPlayerId: null,
+    setupPlayerId: singleGameSideboardSetup ? players[0].id : null,
     turnNumber: 1,
     turnSequence: 0,
-    phase: officialMatchSetup ? "champion-select" : "first-player",
+    phase: officialMatchSetup ? "champion-select" : singleGameSideboardSetup ? "battlefield-select" : "first-player",
     interactive: Boolean(options.interactive),
     manualActionChainPriority: Boolean(options.manualActionChainPriority),
     decisionSafety: options.decisionSafety ? {
@@ -106,6 +132,7 @@ export function createGame(options = {}) {
     } : null,
     enforceChampionLegendMatch: true,
     battlefields: [],
+    setupChampionSelections: {},
     mulligan: null,
     showdown: null,
     actionChain: null,
@@ -145,9 +172,31 @@ export function createGame(options = {}) {
 
   log(game, officialMatchSetup
     ? "Each player places their Legend and chooses one starting champion."
+    : singleGameSideboardSetup
+      ? "Each player reveals their Legend, then randomly reveals one registered Battlefield."
     : usesFirstPlayerRoll
       ? "Each player rolls a die to decide who chooses the play order."
       : `${firstPlayer.name} is set as the first player.`);
+  if (singleGameSideboardSetup) {
+    if (initialSideboardingComplete && !game.forcedBattlefieldSelections) {
+      fail(game, "The revealed Battlefields are required after initial sideboarding.");
+    } else if (initialSideboardingComplete) {
+      game.setupPlayerId = setupOrderedPlayers(game)[0]?.id || players[0].id;
+      for (const candidate of setupOrderedPlayers(game)) {
+        const cardNumber = game.forcedBattlefieldSelections[candidate.id];
+        const battlefield = candidate.availableBattlefields.find((field) =>
+          field.cardNumber === cardNumber || field.collectorNumber === cardNumber);
+        if (!battlefield) {
+          fail(game, "A revealed Battlefield is no longer registered after sideboarding.");
+          break;
+        }
+        const result = selectBattlefield(game, candidate.id, battlefield.instanceId);
+        if (!result.ok) break;
+      }
+    } else {
+      randomlySelectBattlefields(game);
+    }
+  }
   return game;
 }
 
@@ -239,6 +288,21 @@ function advanceFromFirstPlayerDecision(game) {
     beginMulligans(game);
     return { ok: true };
   }
+  if (game.singleGameSideboardSetup && !game.initialSideboardingComplete) {
+    game.phase = "sideboarding";
+    game.currentPlayerId = game.firstPlayerId;
+    game.championSelectPlayerId = null;
+    game.setupPlayerId = null;
+    game.selectedCardId = game.players.find((player) => player.id === game.firstPlayerId)?.legend?.instanceId
+      || game.players[0]?.legend?.instanceId
+      || null;
+    log(game, "Play order is set. Each player may now sideboard before revealing a chosen champion.");
+    return { ok: true, initialSideboarding: true };
+  }
+  return beginChampionSelection(game);
+}
+
+function beginChampionSelection(game) {
   const first = game.players.find((player) => player.id === game.firstPlayerId) || game.players[0];
   game.phase = "champion-select";
   game.currentPlayerId = first.id;
@@ -352,6 +416,24 @@ function finalizeBattlefieldSelections(game) {
   }
   game.setupBattlefieldSelections = {};
   game.setupPlayerId = null;
+  if (game.singleGameSideboardSetup) {
+    if (game.initialSideboardingComplete) {
+      beginChampionSelection(game);
+      return true;
+    }
+    game.phase = "first-player";
+    const decision = game.firstPlayerDecision;
+    game.currentPlayerId = decision?.status === "rolling"
+      ? decision.rollerId
+      : decision?.status === "choosing"
+        ? decision.chooserId
+        : game.firstPlayerId || game.players[0]?.id;
+    log(game, decision?.method === "roll"
+      ? "Random Battlefields are revealed. Each player now rolls to designate who chooses the play order."
+      : "Random Battlefields are revealed. The designated player now chooses the play order.");
+    if (decision?.method === "preset") advanceFromFirstPlayerDecision(game);
+    return true;
+  }
   if (game.officialMatchSetup) {
     shuffleSetupDecks(game);
     game.phase = "first-player";
@@ -399,6 +481,36 @@ export function selectChampion(game, playerId, championId) {
   if (!championMatchesLegend(player.availableChampions[index], player.legend)) return fail(game, "Chosen Champion must share a Champion tag with the current Legend.");
 
   const [chosen] = player.availableChampions.splice(index, 1);
+  if (game.singleGameSideboardSetup && game.initialSideboardingComplete) {
+    game.setupChampionSelections ||= {};
+    game.setupChampionSelections[player.id] = chosen;
+    log(game, `${player.name} locks in a starting champion.`);
+    const next = setupOrderedPlayers(game).find((candidate) => !game.setupChampionSelections[candidate.id]);
+    if (next) {
+      game.championSelectPlayerId = next.id;
+      game.currentPlayerId = next.id;
+      game.selectedCardId = next.legend.instanceId;
+      return { ok: true };
+    }
+    for (const candidate of setupOrderedPlayers(game)) {
+      const selectedChampion = game.setupChampionSelections[candidate.id];
+      candidate.champion = selectedChampion;
+      setChampionZoneState(candidate, selectedChampion, "champion");
+      candidate.chosenChampionName = selectedChampion.name;
+      recycleMainDeckCards(game, candidate, candidate.availableChampions);
+      candidate.availableChampions = [];
+      log(game, `${candidate.name} reveals ${selectedChampion.name} as their starting champion.`);
+    }
+    game.setupChampionSelections = {};
+    game.championSelectPlayerId = null;
+    game.setupPlayerId = null;
+    game.selectedCardId = chosen.instanceId;
+    shuffleSetupDecks(game);
+    drawOpeningHands(game);
+    log(game, "Chosen champions are revealed. Each player shuffles their decks and draws 4 cards.");
+    beginMulligans(game);
+    return { ok: true };
+  }
   player.champion = chosen;
   setChampionZoneState(player, chosen, "champion");
   player.chosenChampionName = chosen.name;
@@ -599,6 +711,51 @@ function clearExpiredIntel(game) {
   game.revealedIntel = (game.revealedIntel || []).filter((item) => item.expiresAtTurnSequence >= game.turnSequence);
 }
 
+function retainArrayItemsInPlace(items, predicate) {
+  let writeIndex = 0;
+  for (let readIndex = 0; readIndex < items.length; readIndex += 1) {
+    const item = items[readIndex];
+    if (!predicate(item, readIndex)) continue;
+    items[writeIndex] = item;
+    writeIndex += 1;
+  }
+  items.length = writeIndex;
+}
+
+function removeArrayIndexInPlace(items, index) {
+  if (!Array.isArray(items) || index < 0 || index >= items.length) return;
+  items.copyWithin(index, index + 1);
+  items.length -= 1;
+}
+
+function pruneHistoricalEngineEvents(game) {
+  const oldestRetainedTurnSequence = Math.max(
+    0,
+    (Number(game.turnSequence) || 0) - RETAINED_EVENT_TURN_WINDOW
+  );
+  for (const key of TURN_EVENT_HISTORY_KEYS) {
+    const events = game[key];
+    if (!Array.isArray(events) || events.length === 0) continue;
+    game[key] = events.filter((event) => !Number.isFinite(event?.turnSequence)
+      || event.turnSequence >= oldestRetainedTurnSequence);
+  }
+  // Operations are continuation ownership, not history. A completed operation
+  // can never participate in a later rules decision; old persisted states may
+  // still contain them from before completion started removing them eagerly.
+  if (Array.isArray(game.operations)) {
+    retainArrayItemsInPlace(game.operations, (operation) => operation?.status === "pending");
+  }
+  // Lifecycle events are diagnostic evidence only. Unlike rules events, old
+  // versions did not give them a turn identity, so legacy entries are safely
+  // discarded at the next stable turn boundary.
+  if (Array.isArray(game.lifecycleEvents)) {
+    game.lifecycleEvents = game.lifecycleEvents.filter((event) =>
+      Number.isFinite(event?.turnSequence)
+      && event.turnSequence >= oldestRetainedTurnSequence)
+      .slice(-LIFECYCLE_EVENT_HISTORY_LIMIT);
+  }
+}
+
 export function startTurn(game) {
   const player = currentPlayer(game);
   // Priority changes during Chains and Showdowns must never change whose turn it is.
@@ -608,6 +765,7 @@ export function startTurn(game) {
   game.showdown = null;
   game.turnSequence = (game.turnSequence || 0) + 1;
   clearExpiredIntel(game);
+  pruneHistoricalEngineEvents(game);
   player.turnScoredBattlefields = [];
   player.cardsPlayedThisTurn = 0;
   player.cardsPlayedByTypeThisTurn = {};
@@ -1303,7 +1461,7 @@ function pendingCardPaymentLegality(game, player, card, payment) {
     return { ok: false, message: "That card is no longer legally timed." };
   }
   if (process.timingPermission === "actionOrReaction") {
-    if (game.phase !== "showdown" || (!card.tags?.includes("Action")
+    if (game.phase !== "showdown" || (!cardHasActionTimingPermission(card)
       && !pendingCardRetainsReactionPermission(game, player, card, payment.destination, process))) {
       return { ok: false, message: "That card is no longer legally timed." };
     }
@@ -1484,6 +1642,10 @@ function finishHidingCard(game, player, card, battlefield, payment = {}) {
   game.selectedCardId = card.instanceId;
   log(game, `${player.name} hides a card at ${battlefield.name}.`);
   markEffect(game, battlefield, [battlefield.instanceId], `${player.name} hides a card.`);
+  const triggers = allControlledCards(game, player.id).flatMap((source) =>
+    cardEffects(source, "cardHidden").map((effect) =>
+      effectSpecsTrigger(game, player, source, effect, "cardHidden")));
+  if (triggers.length) prepareAndQueueTriggers(game, triggers, game.interactive ? "actionChain" : "queue");
   return { ok: true };
 }
 
@@ -1496,6 +1658,10 @@ export function hiddenSlotLimit(battlefield) {
     .filter((effect) => effect.kind === "additionalHiddenSlots")
     .reduce((sum, effect) => sum + (effect.amount || 1), 0);
   return 1 + additional;
+}
+
+export function cardHasKeyword(game, card, keyword) {
+  return hasKeyword(card, keyword, game);
 }
 
 function canPlayerPlayCards(game, player) {
@@ -5460,7 +5626,15 @@ function promptNextPlayDeclaration(game, player, card, state) {
       ];
       continue;
     }
-    if (!declaration.options.length && (declaration.optional || (declaration.min ?? 1) === 0)) continue;
+    if (!declaration.options.length && (declaration.optional || (declaration.min ?? 1) === 0)) {
+      // Choosing zero targets is a completed declaration, not permission to
+      // choose a newly available target when the spell eventually resolves.
+      state.declaredChoices = [
+        ...(state.declaredChoices || []),
+        { effect: declaration.effect, optionId: "skip" }
+      ];
+      continue;
+    }
     if (!declaration.options.length) return false;
     const canFinish = (declaration.min ?? 1) === 0;
     game.pendingChoice = {
@@ -6235,6 +6409,12 @@ function declarationTargetOptions(game, player, card, spec, declaration, declare
   const scope = declarationScope(spec, declaration);
   const previouslyDeclaredIds = new Set(declaredTargets.map((target) => target.targetId));
   if (declaration.optionalAtLevel != null && (player.xp || 0) < declaration.optionalAtLevel) return [];
+  if (spec.kind === "returnBattlefieldUnitToHand") {
+    return returnUnitToHandTargets(game, player, card, spec).map(cardOption);
+  }
+  if (spec.kind === "returnUnitToBase") {
+    return returnUnitToBaseTargets(game, player, card, scope, spec).map((source) => cardOption(source.unit));
+  }
   if (declaration.provider === "unleashedCounterOrTokensModes") {
     return [
       { id: "counter", label: "Counter a spell", cardId: null },
@@ -6435,6 +6615,7 @@ function declarationTargetOptions(game, player, card, spec, declaration, declare
     const previous = findCard(game, declaredTargets.at(-1)?.targetId);
     const previousLocation = previous ? findUnitLocation(game, previous.instanceId) : null;
     const candidates = targetableUnits(game, player, card, scope)
+      .filter((unit) => spec.kind !== "dealDamageUnit" || !spec.requiredDomain || unit.domains?.includes(spec.requiredDomain))
       .filter((unit) => {
         if (!declaration.sameLocationAsPrevious || !previousLocation) return true;
         const location = findUnitLocation(game, unit.instanceId);
@@ -6657,12 +6838,14 @@ function declarationScope(spec, declaration) {
 }
 
 function unitMatchesScope(unit, player, scope) {
-  if (scope === "friendly") return unit.controllerId === player.id;
-  if (scope === "enemy") return unit.controllerId !== player.id;
+  if (["friendly", "friendlyUnit", "friendlyBattlefield", "friendlyBattlefieldUnit"].includes(scope)) return unit.controllerId === player.id;
+  if (["enemy", "enemyUnit", "enemyBattlefield", "enemyBattlefieldUnit"].includes(scope)) return unit.controllerId !== player.id;
   return true;
 }
 
 function declarationUnitAllowed(game, player, unit, spec, declaration, declaredTargets, declaredChoices) {
+  if (spec.kind === "modifyMight" && spec.target !== "friendlyUnitAgainstOrChosenByEnemyDomain"
+    && spec.requiredDomain && !unit.domains?.includes(spec.requiredDomain)) return false;
   if (declaration.choiceEffect === "readyUnitAny") return unit.exhausted;
   if (spec.target === "friendlyUnitAgainstOrChosenByEnemyDomain") {
     const requiredDomain = spec.requiredDomain;
@@ -6816,21 +6999,23 @@ function paymentCard(player, payment) {
 }
 
 function findCardByPlayers(cardId, fallbackPlayer) {
-  if (!cardId) return null;
-  const players = fallbackPlayer ? [fallbackPlayer] : [];
-  return players
-    .flatMap((player) => [
-      player.legend,
-      player.champion,
-      ...player.availableChampions,
-      ...player.availableBattlefields,
-      ...player.hand,
-      ...player.base,
-      ...player.runes,
-      ...player.trash,
-      ...(player.banished || [])
-    ])
-    .find((card) => card?.instanceId === cardId) || null;
+  if (!cardId || !fallbackPlayer) return null;
+  if (fallbackPlayer.legend?.instanceId === cardId) return fallbackPlayer.legend;
+  if (fallbackPlayer.champion?.instanceId === cardId) return fallbackPlayer.champion;
+  for (const zone of [
+    fallbackPlayer.availableChampions,
+    fallbackPlayer.availableBattlefields,
+    fallbackPlayer.hand,
+    fallbackPlayer.base,
+    fallbackPlayer.runes,
+    fallbackPlayer.trash,
+    fallbackPlayer.banished
+  ]) {
+    if (!Array.isArray(zone)) continue;
+    const card = zone.find((candidate) => candidate?.instanceId === cardId);
+    if (card) return card;
+  }
+  return null;
 }
 
 function ensureRunePool(player) {
@@ -7679,6 +7864,9 @@ function finishSpell(game, player, card) {
   // items. More than one of those continuations may reach the common cleanup
   // boundary, but the same play may leave the Chain only once.
   if (!card || card.spellResolutionFinished) return;
+  // A resolving spell may ask another player to choose. The chooser does not
+  // become the player of that spell or the owner of its play triggers.
+  player = game.players.find((candidate) => candidate.id === card.controllerId) || player;
   const pendingResolution = card.pendingGameEffectResolution;
   const previousGameEffect = game.resolvingGameEffect;
   if (!previousGameEffect && pendingResolution?.context) game.resolvingGameEffect = pendingResolution.context;
@@ -8288,11 +8476,8 @@ function resolveFinalizedImmediateItems(game, chainState, kind) {
   return resolvedAny;
 }
 
-function preparePendingEffectPlayDeclarations(game) {
-  const pendingItems = [
-    ...(game.showdown ? normalizeChainItems(game.showdown) : []),
-    ...(game.actionChain ? normalizeActionChainItems(game.actionChain) : [])
-  ].filter((item) => item.status === "pending"
+function preparePendingEffectPlayDeclarations(game, oldestPendingItem) {
+  const pendingItems = [oldestPendingItem].filter((item) => item?.status === "pending"
     && item.itemType === "card"
     && item.playOptions?.effectPlay
     && !item.playOptions?.declarationsComplete);
@@ -8348,7 +8533,8 @@ function preparePendingEffectPlayDeclarations(game) {
 }
 
 function finalizeOutstandingChainItems(game) {
-  if (game.pendingChoice || game.pendingPayment || game.resolvingChainContext || game.resolvingGameEffect) return false;
+  if (game.finalizingChainItems || game.pendingChoice || game.pendingPayment
+    || game.resolvingChainContext || game.resolvingGameEffect) return false;
   const showdownPending = game.showdown
     ? normalizeChainItems(game.showdown).some((item) => item.status === "pending")
     : false;
@@ -8357,23 +8543,38 @@ function finalizeOutstandingChainItems(game) {
     : false;
   if (!showdownPending && !actionPending) return false;
 
-  if (preparePendingEffectPlayDeclarations(game)) return true;
-
-  const hasReadyPending = [
-    ...(game.showdown ? normalizeChainItems(game.showdown) : []),
-    ...(game.actionChain ? normalizeActionChainItems(game.actionChain) : [])
-  ].some((item) => item.status === "pending" && pendingCardReadyForFinalize(item));
-  if (!hasReadyPending) return false;
-
-  if (showdownPending) finalizePendingChainItems(game);
-  if (actionPending) finalizePendingActionChainItems(game);
-  requestCleanup(game, "pending-item-finalized");
-  checkState(game);
+  let finalizedAny = false;
+  game.finalizingChainItems = true;
+  try {
+    while (!game.pendingChoice && !game.pendingPayment && game.phase !== "complete") {
+      const chainState = game.showdown || game.actionChain;
+      if (!chainState) break;
+      const kind = chainState === game.showdown ? "showdown" : "action";
+      const chain = kind === "showdown" ? normalizeChainItems(chainState) : normalizeActionChainItems(chainState);
+      const item = chain.find((candidate) => candidate.status === "pending");
+      if (!item) break;
+      if (resumeDeferredChainTriggerPreparation(game, chainState, item)) {
+        finalizedAny = true;
+        continue;
+      }
+      if (preparePendingEffectPlayDeclarations(game, item)) return true;
+      if (!pendingCardReadyForFinalize(item)) return finalizedAny;
+      if (item.playOptions?.playProcess) delete item.playOptions.playProcess.privateLogSnapshot;
+      item.status = "finalized";
+      recordFinalizedCardPlay(game, item);
+      requestCleanup(game, "pending-item-finalized", { itemId: item.id, itemType: item.itemType });
+      log(game, "1 chain item finalized.");
+      finalizedAny = true;
+      // CR 337.1-337.3: finish the oldest item, including immediate entry,
+      // before making declarations or paying for the next pending item.
+      resolveFinalizedImmediateItems(game, chainState, kind);
+      checkState(game);
+    }
+  } finally {
+    delete game.finalizingChainItems;
+  }
   if (game.pendingChoice || game.pendingPayment) return true;
-
-  if (game.showdown) resolveFinalizedImmediateItems(game, game.showdown, "showdown");
-  else if (game.actionChain) resolveFinalizedImmediateItems(game, game.actionChain, "action");
-  if (game.pendingChoice || game.pendingPayment) return true;
+  if (!finalizedAny) return false;
 
   if (game.showdown) {
     const newest = normalizeChainItems(game.showdown).at(-1);
@@ -8391,11 +8592,18 @@ function finalizeOutstandingChainItems(game) {
   return true;
 }
 
+function cardHasActionTimingPermission(card) {
+  // Imported spells store Action as a keyword. On permanents the same keyword
+  // may describe an activated ability, which does not grant card-play timing.
+  return keywordListHas(card?.tags, "Action")
+    || (cardHasType(card, "spell") && keywordListHas(card?.keywords, "Action"));
+}
+
 function canPlayInShowdown(game, player, card, showdown, destination = "base") {
   normalizeChainItems(showdown);
   if (!showdown || !showdownPlayerIds(showdown).includes(player.id)) return false;
   if (showdown.priorityPlayerId !== player.id) return false;
-  const isAction = card.tags?.includes("Action");
+  const isAction = cardHasActionTimingPermission(card);
   const isReaction = cardHasReactionTimingPermission(game, player, card, destination);
   if (!isAction && !isReaction) return false;
   if (showdown.chain.length > 0 && !isReaction) return false;
@@ -8507,7 +8715,7 @@ function continueActionChainAfterResolution(game) {
 }
 
 function maybeAutoPassActionChain(game) {
-  if (game.settlingActionChain) return;
+  if (game.settlingActionChain || game.finalizingChainItems) return;
   game.settlingActionChain = true;
   try {
     let safety = 0;
@@ -8947,45 +9155,169 @@ function prepareOptionalTriggerPlacements(game, triggers, mode, continuation) {
   return true;
 }
 
+function triggerSpecPlacementConditionsMet(game, trigger, player, source, spec) {
+  if (!spec) return true;
+  const timing = trigger.data?.timing || spec.timing || null;
+  const sourceLocation = findUnitLocation(game, source.instanceId);
+  const sourceBattlefield = sourceLocation?.type === "battlefield" ? sourceLocation.battlefield : null;
+  const eventEnergy = spec.playedEnergyPaid ?? spec.playedEnergyCost ?? trigger.data?.playedEnergyPaid
+    ?? trigger.data?.playedEnergyCost ?? 0;
+  if (["cardPlayed", "spellPlayed", "cardOrAbilityPlayed"].includes(timing)
+    && spec.minEnergy != null && eventEnergy < spec.minEnergy) return false;
+  if (spec.cardType && spec.playedCardType && !playedSpecHasType(spec, spec.cardType)) return false;
+  if (spec.cardTypes?.length && spec.playedItemType === "card"
+    && !spec.cardTypes.some((type) => playedSpecHasType(spec, type))) return false;
+  if (spec.tokenOnly && !spec.playedCardIsToken) return false;
+  if (spec.nonToken && spec.playedCardIsToken) return false;
+  if (spec.duringShowdown && game.phase !== "showdown") return false;
+  if (spec.requiresPlayedFromHidden
+    && !(spec.playedFromHidden || source.playedFromHidden)) return false;
+  if (spec.requiresPaidAdditionalCost && !paidCardAdditionalCost(source)) return false;
+  if (spec.requiresEmpowered && !isEmpowered(source)) return false;
+  if (spec.requiresNotEmpowered && isEmpowered(source)) return false;
+  if (spec.requiresEmpoweredCount != null
+    && (source.empoweredCount || 0) < spec.requiresEmpoweredCount) return false;
+  if (spec.requiresRunesAtMost != null && player.runes.length > spec.requiresRunesAtMost) return false;
+  if (spec.requiresRunesAtLeast != null && player.runes.length < spec.requiresRunesAtLeast) return false;
+  if (spec.requiresSourceAtBattlefield && !sourceBattlefield) return false;
+  if ((spec.requiresBattlefieldDestination || spec.requiresDestinationBattlefield)
+    && !sourceBattlefield
+    && !game.battlefields.some((field) => field.instanceId === trigger.data?.destinationId)) return false;
+  if (spec.requiresOwnTurn && turnPlayerId(game) !== player.id) return false;
+  if (spec.requiresOpponentStunnedUnit && !allUnits(game)
+    .some((unit) => unit.controllerId !== player.id && unit.stunned)) return false;
+  if (spec.requiresOtherFriendlyTotalMight != null) {
+    const otherFriendlyMight = allUnits(game)
+      .filter((unit) => unit.controllerId === player.id && unit.instanceId !== source.instanceId)
+      .reduce((sum, unit) => sum + currentMight(game, unit), 0);
+    if (otherFriendlyMight < spec.requiresOtherFriendlyTotalMight) return false;
+  }
+  if (spec.requiresExactlyOneOtherFriendlyHere) {
+    if (!sourceBattlefield || sourceBattlefield.units.filter((unit) =>
+      unit.controllerId === player.id && unit.instanceId !== source.instanceId).length !== 1) return false;
+  }
+  if (spec.requiresOtherGearAtLeast != null && allControlledCards(game, player.id)
+    .filter((card) => card.instanceId !== source.instanceId && cardHasType(card, "gear")).length < spec.requiresOtherGearAtLeast) return false;
+  if (spec.requiresControlledEmpowered && !allControlledCards(game, player.id).some(isEmpowered)) return false;
+  if (spec.requiresNonTokenTypesPlayedThisTurn?.some((type) =>
+    !(player.nonTokenCardsPlayedByTypeThisTurn?.[type] > 0))) return false;
+  if (spec.requiresCardTypePlayedThisTurn
+    && !(player.cardsPlayedByTypeThisTurn?.[spec.requiresCardTypePlayedThisTurn] > 0)) return false;
+  if (spec.requiresSpellPlayedThisTurn
+    && !(player.cardsPlayedByTypeThisTurn?.spell > 0)) return false;
+  if (spec.requiresOpponentPriorSpellThisTurn && !game.players.some((candidate) =>
+    candidate.id !== player.id && (candidate.cardsPlayedByTypeThisTurn?.spell || 0) > 0)) return false;
+  if (spec.requiresEnemyChosenThisTurn
+    && player.enemyUnitChosenTurnSequence !== (game.turnSequence || 0)) return false;
+  if (spec.requiresEnemyObjectsChosenThisTurn != null
+    && (player.enemyObjectsChosenThisTurn || 0) < spec.requiresEnemyObjectsChosenThisTurn) return false;
+  if (spec.requiresControlledBattlefieldExactlyUnits != null && !game.battlefields.some((field) =>
+    field.controlledBy === player.id
+      && field.units.filter((unit) => unit.controllerId === player.id).length === spec.requiresControlledBattlefieldExactlyUnits)) return false;
+  if (spec.requiresExcessDamage != null) {
+    const excessDamage = spec.assignedExcessDamage ?? source.lastConquerExcessDamage ?? 0;
+    if (excessDamage < spec.requiresExcessDamage) return false;
+  }
+  if (spec.anotherOnly) {
+    const observedId = spec.deadUnitId || spec.playedUnitId || spec.playedCardId || trigger.data?.deadUnitId;
+    if (observedId && observedId === source.instanceId) return false;
+  }
+  return true;
+}
+
+function triggerPlacementConditionsMet(game, trigger) {
+  if (trigger.placementConditionChecked) return trigger.placementConditionMet !== false;
+  const player = game.players.find((candidate) => candidate.id === trigger.playerId);
+  const source = findCard(game, trigger.sourceCardId) || trigger.sourceCardSnapshot;
+  const specs = trigger.data?.specs || [];
+  const met = Boolean(player && source
+    && specs.every((spec) => triggerSpecPlacementConditionsMet(game, trigger, player, source, spec)));
+  trigger.placementConditionChecked = true;
+  trigger.placementConditionMet = met;
+  return met;
+}
+
+function triggerHasLegalPlacementTarget(game, trigger) {
+  if (!triggerNeedsTargetDeclaration(trigger)) return true;
+  if (trigger.data?.declarationComplete) return true;
+  if ((trigger.data?.declaredTargets || []).length || (trigger.data?.declaredChoices || []).length) return true;
+  if (trigger.data?.specs?.[0]?.kind === "dealDamageUpToOneEnemyEachLocation") return true;
+  const declaration = triggerDeclaration(game, trigger);
+  if (!declaration) return false;
+  if (declaration.allowZero) return true;
+  const nonDeclineOptions = (declaration.options || []).filter((option) =>
+    !["decline", "skip", "done"].includes(option.id)
+      && !String(option.id || "").startsWith("finish-"));
+  if (declaration.choiceDeclaration) return nonDeclineOptions.length > 0;
+  return nonDeclineOptions.some((option) => option.cardId);
+}
+
+function filterPlaceableTriggers(game, triggers, { checkTargets = false } = {}) {
+  return triggers.filter((trigger) => {
+    const source = findCard(game, trigger.sourceCardId) || trigger.sourceCardSnapshot;
+    if (!triggerPlacementConditionsMet(game, trigger)) {
+      removePendingTriggerChainItem(game, trigger);
+      log(game, `${source?.name || "A triggered effect"}'s trigger condition is not met and it does not trigger.`);
+      return false;
+    }
+    if (checkTargets && !triggerHasLegalPlacementTarget(game, trigger)) {
+      removePendingTriggerChainItem(game, trigger);
+      log(game, `${source?.name || "A triggered effect"} has no legal target and does not trigger.`);
+      return false;
+    }
+    return true;
+  });
+}
+
 function prepareAndQueueTriggers(game, triggers, mode = "queue", continuation = null) {
   if (game.phase === "complete") return false;
+  // Effect-instructed plays can create a Chain in headless games as well.
+  // Their play triggers must join that Chain instead of resolving immediately.
+  if (mode === "queue" && game.phase === "action" && game.actionChain) mode = "actionChain";
   if (!triggers.length) {
     if (continuation) runTriggerContinuation(game, continuation);
     return false;
   }
+  const normalized = triggers.map((trigger) => {
+    trigger.id ||= `trigger-${Date.now()}-${Math.random()}`;
+    return trigger;
+  });
+  const conditionEligible = filterPlaceableTriggers(game, normalized);
+  if (!conditionEligible.length) {
+    if (continuation) return runTriggerContinuation(game, continuation);
+    return false;
+  }
   if (game.inCleanup) {
     game.cleanupPendingTriggerBatches ||= [];
-    game.cleanupPendingTriggerBatches.push({ triggers, mode, continuation });
+    game.cleanupPendingTriggerBatches.push({ triggers: conditionEligible, mode, continuation });
     return true;
   }
   if (game.resolvingGameEffect) {
-    const normalized = triggers.map((trigger) => {
-      trigger.id ||= `trigger-${Date.now()}-${Math.random()}`;
-      return trigger;
-    });
     const pendingMode = game.resolvingGameEffect.chainKind === "showdown"
       ? "showdownChain"
       : game.resolvingGameEffect.chainKind === "action"
         ? "actionChain"
         : mode;
     ensurePendingTriggerChainItems(game,
-      normalized.filter((trigger) => !triggerPlacementIsOptional(trigger)), pendingMode, continuation);
+      conditionEligible.filter((trigger) => !triggerPlacementIsOptional(trigger)), pendingMode, continuation);
     game.resolvingGameEffect.pendingTriggerBatches.push({
-      triggers: normalized,
+      triggers: conditionEligible,
       mode,
       continuation
     });
     return true;
   }
-  const normalized = triggers.map((trigger) => {
-    trigger.id ||= `trigger-${Date.now()}-${Math.random()}`;
-    return trigger;
-  });
-  declineUnavailableOptionalTriggerPlacements(game, normalized);
+  if (deferChainTriggerPreparation(game, conditionEligible, mode, continuation)) return true;
+  const placeable = filterPlaceableTriggers(game, conditionEligible, { checkTargets: true });
+  if (!placeable.length) {
+    if (continuation) return runTriggerContinuation(game, continuation);
+    return false;
+  }
+  declineUnavailableOptionalTriggerPlacements(game, placeable);
   // Core Rules 383.3.a: every optional trigger is accepted or declined
   // before any simultaneous accepted and mandatory triggers are ordered.
-  if (prepareOptionalTriggerPlacements(game, normalized, mode, continuation)) return true;
-  const active = normalized.filter((trigger) => !trigger.declined);
+  if (prepareOptionalTriggerPlacements(game, placeable, mode, continuation)) return true;
+  const active = placeable.filter((trigger) => !trigger.declined);
   if (!active.length) {
     if (continuation) return runTriggerContinuation(game, continuation);
     return false;
@@ -9000,6 +9332,37 @@ function prepareAndQueueTriggers(game, triggers, mode = "queue", continuation = 
     });
   }
   return prepareTriggerDeclarations(game, [...groups].reverse().flatMap((group) => group.triggers), mode, continuation);
+}
+
+function deferChainTriggerPreparation(game, triggers, mode, continuation) {
+  // An outstanding kill/cost task must finish placing its triggers before
+  // the interrupted card can complete its own play process.
+  if (isAfterTriggerPlacementContinuation(continuation)) return false;
+  const chainState = mode === "showdownChain" ? game.showdown : mode === "actionChain" ? game.actionChain : null;
+  if (!chainState) return false;
+  const firstPending = chainState.chain.find((item) => item.status === "pending");
+  if (!firstPending || triggers.some((trigger) => trigger.id === firstPending.trigger?.id)) return false;
+  // Preserve placement now, but own the declarations/costs continuation until
+  // every older pending item has finalized. Its legal targets can still change.
+  const groups = triggerResolutionGroups(game, triggers);
+  ensurePendingTriggerChainItems(game, [...groups].reverse().flatMap((group) => group.triggers), mode);
+  chainState.deferredTriggerPreparations ||= [];
+  chainState.deferredTriggerPreparations.push({ triggers, mode, continuation });
+  return true;
+}
+
+function resumeDeferredChainTriggerPreparation(game, chainState, item) {
+  const batches = chainState.deferredTriggerPreparations || [];
+  const index = batches.findIndex((batch) => batch.triggers.some((trigger) => trigger.id === item.trigger?.id));
+  if (index < 0) return false;
+  const [batch] = batches.splice(index, 1);
+  if (!batches.length) delete chainState.deferredTriggerPreparations;
+  // JSON saves duplicate shared objects. Resume using the Chain's canonical
+  // trigger objects so declarations update their existing pending items.
+  const triggers = batch.triggers.map((trigger) =>
+    chainState.chain.find((candidate) => candidate.trigger?.id === trigger.id)?.trigger || trigger);
+  prepareAndQueueTriggers(game, triggers, batch.mode, batch.continuation);
+  return true;
 }
 
 function triggerResolutionGroups(game, triggers) {
@@ -9185,7 +9548,7 @@ function ensurePendingTriggerChainItems(game, triggers, mode, continuation = nul
     orderPendingTriggerChainItems(game, triggers, mode);
     return true;
   }
-  if (mode === "actionChain" && game.phase === "action" && game.interactive) {
+  if (mode === "actionChain" && game.phase === "action" && (game.interactive || game.actionChain)) {
     for (const trigger of [...missing].reverse()) addPendingActionTriggerChainItem(game, trigger);
     ownActionChainContinuation(game, chainTriggerContinuation(continuation));
     orderPendingTriggerChainItems(game, triggers, mode);
@@ -9217,8 +9580,11 @@ function completePendingTriggerDeclarations(game, trigger) {
 }
 
 function prepareTriggerDeclarations(game, triggers, mode = "queue", continuation = null) {
-  ensurePendingTriggerChainItems(game, triggers, mode, continuation);
-  const remaining = triggers.filter((trigger) => {
+  // A declaration continuation includes the just-declined trigger. Its pending
+  // item was removed by the choice resolver and must not be placed again.
+  const active = triggers.filter((trigger) => !trigger.declined);
+  ensurePendingTriggerChainItems(game, active, mode, continuation);
+  const remaining = active.filter((trigger) => {
     if (!triggerNeedsTargetDeclaration(trigger)) return true;
     if ((trigger.data?.declaredTargets || []).length) return true;
     if ((trigger.data?.declaredChoices || []).length) return true;
@@ -9721,7 +10087,7 @@ function queuePreparedTriggers(game, triggers, mode = "queue", continuation = nu
     checkState(game);
     return true;
   }
-  if (mode === "actionChain" && game.phase === "action" && game.interactive) {
+  if (mode === "actionChain" && game.phase === "action" && (game.interactive || game.actionChain)) {
     const missing = active.filter((trigger) => !pendingTriggerChainItem(game, trigger));
     if (missing.length) {
       for (const trigger of [...missing].reverse()) addPendingActionTriggerChainItem(game, trigger);
@@ -10098,7 +10464,7 @@ function triggerDeclaration(game, trigger) {
   }
   if (spec.kind === "stunUnit") {
     if (alreadyDeclared("stunUnit")) return null;
-    const scope = spec.target === "unit" ? "any" : "enemy";
+    const scope = declarationScope(spec, spellTargetDeclaration(spec));
     const declaration = {
       effect: "stunUnit",
       optional: Boolean(spec.optional),
@@ -10108,11 +10474,11 @@ function triggerDeclaration(game, trigger) {
   }
   if (spec.kind === "dealDamageUnit") {
     if (alreadyDeclared("damageUnit")) return null;
-    const scope = spec.target === "enemyBattlefieldUnit" ? "enemyBattlefield" : spec.target === "enemyUnit" ? "enemy" : spec.target === "friendlyUnit" ? "friendly" : spec.target === "battlefieldUnit" ? "battlefield" : "any";
+    const scope = damageTargetScope(spec);
     const declaration = {
       effect: "damageUnit",
       optional: Boolean(spec.optional),
-      options: targetableUnits(game, player, source, scope).map(cardOption)
+      options: damageUnitTargets(game, player, source, spec, scope).map(cardOption)
     };
     return declaration.options.length ? declaration : null;
   }
@@ -10142,8 +10508,7 @@ function triggerDeclaration(game, trigger) {
     const declaration = {
       effect: "returnUnitToBase",
       optional: Boolean(spec.optional),
-      options: battlefieldUnitTargets(game, player, scope)
-        .filter((sourceInfo) => canChooseUnit(game, player, source, sourceInfo.unit))
+      options: returnUnitToBaseTargets(game, player, source, scope, spec)
         .map((sourceInfo) => cardOption(sourceInfo.unit))
     };
     return declaration.options.length ? declaration : null;
@@ -10153,10 +10518,7 @@ function triggerDeclaration(game, trigger) {
     const declaration = {
       effect: "returnUnitToHand",
       optional: Boolean(spec.optional),
-      options: battlefieldUnitTargets(game, player, "battlefield")
-        .filter((sourceInfo) => sourceInfo.unit.instanceId !== source.instanceId)
-        .filter((sourceInfo) => canChooseUnit(game, player, source, sourceInfo.unit))
-        .map((sourceInfo) => cardOption(sourceInfo.unit))
+      options: returnUnitToHandTargets(game, player, source, spec).map(cardOption)
     };
     return declaration.options.length ? declaration : null;
   }
@@ -11539,7 +11901,8 @@ function presentConquerHereRecycleTopDeck(game, player, source, continuation) {
     options,
     data: {
       amount: continuation.amount || top.length,
-      cardIds: top.map((card) => card.instanceId)
+      cardIds: top.map((card) => card.instanceId),
+      lookedIds: top.map((card) => card.instanceId)
     },
     finishSpell: false,
     optional: false,
@@ -12553,6 +12916,11 @@ const EFFECT_RESOLVERS = new Map([
     readyUnitWithEffects(game, player, card, card);
     return false;
   }],
+  ["cardHidden:readySelf", (game, player, card) => {
+    readyUnitWithEffects(game, player, card, card);
+    return false;
+  }],
+  ["opponentScore:draw", resolveDrawEffect],
   ["chosen:draw", resolveDrawEffect],
   ["chosen:payEnergyExhaustDraw", (game, player, card, spec) => {
     if (!spec.triggerCostPaid) return false;
@@ -12688,7 +13056,7 @@ const EFFECT_RESOLVERS = new Map([
     return false;
   }],
   ["onPlay:readyUnit", (game, player, card, spec, finishSpell) => chooseReadyUnit(game, player, card, spec, finishSpell)],
-  ["onPlay:returnBattlefieldUnitToHand", (game, player, card, spec, finishSpell) => chooseReturnUnitToHand(game, player, card, "battlefield", finishSpell, spec)],
+  ["onPlay:returnBattlefieldUnitToHand", (game, player, card, spec, finishSpell) => chooseReturnUnitToHand(game, player, card, finishSpell, spec)],
   ["onPlay:returnTrashUnitToHand", (game, player, card, spec, finishSpell) => chooseTrashUnitToHand(game, player, card, spec, finishSpell)],
   ["onPlay:returnTrashCardToHand", (game, player, card, spec, finishSpell) => chooseTrashCardToHand(game, player, card, spec, finishSpell)],
   ["onPlay:discardOpponentHand", (game, player, card, spec, finishSpell) => chooseOpponentHandDiscard(game, player, card, spec, finishSpell)],
@@ -12708,7 +13076,7 @@ const EFFECT_RESOLVERS = new Map([
     finishSpell: false,
     data: { draw: spec.draw || 1, buff: spec.buff || 1 }
   })],
-  ["onPlay:stunUnit", (game, player, card, spec, finishSpell) => chooseStunUnit(game, player, card, false, finishSpell, spec.target === "unit" ? "any" : "enemy", spec)],
+  ["onPlay:stunUnit", (game, player, card, spec, finishSpell) => chooseStunUnit(game, player, card, false, finishSpell, declarationScope(spec, spellTargetDeclaration(spec)), spec)],
   ["onPlay:stunOrKillEnemy", (game, player, card, spec, finishSpell) => chooseStunOrKillEnemy(game, player, card, spec, finishSpell)],
   ["onPlay:modifySelfMight", resolveModifySelfMightEffect],
   ["onPlay:buffSelfThenOtherFriendlyHere", resolveBuffSelfThenOtherFriendlyHereEffect],
@@ -12844,7 +13212,7 @@ const EFFECT_RESOLVERS = new Map([
   ["spell:moveAnyFriendlyUnitsAtBattlefieldToBase", resolveMoveAnyFriendlyUnitsAtBattlefieldToBaseEffect],
   ["spell:moveUnit", (game, player, card, spec, finishSpell) => chooseMoveUnitSpell(game, player, card, "enemy", finishSpell, spec)],
   ["spell:recycleOpponentNonUnit", (game, player, card, spec, finishSpell) => chooseSabotage(game, player, card, finishSpell)],
-  ["spell:returnBattlefieldUnitToHand", (game, player, card, spec, finishSpell) => chooseReturnUnitToHand(game, player, card, "battlefield", finishSpell, spec)],
+  ["spell:returnBattlefieldUnitToHand", (game, player, card, spec, finishSpell) => chooseReturnUnitToHand(game, player, card, finishSpell, spec)],
   ["spell:eachPlayerReturnUnitToHand", (game, player, card, spec, finishSpell) => chooseEachPlayerReturnUnitToHand(game, player, card, finishSpell)],
   ["spell:returnTrashUnitToHand", (game, player, card, spec, finishSpell) => chooseTrashUnitToHand(game, player, card, spec, finishSpell)],
   ["spell:returnUnitToBase", (game, player, card, spec, finishSpell) => chooseReturnUnitToBase(game, player, card, spec.target || "battlefield", finishSpell, spec)],
@@ -12856,7 +13224,7 @@ const EFFECT_RESOLVERS = new Map([
     card,
     false,
     finishSpell,
-    spec.target === "unit" ? "any" : spec.target === "attackingUnit" ? "attacking" : "enemy",
+    declarationScope(spec, spellTargetDeclaration(spec)),
     spec
   )],
   ["spell:unitsEnterReadyThisTurn", (game, player, card) => {
@@ -12977,6 +13345,7 @@ const EFFECT_RESOLVERS = new Map([
   ,["enemyDeath:channelRunes", resolveChannelRunesEffect]
   ,["score:playUnitToken", resolvePlayTokenEffect]
   ,["conquer:playUnitToken", resolvePlayTokenEffect]
+  ,["conquerHere:playUnitToken", resolvePlayTokenEffect]
   ,["conquer:gainPoint", resolveVendettaRegisteredEffect]
   ,["combatEnd:drawIfNoDamageThisTurn", resolveVendettaRegisteredEffect]
   ,["ready:modifySelfMight", resolveVendettaRegisteredEffect]
@@ -13964,9 +14333,7 @@ function resolveDeathRepeatOnPlayEffect(game, player, card) {
 }
 
 function resolveDeathDealDamageUnitEffect(game, player, card, spec) {
-  return promptUnleashedUnitAction(game, player, card,
-    allUnits(game).filter((unit) => unit.controllerId !== player.id && canChooseUnit(game, player, card, unit)).map(cardOption),
-    { action: "damage", amount: spec.amount || 4 }, `Choose an enemy unit for ${card.name}.`, false);
+  return chooseDamageUnitBySpec(game, player, card, spec);
 }
 
 function resolveDeathPlayHandUnitEffect(game, player, card) {
@@ -16977,10 +17344,14 @@ function hasRequiredSpecTarget(game, player, card, spec, destination = "base") {
 
 function targetableUnits(game, player, card, scope) {
   const candidates = allUnits(game).filter((unit) => {
-    if (scope === "friendly" && unit.controllerId !== player.id) return false;
-    if (scope === "enemy" && unit.controllerId === player.id) return false;
-    if (scope === "battlefield" && !findUnitLocation(game, unit.instanceId)?.battlefield) return false;
+    if (!unitMatchesScope(unit, player, scope)) return false;
+    if (["battlefield", "battlefieldUnit", "friendlyBattlefield", "friendlyBattlefieldUnit", "enemyBattlefield", "enemyBattlefieldUnit"].includes(scope)
+      && !findUnitLocation(game, unit.instanceId)?.battlefield) return false;
     if (scope === "base" && findUnitLocation(game, unit.instanceId)?.type !== "base") return false;
+    if (scope === "enemyHere") {
+      const field = findUnitLocation(game, card.instanceId)?.battlefield;
+      if (unit.controllerId === player.id || !field?.units.includes(unit)) return false;
+    }
     if (scope === "enemyBattlefield" && (unit.controllerId === player.id || !findUnitLocation(game, unit.instanceId)?.battlefield)) return false;
     if (scope === "attacking") {
       const field = game.showdown && game.battlefields.find((candidate) => candidate.instanceId === game.showdown.battlefieldId);
@@ -17111,14 +17482,12 @@ function chooseBuffUnit(game, player, card, amount, scope, finishSpell = false, 
 }
 
 function chooseMightBySpec(game, player, card, spec, finishSpell = false) {
-  const scope = spec.target === "self" ? "self"
-    : spec.target === "friendlyUnit" ? "friendly"
-      : spec.target === "enemyUnit" ? "enemy" : "any";
+  const declaration = spellTargetDeclaration(spec);
+  const scope = spec.target === "self" ? "self" : declarationScope(spec, declaration);
   const candidates = allUnits(game).filter((unit) => {
     if (scope === "self" && unit.instanceId !== card.instanceId) return false;
-    if (scope === "friendly" && unit.controllerId !== player.id) return false;
-    if (scope === "enemy" && unit.controllerId === player.id) return false;
-    if (spec.requiredDomain && !(unit.domains || []).includes(spec.requiredDomain)) return false;
+    if (!unitMatchesScope(unit, player, scope)) return false;
+    if (!declarationUnitAllowed(game, player, unit, spec, declaration, [], [])) return false;
     return canChooseUnit(game, player, card, unit);
   });
   const units = preferHiddenObjects(game, card, candidates);
@@ -17338,16 +17707,7 @@ function chooseMightModifier(game, player, card, amount, finishSpell = false) {
 }
 
 function chooseStunUnit(game, player, card, ping, finishSpell, scope = "enemy", spec = {}) {
-  const candidates = allUnits(game).filter((unit) => {
-    if (scope === "enemy" && unit.controllerId === player.id) return false;
-    if (scope === "attackingEnemy") {
-      const field = game.showdown && game.battlefields.find((candidate) => candidate.instanceId === game.showdown.battlefieldId);
-      if (!field?.units.some((candidate) => candidate.instanceId === unit.instanceId)) return false;
-      if (unit.controllerId === player.id || unit.controllerId !== game.showdown?.attackerId) return false;
-    }
-    return canChooseUnit(game, player, card, unit);
-  });
-  const targets = preferHiddenObjects(game, card, candidates);
+  const targets = targetableUnits(game, player, card, scope);
   return promptChoice(game, player, card, {
     effect: "stunUnit",
     prompt: `Choose a unit for ${card.name}.`,
@@ -17363,13 +17723,17 @@ function chooseStunUnit(game, player, card, ping, finishSpell, scope = "enemy", 
   });
 }
 
-function chooseReturnUnitToBase(game, player, card, scope, finishSpell = false, spec = {}) {
+function returnUnitToBaseTargets(game, player, card, scope, spec) {
   const sourceLocation = findUnitLocation(game, card.instanceId);
-  const targets = battlefieldUnitTargets(game, player, scope)
+  return battlefieldUnitTargets(game, player, scope)
     .filter((source) => !spec.sameLocationAsSource || (sourceLocation?.type === "battlefield"
       && source.battlefield.instanceId === sourceLocation.battlefield.instanceId))
     .filter((source) => canMoveUnitFromBattlefieldToBase(game, source.unit))
     .filter((source) => canChooseUnit(game, player, card, source.unit));
+}
+
+function chooseReturnUnitToBase(game, player, card, scope, finishSpell = false, spec = {}) {
+  const targets = returnUnitToBaseTargets(game, player, card, scope, spec);
   return promptChoice(game, player, card, {
     effect: "returnUnitToBase",
     prompt: `Choose a unit to move with ${card.name}.`,
@@ -17401,15 +17765,24 @@ function chooseMoveUnitSpell(game, player, card, scope, finishSpell = false, spe
   });
 }
 
-function chooseReturnUnitToHand(game, player, card, scope, finishSpell = false, spec = {}) {
-  const targets = battlefieldUnitTargets(game, player, scope)
-    .filter((source) => canChooseUnit(game, player, card, source.unit))
-    .filter((source) => spec.maxMight == null || currentMight(game, source.unit) <= spec.maxMight);
+// Declaration and resolution must use identical restrictions. The historical
+// effect kind defaults to battlefields; explicit scopes also support base units.
+function returnUnitToHandTargets(game, player, card, spec) {
+  const scope = declarationScope(spec, spellTargetDeclaration(spec));
+  return targetableUnits(game, player, card, scope)
+    .filter((unit) => !spec.another || unit.instanceId !== card.instanceId)
+    .filter((unit) => spec.target !== "nonDragon" || !unit.tags?.includes("Dragon"))
+    .filter((unit) => spec.maxMight == null || currentMight(game, unit) <= spec.maxMight);
+}
+
+function chooseReturnUnitToHand(game, player, card, finishSpell = false, spec = {}) {
+  const targets = returnUnitToHandTargets(game, player, card, spec);
   return promptChoice(game, player, card, {
     effect: "returnUnitToHand",
     prompt: `Choose a unit to return with ${card.name}.`,
-    options: targets.map((source) => cardOption(source.unit)),
+    options: targets.map(cardOption),
     finishSpell,
+    optional: Boolean(spec.optional),
     data: {
       channelOwner: spec.channelOwner || 0,
       channelOwnerExhausted: spec.channelOwnerExhausted !== false
@@ -17608,13 +17981,24 @@ function chooseDamageEnemyUnit(game, player, card, amount, finishSpell = false) 
   });
 }
 
+function damageTargetScope(spec) {
+  return spec.target === "enemyHere" ? "enemyHere"
+    : spec.target === "enemyBattlefieldUnit" ? "enemyBattlefield"
+      : spec.target === "enemyUnit" ? "enemy" : spec.target === "friendlyUnit" ? "friendly"
+        : spec.target === "battlefieldUnit" ? "battlefield" : "any";
+}
+
+function damageUnitTargets(game, player, card, spec, scope) {
+  return targetableUnits(game, player, card, scope)
+    .filter((unit) => !spec.requiredDomain || unit.domains?.includes(spec.requiredDomain));
+}
+
 function chooseDamageUnitBySpec(game, player, card, spec, finishSpell = false) {
-  const scope = spec.target === "enemyBattlefieldUnit" ? "enemyBattlefield" : spec.target === "enemyUnit" ? "enemy" : spec.target === "friendlyUnit" ? "friendly" : spec.target === "battlefieldUnit" ? "battlefield" : "any";
+  const scope = damageTargetScope(spec);
   if (spec.selectRepeatedTargetsOnPlay && (spec.repeat || 1) > 1) {
     return resolveDeclaredRepeatedDamage(game, player, card, spec, scope, finishSpell);
   }
-  const targets = targetableUnits(game, player, card, scope);
-  const legalTargets = targets.filter((unit) => !spec.requiredDomain || (unit.domains || []).includes(spec.requiredDomain));
+  const legalTargets = damageUnitTargets(game, player, card, spec, scope);
   const controlsFacedown = game.battlefields.some((field) =>
     (field.hidden || []).some((hidden) => hiddenCardIsControlledBy(hidden, player.id)));
   const amount = spec.amountIfControlsFacedown && controlsFacedown
@@ -17657,8 +18041,7 @@ function resolveDeclaredRepeatedDamage(game, player, card, spec, scope, finishSp
   }
   const total = Math.min(maximum, declaredCount);
   for (let index = 0; index < total; index += 1) {
-    const resolutionOptions = targetableUnits(game, player, card, scope)
-      .filter((unit) => !spec.requiredDomain || (unit.domains || []).includes(spec.requiredDomain))
+    const resolutionOptions = damageUnitTargets(game, player, card, spec, scope)
       .map(cardOption);
     const declared = consumeDeclaredPlayTarget(card, "damageUnit", resolutionOptions);
     if (!declared) break;
@@ -17767,7 +18150,9 @@ function chooseAlphaStrike(game, player, card) {
 
 function chooseStarCrossed(game, player, card, shouldFinishSpell = false) {
   const enemies = allUnits(game).filter((unit) => unit.controllerId !== player.id && canChooseUnit(game, player, card, unit));
-  if (!enemies.length) {
+  const hasDeclaredTargets = card.declaredPlayTargets?.some((target) =>
+    target.effect === "starCrossed" || target.effect === "starCrossedEnemy");
+  if (!enemies.length && !hasDeclaredTargets) {
     log(game, `${card.name} finds no enemy unit.`);
     if (shouldFinishSpell) finishSpell(game, player, card);
     return false;
@@ -17858,9 +18243,9 @@ function chooseEachPlayerReturnUnitToHand(game, player, card, finishSpell = fals
 function promptEachPlayerReturnUnitToHand(game, card, playerOrder, index, finishSpell = false) {
   while (index < playerOrder.length) {
     const chooser = game.players.find((candidate) => candidate.id === playerOrder[index]);
-    const options = allUnits(game)
-      .filter((unit) => unit.controllerId === chooser.id)
-      .map(cardOption);
+    // CR 355.10.e: each player selects on resolution, without targeting.
+    // The instruction permits any unit, including enemy untargetable units.
+    const options = allUnits(game).map(cardOption);
     if (!options.length) {
       index += 1;
       continue;
@@ -19661,6 +20046,7 @@ function resolveCostModifierOrderChoice({ game, choice, option, player, source }
 }
 
 const NON_TARGET_UNIT_CHOICE_EFFECTS = new Set([
+  "eachPlayerReturnUnitToHand",
   "combatDamage",
   "damageReplacementOrder",
   "costModifierOrder",
@@ -19708,7 +20094,8 @@ function applyChoiceEffect(game, choice, option, provenance = null) {
     ? resolveDeclareTriggerChoice
     : CHOICE_RESOLVERS.get(choice.effect) || resolveMissingChoiceEffect;
   const previousTarget = game.resolvingChosenTargetContext;
-  if (source && option.cardId) {
+  if (source && option.cardId
+    && (choice.data?.declareTrigger || !NON_TARGET_UNIT_CHOICE_EFFECTS.has(choice.effect))) {
     game.resolvingChosenTargetContext = { sourceId: source.instanceId, targetId: option.cardId };
   }
   try {
@@ -25214,11 +25601,7 @@ function resourceCostLabel(energy, power) {
 
 function battlefieldUnitTargets(game, player, scope) {
   return game.battlefields.flatMap((battlefield) => battlefield.units
-    .filter((unit) => {
-      if (scope === "enemyBattlefield") return unit.controllerId !== player.id;
-      if (scope === "friendlyBattlefield") return unit.controllerId === player.id;
-      return true;
-    })
+    .filter((unit) => unitMatchesScope(unit, player, scope))
     .map((unit) => ({ type: "battlefield", battlefield, unit })));
 }
 
@@ -25429,20 +25812,40 @@ function beginGameOperation(game, kind, data = {}) {
     data: structuredClone(data)
   };
   game.operations ||= [];
-  game.lifecycleEvents ||= [];
   game.operations.push(operation);
-  game.lifecycleEvents.push({ operationId: operation.id, kind, event: "started" });
+  recordLifecycleEvent(game, {
+    operationId: operation.id,
+    kind,
+    event: "started",
+    turnSequence: game.turnSequence || 0
+  });
   return operation;
 }
 
 function completeGameOperation(game, operationId, reason = "completed") {
   if (!operationId) return;
-  const operation = (game.operations || []).find((candidate) => candidate.id === operationId);
+  const operationIndex = (game.operations || []).findIndex((candidate) => candidate.id === operationId);
+  const operation = game.operations?.[operationIndex];
   if (!operation || operation.status !== "pending") return;
-  operation.status = "completed";
-  operation.reason = reason;
+  recordLifecycleEvent(game, {
+    operationId,
+    kind: operation.kind,
+    event: "completed",
+    reason,
+    turnSequence: game.turnSequence || 0
+  });
+  // Only pending operations own continuations. Retaining the cloned payload of
+  // every completed move made both snapshots and later operation lookups grow
+  // for the entire match.
+  removeArrayIndexInPlace(game.operations, operationIndex);
+}
+
+function recordLifecycleEvent(game, event) {
   game.lifecycleEvents ||= [];
-  game.lifecycleEvents.push({ operationId, kind: operation.kind, event: "completed", reason });
+  game.lifecycleEvents.push(event);
+  if (game.lifecycleEvents.length > LIFECYCLE_EVENT_HISTORY_LIMIT) {
+    game.lifecycleEvents.splice(0, game.lifecycleEvents.length - LIFECYCLE_EVENT_HISTORY_LIMIT);
+  }
 }
 
 function upgradeNonCombatShowdownIfOpposed(game, battlefield) {
@@ -25541,12 +25944,31 @@ function settleBattlefieldConquest(game, battlefield, controllerId, reason) {
 }
 
 function allGear(game) {
-  const candidates = [
-    ...game.players.flatMap((player) => player.base.filter((card) => cardHasType(card, "gear"))),
-    ...game.battlefields.flatMap((field) => field.units.filter((card) => cardHasType(card, "gear"))),
-    ...allUnits(game).flatMap((unit) => unit.attachments || [])
-  ];
-  return [...new Map(candidates.map((card) => [card.instanceId, card])).values()];
+  const gear = [];
+  const seen = new Set();
+  for (const player of game.players) {
+    for (const card of player.base) {
+      if (cardHasType(card, "gear")) pushUniqueCard(gear, seen, card);
+    }
+  }
+  for (const battlefield of game.battlefields) {
+    for (const card of battlefield.units) {
+      if (cardHasType(card, "gear")) pushUniqueCard(gear, seen, card);
+    }
+  }
+  for (const player of game.players) {
+    for (const unit of player.base) {
+      if (unit.type !== "unit") continue;
+      for (const attachment of unit.attachments || []) pushUniqueCard(gear, seen, attachment);
+    }
+  }
+  for (const battlefield of game.battlefields) {
+    for (const unit of battlefield.units) {
+      if (unit.type !== "unit") continue;
+      for (const attachment of unit.attachments || []) pushUniqueCard(gear, seen, attachment);
+    }
+  }
+  return gear;
 }
 
 function totalPowerCost(card) {
@@ -27326,17 +27748,24 @@ function combatRoleMightModifiers(game, unit, role, battlefield = findUnitLocati
   return modifiers;
 }
 
-function dynamicMightModifier(game, battlefield, unit, combatRole = unit.combatRole) {
+function dynamicMightModifier(
+  game,
+  battlefield,
+  unit,
+  combatRole = unit.combatRole,
+  location = findUnitLocation(game, unit.instanceId)
+) {
   let amount = 0;
   const controller = game.players.find((player) => player.id === unit.controllerId);
-  const location = findUnitLocation(game, unit.instanceId);
   const nearbyUnits = location?.type === "battlefield"
     ? location.battlefield.units
     : location?.type === "base"
       ? location.player.base.filter((card) => card.type === "unit")
       : [];
+  const unitStaticEffects = cardEffects(unit, "static");
+  let controlledCards = null;
   if (hasStaticEffect(unit, "selfMightByPoints")) amount += controller?.score || 0;
-  for (const effect of cardEffects(unit, "static")) {
+  for (const effect of unitStaticEffects) {
     if (effect.kind === "empoweredMight" && isEmpowered(unit)) {
       amount += (effect.amount || 0) * (effect.perEmpower ? (unit.empoweredCount || 0) : 1);
     }
@@ -27377,7 +27806,8 @@ function dynamicMightModifier(game, battlefield, unit, combatRole = unit.combatR
   }
   if (hasStaticEffect(unit, "selfMightByTrash")) amount += controller?.trash?.length || 0;
   if (hasStaticEffect(unit, "selfMightPerFriendlyGear")) {
-    amount += allControlledCards(game, unit.controllerId)
+    controlledCards = allControlledCards(game, unit.controllerId);
+    amount += controlledCards
       .filter((candidate) => cardHasType(candidate, "gear")).length
       * staticEffectAmount(unit, "selfMightPerFriendlyGear", 1);
   }
@@ -27389,11 +27819,11 @@ function dynamicMightModifier(game, battlefield, unit, combatRole = unit.combatR
         && effectIsEnabledByMutation(effect))
       .reduce((gearTotal, effect) => gearTotal + (Number(effect.amount) || 0), 0), 0);
   }
-  for (const effect of cardEffects(unit, "static").filter((candidate) => candidate.kind === "runeThresholdMight")) {
+  for (const effect of unitStaticEffects.filter((candidate) => candidate.kind === "runeThresholdMight")) {
     if ((controller?.runes?.length || 0) >= (effect.threshold || 8)) amount += effect.amount || 0;
   }
   if (hasStaticEffect(unit, "selfMightWhileBuffed") && (unit.buffs || 0) > 0) amount += staticEffectAmount(unit, "selfMightWhileBuffed", 1);
-  for (const effect of cardEffects(unit, "static").filter((candidate) => candidate.kind === "gainMightKeywordsIfPowerSpent")) {
+  for (const effect of unitStaticEffects.filter((candidate) => candidate.kind === "gainMightKeywordsIfPowerSpent")) {
     if ((controller?.powerSpentThisTurn || 0) >= (effect.powerAtLeast || 0)) amount += effect.amount || 0;
   }
   if (hasStaticEffect(unit, "selfMightWhileAnotherFriendlyHere")
@@ -27414,16 +27844,18 @@ function dynamicMightModifier(game, battlefield, unit, combatRole = unit.combatR
       amount += staticEffectAmount(source, "otherBuffedFriendlyHereMight", 1);
     }
   }
-  for (const effect of cardEffects(unit, "static").filter((candidate) => candidate.kind === "attachedThisTurnMight")) {
+  for (const effect of unitStaticEffects.filter((candidate) => candidate.kind === "attachedThisTurnMight")) {
     const attachment = findCard(game, effect.appendedFromCardId);
     if (attachment?.attachedTurnSequence === (game.turnSequence || 0)) amount += effect.amount || 0;
   }
-  for (const source of allControlledCards(game, unit.controllerId)) {
-    for (const effect of cardEffects(source, "static")) {
+  controlledCards ||= allControlledCards(game, unit.controllerId);
+  for (const source of controlledCards) {
+    const sourceStaticEffects = cardEffects(source, "static");
+    for (const effect of sourceStaticEffects) {
       if (effect.kind !== "friendlyMatchingUnitsMight") continue;
       if (effectMatchesUnitSelector(effect, unit)) amount += effect.amount || 1;
     }
-    for (const effect of cardEffects(source, "static")) {
+    for (const effect of sourceStaticEffects) {
       if (effect.kind === "friendlyEmpoweredMight" && isEmpowered(unit)) {
         amount += effect.amount || 0;
       }
@@ -27990,7 +28422,9 @@ function killGear(game, gear, source = null) {
 }
 
 function resolveReplacementEffect(game, replacement, unit, source, replacementEvent, explicitDeathContinuation = null) {
-  const sourceCard = replacement.sourceCard;
+  // Saved choices may contain a detached snapshot of the source card. Costs
+  // such as exhausting the source must update the live board object.
+  const sourceCard = findCard(game, replacement.sourceCard?.instanceId) || replacement.sourceCard;
   const controller = game.players.find((player) => player.id === unit.controllerId);
   if (!controller) return { pending: false };
   if (replacement.replacementKind === "battlefieldCombatDeathRecall") {
@@ -28250,6 +28684,11 @@ function collectDeathknellTriggers(game, owner, unit, diedAlone) {
         sourceCardId: unit.instanceId,
         data: { amount: effect.amount || 999, readyAll: Boolean(effect.readyAll) }
       });
+    }
+    if (["drawIfNotAlone", "predict", "dealDamageUnit", "playHandUnitToBaseIgnoreEnergy"].includes(effect.kind)) {
+      triggers.push(effectSpecsTrigger(game, controller, unit, {
+        ...structuredClone(effect), diedAlone
+      }, "death"));
     }
   }
   for (const trigger of triggers) {
@@ -28730,13 +29169,14 @@ function isLethalDamage(game, unit) {
 
 export function currentMight(game, unit) {
   if (!unit) return 0;
-  const battlefield = findUnitLocation(game, unit.instanceId)?.battlefield;
+  const location = findUnitLocation(game, unit.instanceId);
+  const battlefield = location?.battlefield;
   return resolveLayeredNumber({
     printed: unit.might || 0,
     assignment: unit.assignedMight,
     modifiers: [
       ...intrinsicMightModifiers(unit),
-      dynamicMightModifier(game, battlefield, unit),
+      dynamicMightModifier(game, battlefield, unit, unit.combatRole, location),
       ...combatRoleMightModifiers(game, unit, unit.combatRole)
     ],
     minimum: minimumMightFromStaticEffects(game, battlefield, unit)
@@ -28747,9 +29187,12 @@ export function unitDamageState(game, unit, options = {}) {
   if (!unit) return { might: 0, damage: 0, remaining: 0 };
   const battlefield = options.battlefield || findUnitLocation(game, unit.instanceId)?.battlefield || null;
   const role = options.role ?? unit.combatRole ?? null;
-  const might = battlefield && role
-    ? currentCombatMight(game, battlefield, unit, role)
-    : currentMight(game, unit);
+  const suppliedMight = options.might != null ? Number(options.might) : NaN;
+  const might = Number.isFinite(suppliedMight)
+    ? suppliedMight
+    : battlefield && role
+      ? currentCombatMight(game, battlefield, unit, role)
+      : currentMight(game, unit);
   const damage = Math.max(0, Number(unit.damage) || 0);
   return {
     might,
@@ -28760,7 +29203,8 @@ export function unitDamageState(game, unit, options = {}) {
 
 function currentMightForMightyCondition(game, unit) {
   if (!unit) return 0;
-  const battlefield = findUnitLocation(game, unit.instanceId)?.battlefield;
+  const location = findUnitLocation(game, unit.instanceId);
+  const battlefield = location?.battlefield;
   const role = unit.combatRole;
   const roleModifiers = [];
   if (role === "attacker") {
@@ -28781,7 +29225,7 @@ function currentMightForMightyCondition(game, unit) {
   return resolveLayeredNumber({
     printed: effectiveMight(unit),
     modifiers: [
-      dynamicMightModifier(game, battlefield, unit),
+      dynamicMightModifier(game, battlefield, unit, unit.combatRole, location),
       ...roleModifiers
     ],
     minimum: minimumMightFromStaticEffects(game, battlefield, unit)
@@ -28858,6 +29302,7 @@ function scoreHoldingBattlefields(game, player, continuation = null) {
           triggers.push(...triggers.slice(fieldTriggerStart).map((trigger) => structuredClone(trigger)));
           log(game, `${player.name}'s hold effects at ${field.name} trigger an additional time.`);
         }
+        collectOpponentScoreTriggers(game, player, field, "hold", triggers);
       }
     }
   }
@@ -29134,7 +29579,7 @@ function triggerConquerEventEffects(game, player, field, units, scored = true) {
   }
   for (const source of allControlledCards(game, player.id)) {
     for (const effect of cardEffects(source, "conquer")) {
-      if (!["drawIfUnitsAtBattlefield", "readySelf", "exhaustSelfReadyUnitIfExcess", "exhaustSelfReplaceBattlefield", "discardExhaustPlayReflectionCopy"].includes(effect.kind)) continue;
+      if (!["drawIfUnitsAtBattlefield", "readySelf", "exhaustSelfReadyUnitIfExcess", "exhaustSelfReplaceBattlefield", "discardExhaustPlayReflectionCopy", "exhaustRevealTopBanishPlayRecycleRest", "payEnergyReadySelf"].includes(effect.kind)) continue;
       if (effect.kind === "readySelf" && effect.firstEachTurn
         && source.lastConquerReadyTurnSequence === (game.turnSequence || 0)) continue;
       if (effect.kind === "exhaustSelfReadyUnitIfExcess"
@@ -29221,9 +29666,12 @@ function triggerConquerEventEffects(game, player, field, units, scored = true) {
       "drawPerOtherControlledBattlefield",
       "payEnergyDrawIfMighty",
       "payEnergyPlayToken",
+      "playUnitToken",
       "readyGearThenOptionalDetach"
       ,"payEnergyDraw"
     ].includes(effect.kind)) {
+      if (effect.requiresExcessDamage
+        && (representative?.lastConquerExcessDamage || 0) < effect.requiresExcessDamage) continue;
       if (effect.kind === "payEnergyDrawIfMighty"
         && !(field.units || []).some((unit) => unit.controllerId === player.id && currentMight(game, unit) >= 5)) continue;
       triggers.push({
@@ -29232,8 +29680,11 @@ function triggerConquerEventEffects(game, player, field, units, scored = true) {
         sourceCardId: field.instanceId,
         sourceCardSnapshot: structuredClone(field),
         data: {
-          specs: [{ ...structuredClone(effect), battlefieldId: field.instanceId }],
-          timing: "conquerHere",
+            specs: [{
+              ...structuredClone(effect), battlefieldId: field.instanceId,
+              assignedExcessDamage: representative?.lastConquerExcessDamage || 0
+            }],
+            timing: "conquerHere",
           declaredTargets: [],
           declaredChoices: []
         }
@@ -29245,6 +29696,7 @@ function triggerConquerEventEffects(game, player, field, units, scored = true) {
     triggers.push(...triggers.map((trigger) => structuredClone(trigger)));
     log(game, `${player.name}'s conquer effects at ${field.name} trigger an additional time.`);
   }
+  collectOpponentScoreTriggers(game, player, field, "conquer", triggers);
   if (triggers.length) {
     prepareAndQueueTriggers(game, triggers, game.interactive ? "actionChain" : "queue");
   }
@@ -29339,6 +29791,18 @@ const KEYWORD_SCORE_TRIGGER_RESOLVERS = new Map([
     });
   }]
 ]);
+
+function collectOpponentScoreTriggers(game, scoringPlayer, field, reason, triggers) {
+  for (const player of game.players.filter((candidate) => candidate.id !== scoringPlayer.id)) {
+    for (const source of allControlledCards(game, player.id)) {
+      for (const effect of cardEffects(source, "opponentScore")) {
+        triggers.push(effectSpecsTrigger(game, player, source, {
+          ...structuredClone(effect), scoredBattlefieldId: field.instanceId, reason
+        }, "opponentScore"));
+      }
+    }
+  }
+}
 
 function collectBattlefieldScoreTriggers(field, player, reason, triggers) {
   for (const effect of cardEffects(field, "score")) {
@@ -29455,7 +29919,7 @@ function collectStartOfBeginningTriggers(game, player) {
   const triggers = [];
   for (const field of game.battlefields) {
     for (const effect of cardEffects(field, "beginning")) {
-      if (effect.kind !== "dealDamageUnitsHere" || (!effect.eachPlayer && field.controlledBy !== player.id)) continue;
+      if (!effect.eachPlayer && field.controlledBy !== player.id) continue;
       triggers.push({
         kind: "effectSpecs",
         playerId: player.id,
@@ -30634,60 +31098,134 @@ function collectDrawEffectTriggers(game, player, triggers, simultaneousBatchId =
 }
 
 function allUnits(game) {
-  return [
-    ...game.players.flatMap((player) => player.base.filter((card) => card.type === "unit")),
-    ...game.battlefields.flatMap((field) => field.units.filter((card) => card.type === "unit"))
-  ];
+  const units = [];
+  for (const player of game.players) {
+    for (const card of player.base) {
+      if (card.type === "unit") units.push(card);
+    }
+  }
+  for (const battlefield of game.battlefields) {
+    for (const card of battlefield.units) {
+      if (card.type === "unit") units.push(card);
+    }
+  }
+  return units;
 }
 
 function allControlledCards(game, playerId) {
   const player = game.players.find((candidate) => candidate.id === playerId);
-  const cards = [
-    player.legend,
-    player.champion?.zone === "played" ? player.champion : null,
-    ...player.base,
-    ...player.runes.filter((rune) => rune.controllerId === playerId),
-    ...game.battlefields.flatMap((field) => field.units.filter((unit) => unit.controllerId === playerId)),
-    ...allUnits(game).flatMap((unit) => unit.attachments || []).filter((attachment) => attachment.controllerId === playerId)
-  ].filter(Boolean);
-  return [...new Map(cards.map((card) => [card.instanceId, card])).values()];
+  if (!player) return [];
+  const cards = [];
+  const seen = new Set();
+  pushUniqueCard(cards, seen, player.legend);
+  if (player.champion?.zone === "played") pushUniqueCard(cards, seen, player.champion);
+  for (const card of player.base) pushUniqueCard(cards, seen, card);
+  for (const rune of player.runes) {
+    if (rune.controllerId === playerId) pushUniqueCard(cards, seen, rune);
+  }
+  for (const battlefield of game.battlefields) {
+    for (const unit of battlefield.units) {
+      if (unit.controllerId === playerId) pushUniqueCard(cards, seen, unit);
+    }
+  }
+  for (const candidatePlayer of game.players) {
+    for (const unit of candidatePlayer.base) {
+      if (unit.type !== "unit") continue;
+      for (const attachment of unit.attachments || []) {
+        if (attachment.controllerId === playerId) pushUniqueCard(cards, seen, attachment);
+      }
+    }
+  }
+  for (const battlefield of game.battlefields) {
+    for (const unit of battlefield.units) {
+      if (unit.type !== "unit") continue;
+      for (const attachment of unit.attachments || []) {
+        if (attachment.controllerId === playerId) pushUniqueCard(cards, seen, attachment);
+      }
+    }
+  }
+  return cards;
 }
 
 function exhaustedNonSpellObjects(game, excludedCardId = null) {
-  const cards = [
-    ...game.players.flatMap((player) => allControlledCards(game, player.id)),
-    ...game.battlefields
-  ].filter((card) =>
-    card
-    && card.instanceId !== excludedCardId
-    && card.type !== "spell"
-    && card.exhausted
-  );
-  return [...new Map(cards.map((card) => [card.instanceId, card])).values()];
+  const cards = [];
+  const seen = new Set();
+  for (const player of game.players) {
+    for (const card of allControlledCards(game, player.id)) {
+      if (card.instanceId !== excludedCardId && card.type !== "spell" && card.exhausted) {
+        pushUniqueCard(cards, seen, card);
+      }
+    }
+  }
+  for (const battlefield of game.battlefields) {
+    if (battlefield.instanceId !== excludedCardId && battlefield.type !== "spell" && battlefield.exhausted) {
+      pushUniqueCard(cards, seen, battlefield);
+    }
+  }
+  return cards;
 }
 
 function findCard(game, cardId) {
   if (!cardId) return null;
-  const pools = [
-    ...game.players.flatMap((player) => [
-      player.legend,
-      player.champion,
-      ...player.availableChampions,
-      ...player.availableBattlefields,
-      ...player.hand,
-      ...player.base,
-      ...player.runes,
-      ...player.trash,
-      ...(player.banished || [])
-    ]),
-    ...((game.showdown?.chain || []).map((item) => item?.card).filter(Boolean)),
-    ...((game.actionChain?.chain || []).map((item) => item?.card).filter(Boolean)),
-    ...game.battlefields,
-    ...game.battlefields.flatMap((field) => field.units),
-    ...game.battlefields.flatMap((field) => (field.hidden || []).map((item) => item.card)),
-    ...allUnits(game).flatMap((unit) => unit.attachments || [])
-  ];
-  return pools.find((card) => card?.instanceId === cardId || card?.id === cardId) || null;
+  for (const player of game.players) {
+    if (cardMatchesId(player.legend, cardId)) return player.legend;
+    if (cardMatchesId(player.champion, cardId)) return player.champion;
+    for (const zone of [
+      player.availableChampions,
+      player.availableBattlefields,
+      player.hand,
+      player.base,
+      player.runes,
+      player.trash,
+      player.banished
+    ]) {
+      if (!Array.isArray(zone)) continue;
+      const card = zone.find((candidate) => cardMatchesId(candidate, cardId));
+      if (card) return card;
+    }
+  }
+  for (const item of game.showdown?.chain || []) {
+    if (cardMatchesId(item?.card, cardId)) return item.card;
+  }
+  for (const item of game.actionChain?.chain || []) {
+    if (cardMatchesId(item?.card, cardId)) return item.card;
+  }
+  for (const battlefield of game.battlefields) {
+    if (cardMatchesId(battlefield, cardId)) return battlefield;
+  }
+  for (const battlefield of game.battlefields) {
+    const unit = battlefield.units.find((candidate) => cardMatchesId(candidate, cardId));
+    if (unit) return unit;
+  }
+  for (const battlefield of game.battlefields) {
+    const hidden = (battlefield.hidden || []).find((item) => cardMatchesId(item?.card, cardId));
+    if (hidden) return hidden.card;
+  }
+  for (const player of game.players) {
+    for (const unit of player.base) {
+      if (unit.type !== "unit") continue;
+      const attachment = (unit.attachments || []).find((card) => cardMatchesId(card, cardId));
+      if (attachment) return attachment;
+    }
+  }
+  for (const battlefield of game.battlefields) {
+    for (const unit of battlefield.units) {
+      if (unit.type !== "unit") continue;
+      const attachment = (unit.attachments || []).find((card) => cardMatchesId(card, cardId));
+      if (attachment) return attachment;
+    }
+  }
+  return null;
+}
+
+function cardMatchesId(card, cardId) {
+  return Boolean(card && (card.instanceId === cardId || card.id === cardId));
+}
+
+function pushUniqueCard(cards, seen, card) {
+  if (!card || seen.has(card.instanceId)) return;
+  seen.add(card.instanceId);
+  cards.push(card);
 }
 
 function findHiddenCardLocation(game, cardId) {
@@ -30812,26 +31350,40 @@ function lethalDamageKillInstruction(unit) {
 }
 
 function resolveCleanupLethalUnits(game, entries) {
-  if (!entries.length) return false;
+  if (!entries.length) {
+    delete game.cleanupDeathReplacementBatch;
+    return false;
+  }
   const unitIds = entries.map((entry) => entry.unit.instanceId).sort();
   const signature = unitIds.join("|");
+  const previousBatch = game.cleanupDeathReplacementBatch;
   if (game.cleanupDeathReplacementBatch?.signature !== signature) {
     game.cleanupDeathReplacementBatch = {
       signature,
       unitIds,
+      approvedDeathsByUnit: Object.fromEntries(entries.flatMap(({ unit }) => {
+        const approved = previousBatch?.approvedDeathsByUnit?.[unit.instanceId];
+        return approved?.zoneChangeCounter === (unit.zoneChangeCounter || 0)
+          ? [[unit.instanceId, approved]] : [];
+      })),
       candidatesByUnit: Object.fromEntries(entries.map((entry) => [
         entry.unit.instanceId,
         deathReplacementCandidates(game, entry.unit)
       ]))
     };
   }
-  const candidateSnapshots = game.cleanupDeathReplacementBatch.candidatesByUnit;
-  if (maybePromptSimultaneousDeathReplacement(game, entries.map((entry) => entry.unit), candidateSnapshots)) return true;
+  const batch = game.cleanupDeathReplacementBatch;
+  const approvedDeaths = batch.approvedDeathsByUnit ||= {};
+  const approvedDeath = (unit) => approvedDeaths[unit.instanceId]?.zoneChangeCounter === (unit.zoneChangeCounter || 0)
+    ? approvedDeaths[unit.instanceId] : null;
+  const candidateSnapshots = batch.candidatesByUnit;
+  if (maybePromptSimultaneousDeathReplacement(game,
+    entries.filter(({ unit }) => !approvedDeath(unit)).map((entry) => entry.unit), candidateSnapshots)) return true;
 
-  const records = [];
   let changed = false;
   for (const entry of entries) {
     if (!findUnitLocation(game, entry.unit.instanceId)) continue;
+    if (approvedDeath(entry.unit)) continue;
     const replacement = resolveUnitDeathReplacement(game, entry.unit, entry.source, null, candidateSnapshots[entry.unit.instanceId] || []);
     if (replacement.pending) return true;
     if (replacement.replaced) {
@@ -30842,13 +31394,32 @@ function resolveCleanupLethalUnits(game, entries) {
       continue;
     }
     if (!replacement.proceed) continue;
-    if (entry.source.killInstruction) {
-      recordKillInstructionEvent(game, entry.unit, entry.source.killInstruction);
+    // Another unit's replacement may suspend this cleanup. Retain the decision
+    // by object incarnation, and commit deaths only after all choices finish.
+    // Plain data survives snapshots without retaining detached player objects.
+    approvedDeaths[entry.unit.instanceId] = {
+      zoneChangeCounter: entry.unit.zoneChangeCounter || 0,
+      ownerId: replacement.owner.id,
+      controllerId: replacement.controller.id,
+      diedAloneOverride: entry.source.diedAloneOverride,
+      killInstruction: structuredClone(entry.source.killInstruction || null)
+    };
+  }
+  const records = [];
+  for (const entry of entries) {
+    const approved = approvedDeath(entry.unit);
+    if (!approved || !findUnitLocation(game, entry.unit.instanceId)) continue;
+    const source = { ...entry.source, diedAloneOverride: approved.diedAloneOverride,
+      killInstruction: approved.killInstruction };
+    if (source.killInstruction) {
+      recordKillInstructionEvent(game, entry.unit, source.killInstruction);
     }
     delete entry.unit.pendingExplicitKill;
     delete entry.unit.pendingLethalDamageEventId;
     delete entry.unit.pendingLethalDamageZoneChangeCounter;
-    const record = captureUnitDeath(game, entry.unit, entry.source, replacement.owner, replacement.controller);
+    const record = captureUnitDeath(game, entry.unit, source,
+      game.players.find((player) => player.id === approved.ownerId),
+      game.players.find((player) => player.id === approved.controllerId));
     if (record) records.push(record);
   }
   if (game.deathReplacementPreference?.kind === "declineEvent") {

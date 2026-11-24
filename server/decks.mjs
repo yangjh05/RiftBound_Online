@@ -1,5 +1,6 @@
 import { cards, makeRune } from "../src/cards.mjs";
 import { validateDeckRecord } from "../src/decks/rules.mjs";
+import { validateRoomDeck } from "../src/decks/legality.mjs";
 
 const CARD_BY_NUMBER = new Map(
   Object.values(cards).flatMap((card) => [
@@ -28,8 +29,8 @@ export function normalizeSubmittedDeck(deck) {
   };
 }
 
-export function validateSubmittedDeck(deck) {
-  return validateDeckRecord(deck, cardByNumber);
+export function validateSubmittedDeck(deck, roomOptions) {
+  return roomOptions ? validateRoomDeck(deck, cardByNumber, roomOptions) : validateDeckRecord(deck, cardByNumber);
 }
 
 export function resolveDeckRecord(deck) {

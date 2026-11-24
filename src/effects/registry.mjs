@@ -172,6 +172,7 @@ export const SPELL_TARGET_DECLARATIONS = Object.freeze({
     provider: TARGET_PROVIDERS.ALL_UNITS,
     scopeByTarget: {
       friendlyUnit: "friendly",
+      enemyUnit: "enemy",
       friendlyUnitAgainstOrChosenByEnemyDomain: "friendly"
     },
     defaultScope: "any"
@@ -179,7 +180,7 @@ export const SPELL_TARGET_DECLARATIONS = Object.freeze({
   stunUnit: {
     choiceEffect: "stunUnit",
     provider: TARGET_PROVIDERS.TARGETABLE_UNITS,
-    scopeByTarget: { unit: "any", attackingUnit: "attacking" },
+    scopeByTarget: { unit: "any", attackingUnit: "attacking", enemyBattlefieldUnit: "enemyBattlefield" },
     defaultScope: "enemy"
   },
   stunOrReturnAttackingEnemy: {
@@ -189,7 +190,12 @@ export const SPELL_TARGET_DECLARATIONS = Object.freeze({
   },
   returnBattlefieldUnitToHand: {
     choiceEffect: "returnUnitToHand",
-    provider: TARGET_PROVIDERS.BATTLEFIELD_UNITS,
+    provider: TARGET_PROVIDERS.TARGETABLE_UNITS,
+    scopeByTarget: {
+      friendlyUnit: "friendly", enemyUnit: "enemy", unit: "any", nonDragon: "any",
+      friendlyBattlefield: "friendlyBattlefield", friendlyBattlefieldUnit: "friendlyBattlefield",
+      enemyBattlefield: "enemyBattlefield", enemyBattlefieldUnit: "enemyBattlefield"
+    },
     defaultScope: "battlefield"
   },
   counterSpell: {
@@ -206,7 +212,7 @@ export const SPELL_TARGET_DECLARATIONS = Object.freeze({
   dealDamageUnit: {
     choiceEffect: "damageUnit",
     provider: TARGET_PROVIDERS.TARGETABLE_UNITS,
-    scopeByTarget: { unit: "any", enemyUnit: "enemy", battlefieldUnit: "battlefield", enemyBattlefieldUnit: "enemyBattlefield" },
+    scopeByTarget: { unit: "any", friendlyUnit: "friendly", enemyUnit: "enemy", enemyHere: "enemyHere", battlefieldUnit: "battlefield", enemyBattlefieldUnit: "enemyBattlefield" },
     defaultScope: "battlefield"
   },
   strikeDown: {
@@ -297,7 +303,10 @@ export const SPELL_TARGET_DECLARATIONS = Object.freeze({
   returnUnitToBase: {
     choiceEffect: "returnUnitToBase",
     provider: TARGET_PROVIDERS.BATTLEFIELD_UNITS,
-    scopeByTarget: { friendlyBattlefield: "friendlyBattlefield", enemyBattlefield: "enemyBattlefield" },
+    scopeByTarget: {
+      friendlyBattlefield: "friendlyBattlefield", friendlyBattlefieldUnit: "friendlyBattlefield",
+      enemyBattlefield: "enemyBattlefield", enemyBattlefieldUnit: "enemyBattlefield"
+    },
     defaultScope: "battlefield"
   },
   moveFriendlyUnitsToBase: {
@@ -879,7 +888,7 @@ const effectDefinitions = [
   effect("onPlay", "readySelf", { sourceTypes: ["unit"], targetless: true }),
   effect("onPlay", "readyOrExhaustLegend", { sourceTypes: ["unit"], targetless: true }),
   effect("onPlay", "readyUnit", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.ALL_UNITS }),
-  effect("onPlay", "returnBattlefieldUnitToHand", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.BATTLEFIELD_UNITS }),
+  effect("onPlay", "returnBattlefieldUnitToHand", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.TARGETABLE_UNITS }),
   effect("onPlay", "returnTrashUnitToHand", { sourceTypes: ["unit"], targetProvider: "friendlyTrashUnits" }),
   effect("onPlay", "returnTrashCardToHand", { sourceTypes: ["unit", "gear"], targetless: true, flow: "choice", continuation: "triggerQueue" }),
   effect("onPlay", "discardOpponentHand", { sourceTypes: ["unit"], targetProvider: TARGET_PROVIDERS.OPPONENTS }),
@@ -1016,8 +1025,8 @@ const effectDefinitions = [
   effect("spell", "moveAnyFriendlyUnitsAtBattlefieldToBase", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.BATTLEFIELD_UNITS, declaration: SPELL_TARGET_DECLARATIONS.moveAnyFriendlyUnitsAtBattlefieldToBase }),
   effect("spell", "moveUnit", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.ALL_UNITS, declaration: SPELL_TARGET_DECLARATIONS.moveUnit }),
   effect("spell", "recycleOpponentNonUnit", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.OPPONENT_NON_UNIT_HAND, declaration: SPELL_TARGET_DECLARATIONS.recycleOpponentNonUnit }),
-  effect("spell", "returnBattlefieldUnitToHand", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.BATTLEFIELD_UNITS, declaration: SPELL_TARGET_DECLARATIONS.returnBattlefieldUnitToHand }),
-  effect("spell", "eachPlayerReturnUnitToHand", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.BATTLEFIELD_UNITS }),
+  effect("spell", "returnBattlefieldUnitToHand", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.TARGETABLE_UNITS, declaration: SPELL_TARGET_DECLARATIONS.returnBattlefieldUnitToHand }),
+  effect("spell", "eachPlayerReturnUnitToHand", { sourceTypes: ["spell"], targetless: true }),
   effect("spell", "returnTrashUnitToHand", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.TOP_DECK, declaration: SPELL_TARGET_DECLARATIONS.returnTrashUnitToHand }),
   effect("spell", "returnUnitToBase", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.BATTLEFIELD_UNITS, declaration: SPELL_TARGET_DECLARATIONS.returnUnitToBase }),
   effect("spell", "returnFriendlyAndEnemyToHand", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.FRIENDLY_AND_ENEMY_UNITS, declaration: SPELL_TARGET_DECLARATIONS.returnFriendlyAndEnemyToHand }),

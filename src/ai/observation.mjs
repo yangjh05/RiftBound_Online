@@ -2,14 +2,17 @@ import { currentMight, effectiveMight } from "../engine.mjs";
 import { hiddenCardControllerId } from "../rules/zones.mjs";
 import { validMulliganBottomEntries } from "./deck-memory.mjs";
 
+export function opponentPrivateInformationVisible(game, viewerId, ownerId) {
+  return (game.revealedIntel || []).some((item) => item.viewerId === viewerId
+    && item.ownerId === ownerId && item.expiresAtTurnSequence === game.turnSequence);
+}
+
 export function observeGame(game, viewerId, options = {}) {
   const self = game.players.find((player) => player.id === viewerId);
   const opponent = game.players.find((player) => player.id !== viewerId);
   if (!self || !opponent) return null;
   const includeExtendedContext = options.includeExtendedContext !== false;
-  const intel = (game.revealedIntel || []).some((item) =>
-    item.viewerId === viewerId && item.ownerId === opponent.id && item.expiresAtTurnSequence === game.turnSequence
-  );
+  const intel = opponentPrivateInformationVisible(game, viewerId, opponent.id);
   return {
     viewerId,
     phase: game.phase,
@@ -121,8 +124,12 @@ function publicPlayer(game, player, privateVisible, includePrivateKnowledge = fa
   return {
     id: player.id,
     score: player.score,
+    turnScoredBattlefields: [...(player.turnScoredBattlefields || [])],
+    unitsEnterReadyThisTurn: Boolean(player.unitsEnterReadyThisTurn),
+    nextUnitEnterReady: Boolean(player.nextUnitEnterReady),
     xp: player.xp || 0,
     handCount: player.hand.length,
+    handVisible: privateVisible,
     hand: privateVisible ? player.hand.map((card) => publicCard(card, game)) : [],
     deckCount: player.mainDeck.length,
     mulliganBottomCards: mulliganBottomEntries.map(({ card }) => publicCard(card)),
@@ -134,6 +141,7 @@ function publicPlayer(game, player, privateVisible, includePrivateKnowledge = fa
     base: player.base.map((card) => publicCard(card, game, true)),
     runes: player.runes.map((rune) => ({ domain: rune.domain, exhausted: Boolean(rune.exhausted) })),
     champion: player.champion ? publicCard(player.champion, game, player.champion.zone === "played") : null,
+    availableChampions: (player.availableChampions || []).map((card) => publicCard(card, game)),
     legend: publicCard(player.legend, game, true)
   };
 }
@@ -145,6 +153,7 @@ function publicCard(card, game = null, liveMight = false) {
     instanceId: card.instanceId,
     name: card.name,
     type: card.type,
+    isToken: Boolean(card.isToken),
     controllerId: card.controllerId,
     ownerId: card.ownerId,
     energy: card.energy || 0,
@@ -186,7 +195,7 @@ export function stateFeatures(observation) {
 }
 
 function sumMight(cards) {
-  return cards.reduce((sum, card) => sum + (card.might || 0) - Math.min(card.might || 0, card.damage || 0), 0);
+  return cards.reduce((sum, card) => sum + Math.max(0, card.might || 0), 0);
 }
 
 function readyRunes(player) {

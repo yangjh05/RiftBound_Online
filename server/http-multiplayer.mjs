@@ -9,6 +9,7 @@ import {
   subscribe
 } from "./rooms.mjs";
 import {
+  MAX_AI_REPLAY_REQUEST_BYTES,
   listAiGenerations,
   listAiSpectatorReplays,
   readAiGenerationCheckpoint,
@@ -17,6 +18,9 @@ import {
   storeAiReplay
 } from "./ai-data.mjs";
 import { handleAccountRequest } from "./http-accounts.mjs";
+import { handleBugReportRequest } from "./http-bug-reports.mjs";
+import { securityHeaders } from "./http-security.mjs";
+import { handleDeckCardImageRequest } from "./deck-card-images.mjs";
 
 export async function handleMultiplayerRequest(req, res) {
   const url = new URL(req.url || "/", "http://127.0.0.1");
@@ -33,7 +37,9 @@ export async function handleMultiplayerRequest(req, res) {
   }
 
   try {
+    if (await handleDeckCardImageRequest(req, res)) return true;
     if (await handleAccountRequest(req, res, { json, readJson })) return true;
+    if (await handleBugReportRequest(req, res, { json, readJson })) return true;
 
     if (req.method === "GET" && url.pathname === "/api/rooms") {
       return json(res, 200, { ok: true, rooms: listRooms() });
@@ -73,14 +79,18 @@ export async function handleMultiplayerRequest(req, res) {
     }
 
     if (req.method === "POST" && url.pathname === "/api/ai/replays") {
-      const body = await readJson(req);
+      const body = await readJson(req, MAX_AI_REPLAY_REQUEST_BYTES);
       const stored = await storeAiReplay(body.replay);
       return json(res, 200, { ok: true, ...stored });
     }
 
     if (req.method === "POST" && url.pathname === "/api/rooms") {
       const body = await readJson(req);
-      const result = createRoom({ sideboardingEnabled: body.sideboardingEnabled === true });
+      const result = createRoom({
+        sideboardingEnabled: body.sideboardingEnabled === true,
+        poolId: body.poolId,
+        banlistEnabled: body.banlistEnabled === true
+      });
       return json(res, 200, { ok: true, ...result });
     }
 
@@ -119,7 +129,13 @@ export async function handleMultiplayerRequest(req, res) {
 
     return json(res, 404, { ok: false, message: "Unknown API route." });
   } catch (error) {
-    return json(res, 500, { ok: false, message: error?.message || "Server error." });
+    const status = Number.isInteger(error?.status) && error.status >= 400 && error.status <= 599
+      ? error.status : 500;
+    return json(res, status, {
+      ok: false,
+      message: error?.message || "Server error.",
+      ...(typeof error?.code === "string" && status < 500 ? { code: error.code } : {})
+    });
   }
 }
 
@@ -134,18 +150,23 @@ function json(res, status, payload) {
 }
 
 function corsHeaders(extra = {}) {
-  return {
+  return securityHeaders({
     "access-control-allow-origin": "*",
     ...extra
-  };
+  });
 }
 
-async function readJson(req) {
+async function readJson(req, maximumBytes = 1024 * 1024) {
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > 1024 * 1024) throw new Error("Request body is too large.");
+    if (size > maximumBytes) {
+      const error = new Error("Request body is too large.");
+      error.status = 413;
+      error.code = "request_too_large";
+      throw error;
+    }
     chunks.push(chunk);
   }
   if (!chunks.length) return {};

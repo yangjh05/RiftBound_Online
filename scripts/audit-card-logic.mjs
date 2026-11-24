@@ -31,7 +31,7 @@ const OPERATIONS = Object.freeze([
   operation("move", /\bmove\b/iu, /이동|옮기|맞바꾸|맞바꿉|기지로\s*(?:보내|보냅)/u, ["move", "moonfall", "callToBattle", "heroicCharge", "possession"], ["Ganking"]),
   operation("playToken", /\bplay\b[^.\n]{0,50}(?<!non-)\btokens?\b/iu, /토큰|분신|모래 병사|신병|요정 유닛|새 유닛/u, ["playToken", "playUnitToken", "reflection", "recruit", "partyFavors"]),
   operation("gainXp", /\bgain\s+\d+\s+XP\b/iu, /XP[^.\n]{0,16}획득|XP를 획득/u, ["gainXp", "hunt"], ["Hunt"]),
-  operation("score", /\bscore\s+\d+\s+points?\b/iu, /점수[^.\n]{0,16}획득|득점|\d+점(?:을)?\s*획득/u, ["gainPoint", "score", "winIf"]),
+  operation("score", /\bscore\s+\d+\s+points?\b/iu, /점수[^.\n]{0,16}획득|득점|\d+점(?:을)?\s*(?:획득|얻)/u, ["gainPoint", "score", "winIf"]),
   operation("buff", /\bbuff\b/iu, /버프/u, ["buff"]),
   operation("counter", /\bcounter\b/iu, /차단/u, ["counter"]),
   operation("channel", /\bchannel\b/iu, /전개/u, ["channel"]),
@@ -43,7 +43,7 @@ const OPERATIONS = Object.freeze([
   operation("hide", /\bhide\b/iu, /숨/u, ["hide", "hidden"], ["Hidden"]),
   operation("banish", /\bbanish\b/iu, /추방/u, ["banish"]),
   operation("heal", /\bheal\b/iu, /회복/u, ["heal", "save", "recall"]),
-  operation("control", /\b(?:take|gain|lose) control\b/iu, /조종권|조종/u, ["possession", "steal", "control"])
+  operation("control", /\b(?:take|gain|lose) control\b/iu, /조종권|조종|통제/u, ["possession", "steal", "control"])
 ]);
 
 // Named composite effects still use shared resolvers, but their kind names do not
@@ -264,7 +264,7 @@ function readOfficialCards() {
 
 function officialRecord(records, cardNumber) {
   if (records.has(cardNumber)) return records.get(cardNumber);
-  const variant = /^(OGN-\d+)[bs]\/298$/iu.exec(cardNumber || "");
+  const variant = /^(OGN-\d+)[abs]\/298$/iu.exec(cardNumber || "");
   return variant ? records.get(`${variant[1]}/298`) || null : null;
 }
 

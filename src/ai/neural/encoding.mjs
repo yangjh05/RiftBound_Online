@@ -4,10 +4,47 @@ import { opponentResponseProfile, reactionReserveProfile } from "../resource-str
 import { mulliganPlanProfile } from "../mulligan.mjs";
 import { remainingDeckProfile } from "../deck-memory.mjs";
 import { tacticalActionProfile } from "../action-tactics.mjs";
+import { deckInventoryCards } from "../deck-inventory.mjs";
+import { declarationTargetContext, publicUnit } from "../damage-context.mjs";
+import {paymentOptionProfile} from '../payment-options.mjs';
+import {scoreRaceContext} from '../score-race.mjs';
+import {hiddenCardIsControlledBy} from '../../rules/zones.mjs';
+
+// Keep Run C indices stable; append other registered cards. The checkpoint
+// loader explicitly migrates zone matrices and belief outputs by card identity.
+// Late printings of older sets must follow the already shipped vocabulary,
+// rather than shifting the indices of cards learned by existing checkpoints.
+const APPENDED_CARD_VOCABULARY = Object.freeze(["OGN-303a/298"]);
+const APPENDED_CARD_NUMBERS = new Set(APPENDED_CARD_VOCABULARY);
+const RUN_C_LEGACY_COMPATIBILITY_CARDS = Object.freeze([
+  "SFD-032/221", "SFD-036/221", "SFD-051/221", "SFD-097/221",
+  "SFD-105/221", "SFD-109/221", "SFD-115/221", "SFD-136/221",
+  "SFD-140/221", "SFD-146/221", "SFD-208/221", "SFD-215/221",
+  "UNL-042/219", "UNL-053/219", "UNL-060/219", "UNL-063/219",
+  "UNL-070/219", "UNL-074/219", "UNL-079/219", "UNL-080/219",
+  "UNL-113/219", "UNL-120/219", "UNL-128/219", "UNL-134/219",
+  "UNL-143/219", "UNL-150/219", "UNL-192/219", "UNL-197/219",
+  "UNL-198/219", "UNL-205/219"
+]);
+const RUN_C_CARD_PREFIXES = new Set(["OGN", "OGS"]);
+const RUN_C_CARD_NUMBERS = new Set(RUN_C_LEGACY_COMPATIBILITY_CARDS);
+for (const card of Object.values(cards)) {
+  const cardNumber = card?.cardNumber;
+  if (RUN_C_CARD_PREFIXES.has(String(cardNumber || "").split("-")[0]) && !APPENDED_CARD_NUMBERS.has(cardNumber)) {
+    RUN_C_CARD_NUMBERS.add(cardNumber);
+  }
+}
+const RUN_C_CARD_VOCABULARY = [...RUN_C_CARD_NUMBERS]
+  .filter(Boolean)
+  .sort((left, right) => left.localeCompare(right));
 
 export const CARD_VOCABULARY = Object.freeze([
   "<unknown>",
-  ...Object.values(cards).map((card) => card.cardNumber).filter(Boolean).sort((left, right) => left.localeCompare(right))
+  ...RUN_C_CARD_VOCABULARY,
+  ...[...new Set(Object.values(cards).map((card) => card.cardNumber))]
+    .filter((number) => number && !RUN_C_CARD_NUMBERS.has(number) && !APPENDED_CARD_NUMBERS.has(number))
+    .sort((left, right) => left.localeCompare(right)),
+  ...APPENDED_CARD_VOCABULARY
 ]);
 export const CARD_INDEX = new Map(CARD_VOCABULARY.map((cardNumber, index) => [cardNumber, index]));
 export const CARD_VOCAB_SIZE = CARD_VOCABULARY.length;
@@ -21,12 +58,15 @@ export const MAX_FIELD_UNITS = 12;
 export const MAX_BASE_UNITS = 8;
 export const UNIT_FEATURES = 36;
 export const BATTLEFIELD_FEATURES = 24;
-export const CONTEXT_FEATURES = 64;
+export const CONTEXT_HASH_FEATURES = 64;
+export const CONTEXT_RULE_FEATURES = 10;
+export const CONTEXT_READY_FEATURES = 4;
+export const CONTEXT_FEATURES = CONTEXT_HASH_FEATURES + CONTEXT_RULE_FEATURES + CONTEXT_READY_FEATURES;
 export const CARD_ZONE_FEATURES = CARD_BINS * 4;
 export const BATTLEFIELD_STATE_FEATURES = MAX_BATTLEFIELDS * (BATTLEFIELD_FEATURES + MAX_FIELD_UNITS * UNIT_FEATURES);
 export const BASE_STATE_FEATURES = 2 * MAX_BASE_UNITS * UNIT_FEATURES;
 export const STATE_DIM = STATE_SCALARS + CARD_ZONE_FEATURES + BATTLEFIELD_STATE_FEATURES + BASE_STATE_FEATURES + CONTEXT_FEATURES;
-export const STRUCTURED_STATE_TOKEN_VERSION = 1;
+export const STRUCTURED_STATE_TOKEN_VERSION = 2;
 export const STRUCTURED_STATE_LAYOUT = Object.freeze({
   version: STRUCTURED_STATE_TOKEN_VERSION,
   scalars: Object.freeze({ offset: 0, count: STATE_SCALARS, width: 1 }),
@@ -58,7 +98,10 @@ export const ACTION_SEMANTIC_DIM = 256;
 // same vector, even when engine-generated identifiers happen to hash alike.
 export const LEGACY_ACTION_DIM = ACTION_SEMANTIC_DIM + 192;
 export const ACTION_TACTICAL_DIM = 16;
-export const ACTION_DIM = LEGACY_ACTION_DIM + ACTION_TACTICAL_DIM;
+export const ACTION_TARGET_CONTEXT_DIM = 16;
+export const ACTION_PLAN_CONTEXT_DIM = 16;
+export const ACTION_OUTCOME_CONTEXT_DIM = 25;
+export const ACTION_DIM = LEGACY_ACTION_DIM + ACTION_TACTICAL_DIM + ACTION_TARGET_CONTEXT_DIM + ACTION_PLAN_CONTEXT_DIM + ACTION_OUTCOME_CONTEXT_DIM;
 export const MAX_ACTIONS = 192;
 export const MAX_SEQUENCE = 128;
 export const NEURAL_HIDDEN_SIZE = 64;
@@ -78,6 +121,7 @@ const ACTION_KIND_INDEX = new Map(ACTION_KINDS.map((kind, index) => [kind, index
 ACTION_KIND_INDEX.set("togglePaymentPoolPower", 67);
 ACTION_KIND_INDEX.set("rollFirstPlayer", 68);
 ACTION_KIND_INDEX.set("submitMulligan", ACTION_KIND_INDEX.get("toggleMulliganCard"));
+ACTION_KIND_INDEX.set('choosePaymentOptions', ACTION_KIND_INDEX.get('toggleOptionalPaymentEffect'));
 
 export function encodeState(game, viewerId) {
   // The flat encoder consumes board, zone and decision context only. Avoid
@@ -159,6 +203,22 @@ export function encodeState(game, viewerId) {
   }
   encodeDecisionContext(output, relationalOffset, game, observation, viewerId);
   encodeOwnDeckContext(output, relationalOffset, game, viewerId);
+  // Collision-free scoring history and durability, separate from combat Might.
+  const ruleOffset = relationalOffset + CONTEXT_HASH_FEATURES;
+  [mine, theirs].forEach((player, side) => {
+    const scored = new Set(player.turnScoredBattlefields);
+    observation.battlefields.slice(0, MAX_BATTLEFIELDS).forEach((field, index) => {
+      output[ruleOffset + side * MAX_BATTLEFIELDS + index] = scored.has(field.id) ? 1 : 0;
+    });
+  });
+  [myBoard, opponentBoard, mine.base, theirs.base].forEach((units, index) => {
+    output[ruleOffset + 6 + index] = units.reduce((sum, unit) =>
+      sum + Math.max(0, (unit.might || 0) - (unit.damage || 0)), 0) / 40;
+  });
+  [mine, theirs].forEach((player, side) => {
+    output[ruleOffset + CONTEXT_RULE_FEATURES + side * 2] = player.unitsEnterReadyThisTurn ? 1 : 0;
+    output[ruleOffset + CONTEXT_RULE_FEATURES + side * 2 + 1] = player.nextUnitEnterReady ? 1 : 0;
+  });
   return output;
 }
 
@@ -169,7 +229,8 @@ export function encodeAction(game, actorId, action) {
   const player = game.players.find((candidate) => candidate.id === actorId);
   const card = findCard(game, action.cardId || action.cardIds?.[0] || action.unitId || action.unitIds?.[0])
     || cardByNumber(action.cardNumber || action.outCardNumber)
-    || (action.kind === "beginPlayChampion" ? player?.champion : null);
+    || (action.kind === "beginPlayChampion" ? player?.champion : null)
+    || (action.kind === 'choosePaymentOptions' ? game.pendingPayment?.playProcess?.card : null);
   const secondaryCard = cardByNumber(action.inCardNumber);
   encodeIndexBits(output, 24, cardIndex(card?.cardNumber));
   encodeIndexBits(output, 34, cardIndex(secondaryCard?.cardNumber));
@@ -209,12 +270,40 @@ export function encodeAction(game, actorId, action) {
   output[127] = 1;
   encodeActionSemantics(output, game, actorId, action, card);
   encodeTacticalActionSemantics(output, LEGACY_ACTION_DIM, game, actorId, action);
+  const option=paymentOptionProfile(game,action),race=scoreRaceContext(game,actorId);
+  output.set([Number(Boolean(option)),(option?.selected||0)/4,Number(option?.accelerate||false),
+    (option?.energy||0)/8,(option?.power||0)/4,(option?.draw||0)/3,
+    race.pressure,race.gap,race.opponentHeld/3,race.openFields/3,
+    Number(race.nearVictory),Number(race.exposedFinish),(option?.available||0)/4,
+    Math.min(1,(game.pendingPayment?.energyCost||0)/12),
+    Number(Boolean(option)&&option.selected===0),Number(Boolean(option)&&option.selected>0)],
+    LEGACY_ACTION_DIM+ACTION_TACTICAL_DIM+ACTION_TARGET_CONTEXT_DIM);
+  const profile=tacticalActionProfile(game,actorId,action),target=profile.targetContext;
+  output.set([
+    Number(Boolean(target)),Number(target?.stunned||false),Number(target?.activeCombat||false),
+    Math.min(1,(target?.combatDamage||0)/12),Math.min(1,(target?.otherEnemyCombatDamage||0)/24),
+    Math.min(1,(target?.friendlyCombatDamage||0)/24),Math.min(1,(target?.otherFriendlyHere||0)/8),
+    Math.min(1,(target?.drawController||0)/4),Math.min(1,(target?.deathDraw||0)/4),
+    Number(target?.kind==='kill'),Number(target?.kind==='stun'),Number(target?.kind==='relocation'),
+    Number(target?.ready||false),Number(target?.enemyControlledField||false),
+    Math.min(1,(target?.energy||0)/12),Math.min(1,(target?.remainingBeforeHit||0)/12),
+    Math.min(1,profile.attackingMight/24),Math.min(1,profile.defendingMight/24),
+    Math.min(1,profile.enemyLethalThreshold/12),Math.min(1,profile.friendlyLethalThreshold/12),
+    Number(profile.enemyCanRemoveFriendly),Number(profile.sourceControlRisk),
+    Math.min(1,profile.movingMight/24),Math.min(1,profile.movingUnitCount/8),
+    Number(Boolean(profile.movementTriggersUnresolved))
+  ],ACTION_DIM-ACTION_OUTCOME_CONTEXT_DIM);
   return output;
 }
 
 export function encodeActionSet(game, actorId, actions, options = {}) {
   const selected = selectHierarchicalActions(actions, MAX_ACTIONS);
-  preserveRequiredActions(selected, options.requiredActions || [], MAX_ACTIONS);
+  const requiredActions = (options.requiredActions || []).filter(Boolean).map((required) => {
+    const canonical = actions.find((action) => semanticActionDescriptor(action) === semanticActionDescriptor(required));
+    if (!canonical) throw new Error("Required action is not in the legal action set.");
+    return canonical;
+  });
+  preserveRequiredActions(selected, requiredActions, MAX_ACTIONS);
   const output = new Float32Array(MAX_ACTIONS * ACTION_DIM);
   const encoded = selected.map((action) => encodeAction(game, actorId, action));
   const collisions = new Map();
@@ -264,7 +353,7 @@ export function selectHierarchicalActions(actions, limit = MAX_ACTIONS) {
 }
 
 export function actionStage(action) {
-  if (["togglePaymentRune", "togglePaymentPoolEnergy", "togglePaymentPoolPower", "toggleOptionalPaymentEffect", "confirmPayment", "cancelPayment"].includes(action.kind)) return "payment";
+  if (["togglePaymentRune", "togglePaymentPoolEnergy", "togglePaymentPoolPower", "toggleOptionalPaymentEffect", "choosePaymentOptions", "confirmPayment", "cancelPayment"].includes(action.kind)) return "payment";
   if (["chooseEffectOption", "declineEffectChoice"].includes(action.kind)) return "choice";
   if (["passShowdown", "activateCard"].includes(action.kind)) return "reaction";
   if (["sideboardSwap", "sideboardDone", "chooseFirstPlayer"].includes(action.kind)) return "match";
@@ -298,11 +387,7 @@ export function encodeOpponentDeckTarget(game, viewerId) {
   const output = new Float32Array(CARD_BINS);
   const opponent = game.players.find((player) => player.id !== viewerId);
   if (!opponent) return output;
-  const cards = [
-    ...opponent.mainDeck, ...opponent.hand, ...opponent.base, ...opponent.trash, ...(opponent.banished || []),
-    ...game.battlefields.flatMap((field) => field.units.filter((card) => card.ownerId === opponent.id)),
-    ...game.battlefields.flatMap((field) => (field.hidden || []).filter((item) => item.ownerId === opponent.id).map((item) => item.card))
-  ];
+  const cards = deckInventoryCards(game, opponent.id);
   for (const card of cards) if (card.cardNumber) output[cardBin(card.cardNumber)] += 1 / 3;
   for (let index = 0; index < output.length; index += 1) output[index] = Math.min(1, output[index]);
   return output;
@@ -370,6 +455,23 @@ function encodeUnit(output, offset, unit, viewerId) {
 }
 
 function encodeDecisionContext(output, offset, game, observation, viewerId) {
+  for (const [fieldIndex,field] of game.battlefields.entries()) {
+    for (const hidden of field.hidden||[]) {
+      if (hiddenCardIsControlledBy(hidden,viewerId))
+        addContextFeature(output,offset,`hidden:${fieldIndex}:${hidden.card?.cardNumber||'unknown'}`,0.5);
+    }
+  }
+  const declaration = declarationTargetContext(game);
+  addContextFeature(output, offset, 'declaration:selected-count', declaration.selected.length / 8);
+  addContextFeature(output, offset, 'declaration:remaining-count', Math.max(0, declaration.maximum - declaration.selected.length) / 8);
+  for (const id of declaration.selected) {
+    const target = publicUnit(game, id);
+    const fieldIndex = game.battlefields.findIndex(f => f.units.some(u => u.instanceId === id));
+    const units = fieldIndex >= 0 ? game.battlefields[fieldIndex].units
+      : game.players.find(p => p.id === target?.controllerId)?.base || [];
+    const unitIndex = stableCards(units).findIndex(unit => unit.instanceId === id);
+    addContextFeature(output, offset, `declaration:target:${target?.cardNumber || 'unknown'}:${target?.controllerId === viewerId ? 'self' : 'opponent'}:${fieldIndex}:${unitIndex}`, 0.25);
+  }
   const tokens = [
     `phase:${observation.phase}`,
     `choice:${game.pendingChoice?.effect || "none"}`,
@@ -381,7 +483,7 @@ function encodeDecisionContext(output, offset, game, observation, viewerId) {
     `showdown-attacker:${observation.showdown?.attackerId === viewerId ? "self" : "opponent"}`,
     `priority:${observation.focusPlayerId === viewerId ? "self" : "opponent"}`
   ];
-  for (const token of tokens) output[offset + stableHash(token) % CONTEXT_FEATURES] = Math.min(1, output[offset + stableHash(token) % CONTEXT_FEATURES] + 0.5);
+  for (const token of tokens) output[offset + stableHash(token) % CONTEXT_HASH_FEATURES] = Math.min(1, output[offset + stableHash(token) % CONTEXT_HASH_FEATURES] + 0.5);
   const reserve = reactionReserveProfile(game, viewerId);
   const opponentResponse = opponentResponseProfile(game, viewerId);
   addContextFeature(output, offset, "reserve:reaction-count", Math.min(1, reserve.reactionCards / 4));
@@ -476,7 +578,7 @@ function encodeOwnDeckContext(output, offset, game, viewerId) {
 }
 
 function addContextFeature(output, offset, token, amount) {
-  const index = offset + stableHash(token) % CONTEXT_FEATURES;
+  const index = offset + stableHash(token) % CONTEXT_HASH_FEATURES;
   output[index] = Math.min(1, output[index] + amount);
 }
 
@@ -558,6 +660,29 @@ function encodeTacticalActionSemantics(output, offset, game, actorId, action) {
   // Keep raw, observable facts in the model input. The former composite
   // tacticalPrior collapsed several judgments into one hand-written answer.
   output[offset + 15] = Math.min(1, profile.incomingDamage / 12);
+  // Append facts without moving any trained input rows. Old checkpoints load
+  // these rows as zero and learn them from new-contract trajectories.
+  const target = profile.damageContext;
+  const response = profile.responseContext;
+  const start = offset + ACTION_TACTICAL_DIM;
+  const opponent = game.players.find(p => p.id !== actorId);
+  const held = game.battlefields.filter(f => f.controlledBy === opponent?.id).length;
+  output[start] = Math.min(1, (target?.selectedCount || 0) / 8);
+  output[start + 1] = Math.min(1, (target?.previousHits || 0) / 8);
+  output[start + 2] = Math.min(1, (target?.allocatedDamage || 0) / 12);
+  output[start + 3] = Math.min(1, (target?.usefulDamage || 0) / 12);
+  output[start + 4] = Math.min(1, (target?.remainingBeforeHit || 0) / 12);
+  output[start + 5] = target?.lethal ? 1 : 0;
+  output[start + 6] = target?.alreadyLethal ? 1 : 0;
+  output[start + 7] = target?.fieldId ? 1 : 0;
+  output[start + 8] = response?.protection || 0;
+  output[start + 9] = response?.relocation || 0;
+  output[start + 10] = response?.unknown || 0;
+  output[start + 11] = Math.min(1, (target?.remainingSelections || 0) / 8);
+  output[start + 12] = Math.min(1, held / 3);
+  output[start + 13] = held > 0 && (opponent.score || 0) + held >= (game.victoryScore || 8) ? 1 : 0;
+  output[start + 14] = Math.min(1, profile.targetMight / 12);
+  output[start + 15] = profile.canRemoveEnemyNoResponse ? 1 : 0;
 }
 
 function semanticActionDescriptor(action) {
@@ -619,5 +744,5 @@ function stableHash(value) {
 }
 
 function readyRunes(player) { return player.runes.filter((rune) => !rune.exhausted).length; }
-function sumMight(cards) { return cards.reduce((sum, card) => sum + Math.max(0, (card.might || 0) - (card.damage || 0)), 0); }
+function sumMight(cards) { return cards.reduce((sum, card) => sum + Math.max(0, card.might || 0), 0); }
 function controlled(observation, playerId) { return observation.battlefields.filter((field) => field.controlledBy === playerId).length; }

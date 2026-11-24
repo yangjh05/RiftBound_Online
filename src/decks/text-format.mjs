@@ -93,7 +93,7 @@ export function deckRecordFromText(text, {
 } = {}) {
   const sections = parseDeckText(text);
   const cardList = [...(cards || [])].filter(Boolean);
-  const nameIndex = buildNameIndex(cardList, cardNames);
+  const nameIndex = buildNameIndex(cardList, cardNames, championMatchesLegend);
   const issues = [];
 
   const resolveEntry = (entry, sectionKey) => {
@@ -179,10 +179,24 @@ function normalizeCardName(name) {
     .toLocaleLowerCase("en-US");
 }
 
-function buildNameIndex(cards, cardNames) {
+function buildNameIndex(cards, cardNames, championMatchesLegend) {
   const index = new Map();
   for (const card of cards) {
-    for (const name of new Set([card.name, ...(cardNames(card) || [])].filter(Boolean))) {
+    const baseNames = new Set([card.name, ...(cardNames(card) || [])].filter(Boolean));
+    const names = new Set(baseNames);
+    if (card.type === "legend") {
+      for (const champion of cards.filter((candidate) => isChampion(candidate) && championMatchesLegend(candidate, card))) {
+        const championNames = new Set([champion.name, ...(cardNames(champion) || [])].filter(Boolean));
+        for (const championName of championNames) {
+          const prefix = championNamePrefix(championName);
+          if (!prefix) continue;
+          for (const legendName of baseNames) {
+            if (!legendNameAlreadyPrefixed(legendName, prefix)) names.add(`${prefix}, ${legendName}`);
+          }
+        }
+      }
+    }
+    for (const name of names) {
       const key = normalizeCardName(name);
       if (!key) continue;
       if (!index.has(key)) index.set(key, []);
@@ -190,6 +204,15 @@ function buildNameIndex(cards, cardNames) {
     }
   }
   return index;
+}
+
+function championNamePrefix(name) {
+  const separator = String(name || "").indexOf(",");
+  return separator > 0 ? String(name).slice(0, separator).trim() : null;
+}
+
+function legendNameAlreadyPrefixed(legendName, prefix) {
+  return normalizeCardName(legendName).startsWith(`${normalizeCardName(prefix)},`);
 }
 
 function cardFitsSection(card, sectionKey) {

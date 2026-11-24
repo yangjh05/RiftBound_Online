@@ -1,6 +1,6 @@
 import { mkdir, open, readFile, stat, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { hostname } from "node:os";
+import { hostname, uptime } from "node:os";
 import path from "node:path";
 
 export async function withFileLock(lockPath, action, options = {}) {
@@ -22,6 +22,7 @@ export async function withFileLock(lockPath, action, options = {}) {
           token,
           pid: process.pid,
           hostname: ownerHostname,
+          bootTimeMs: Date.now() - uptime() * 1000,
           acquiredAt: new Date().toISOString()
         }), "utf8");
         handle = candidate;
@@ -75,7 +76,7 @@ async function staleLockMayBeRemoved(filename, staleMs, localHostname) {
     try {
       const owner = JSON.parse(await readFile(filename, "utf8"));
       if (owner?.hostname === localHostname) {
-        if (processIsAlive(owner.pid)) return false;
+        if (ownerBelongsToThisBoot(owner) && processIsAlive(owner.pid)) return false;
         // A locally-owned lock whose process is gone cannot still be holding
         // the protected section. Recover it immediately instead of forcing a
         // replacement long-running training stage to wait for the full lease.
@@ -92,6 +93,20 @@ async function staleLockMayBeRemoved(filename, staleMs, localHostname) {
   } catch {
     return false;
   }
+}
+
+function ownerBelongsToThisBoot(owner) {
+  const bootTimeMs = Date.now() - uptime() * 1000;
+  if (owner.bootTimeMs != null) return Math.abs(owner.bootTimeMs - bootTimeMs) <= 60000;
+  const acquiredAt = Date.parse(owner.acquiredAt);
+  return !Number.isFinite(acquiredAt) || acquiredAt >= bootTimeMs - 60000;
+}
+
+export async function readLiveFileLockOwner(filename) {
+  try {
+    const owner = JSON.parse(await readFile(filename, "utf8"));
+    return owner.hostname === hostname() && ownerBelongsToThisBoot(owner) && processIsAlive(owner.pid) ? owner : null;
+  } catch (error) { if (error.code === "ENOENT" || error instanceof SyntaxError) return null; throw error; }
 }
 
 function processIsAlive(pid) {

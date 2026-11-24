@@ -1,0 +1,10 @@
+{
+  "buildId": "0.1.0-web-20261001-public-review",
+  "version": "0.1.0",
+  "publishedAt": "2026-10-01T07:50:55.541Z",
+  "updateBaseUrl": "https://punchfirst.site",
+  "multiplayerBaseUrl": "https://punchfirst.site",
+  "desktopBuildId": "0.1.0-20260921201148413",
+  "webReleaseId": "web-20261001-public-review",
+  "aiRuntimeReview": "bounded-public-runtime-review-v5"
+}

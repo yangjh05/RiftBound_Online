@@ -8,28 +8,46 @@ export function resolveLayeredNumber({
   maximum = Number.POSITIVE_INFINITY
 } = {}) {
   let value = Number.isFinite(assignment) ? Number(assignment) : finiteNumber(printed);
-  const values = modifiers.map(finiteNumber);
-  for (const increase of values.filter((amount) => amount >= 0)) value += increase;
-  for (const decrease of values.filter((amount) => amount < 0)) value += decrease;
+  // Rules require increases before decreases. Two allocation-free passes keep
+  // that ordering without building three short-lived arrays for every Might
+  // query during render and legality enumeration.
+  for (const modifier of modifiers) {
+    const amount = finiteNumber(modifier);
+    if (amount >= 0) value += amount;
+  }
+  for (const modifier of modifiers) {
+    const amount = finiteNumber(modifier);
+    if (amount < 0) value += amount;
+  }
   return Math.min(maximum, Math.max(minimum, value));
 }
 
 export function evaluateLayeredCharacteristics({ printed = {}, effects = [], context = {}, maxPasses = 32 } = {}) {
   let previous = normalizeState(printed);
+  let previousKey = stableState(previous);
+  const effectsByLayer = new Map(LAYER_ORDER.map((layer) => [
+    layer,
+    effects.filter((effect) => effect?.layer === layer)
+  ]));
   for (let pass = 0; pass < maxPasses; pass += 1) {
     const state = normalizeState(printed);
     for (const layer of LAYER_ORDER) {
-      const active = orderLayerEffects(effects.filter((effect) => effect?.layer === layer), previous, context);
+      const active = orderLayerEffects(effectsByLayer.get(layer), previous, context);
       if (layer === "arithmetic") {
-        const increases = active.filter((effect) => finiteNumber(effect.value) >= 0);
-        const decreases = active.filter((effect) => finiteNumber(effect.value) < 0);
-        for (const effect of [...increases, ...decreases]) applyLayerEffect(state, effect, context);
+        for (const effect of active) {
+          if (finiteNumber(effect.value) >= 0) applyLayerEffect(state, effect, context);
+        }
+        for (const effect of active) {
+          if (finiteNumber(effect.value) < 0) applyLayerEffect(state, effect, context);
+        }
       } else {
         for (const effect of active) applyLayerEffect(state, effect, context);
       }
     }
-    if (stableState(state) === stableState(previous)) return state;
+    const stateKey = stableState(state);
+    if (stateKey === previousKey) return state;
     previous = state;
+    previousKey = stateKey;
   }
   throw new Error(`Layer evaluation did not reach a fixed point within ${maxPasses} passes.`);
 }
@@ -116,5 +134,6 @@ function unique(values) {
 }
 
 function finiteNumber(value) {
-  return Number.isFinite(Number(value)) ? Number(value) : 0;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : 0;
 }

@@ -1,0 +1,29 @@
+{
+  "id": "user-master-yi-no-aurora-20260924",
+  "playerName": "Master Yi / No Aurora (user 2026-09-24)",
+  "source": "User-provided exact list, 2026-09-24",
+  "replacesSeedDeckId": "keenan-xiong",
+  "legend": "OGS-019/024",
+  "chosenChampion": "OGS-009/024",
+  "main": [
+    ["OGS-009/024", 1],
+    ["OGN-046/298", 2],
+    ["OGN-043/298", 3],
+    ["OGN-045/298", 3],
+    ["OGN-156/298", 3],
+    ["OGN-044/298", 3],
+    ["OGN-129/298", 1],
+    ["OGN-058/298", 3],
+    ["OGN-136/298", 3],
+    ["OGN-052/298", 3],
+    ["OGN-077/298", 2],
+    ["OGN-047/298", 2],
+    ["OGN-132/298", 2],
+    ["OGN-155/298", 3],
+    ["OGN-161/298", 3],
+    ["OGN-082/298", 3]
+  ],
+  "battlefields": ["OGN-280/298", "OGN-289/298", "OGN-295/298"],
+  "runes": [["Calm", 6], ["Body", 6]],
+  "sideboard": []
+}

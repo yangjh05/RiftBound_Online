@@ -365,6 +365,12 @@ function addHighlight(state, highlight) {
   state.highlightIds.add(highlight.id);
   state.highlights.push({ ...highlight, sequence: state.sequence });
   state.highlights = state.highlights.slice(-18);
+  if (state.highlightIds.size > state.highlights.length) {
+    const retainedIds = new Set(state.highlights.map((item) => item.id));
+    for (const id of state.highlightIds) {
+      if (!retainedIds.has(id)) state.highlightIds.delete(id);
+    }
+  }
   return highlight;
 }
 

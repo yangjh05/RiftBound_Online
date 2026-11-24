@@ -13,9 +13,9 @@ export const spiritforgedKoTranslations = Object.freeze({
     "collectorNumber": "SFD-002/221",
     "englishName": "Armed Assailant",
     "koName": "무장한 습격자",
-    "koHeader": "[무장한 습격자], 6 에너지, 1 격노 힘, 6 위력",
+    "koHeader": "[무장한 습격자], 6 에너지, 1 분노 힘, 6 위력",
     "koTypeLine": "유닛, 녹서스",
-    "koText": "비공식 번역\n[가속] (추가 비용으로 에너지 1과 격노 힘 1을 지불하면 이 카드가 준비 상태로 진입합니다.)\n[무기의 달인] (이 카드를 사용하면, 내 장착물 1개를 이미 부착되어 있더라도 힘 비용을 적게 지불하여 이 카드에 [장착]할 수 있습니다.)"
+    "koText": "비공식 번역\n[가속] (추가 비용으로 에너지 1과 분노 힘 1을 지불하면 이 카드가 준비 상태로 진입합니다.)\n[무기의 달인] (이 카드를 사용하면, 내 장착물 1개를 이미 부착되어 있더라도 힘 비용을 적게 지불하여 이 카드에 [장착]할 수 있습니다.)"
   },
   "SFD-003/221": {
     "collectorNumber": "SFD-003/221",
@@ -29,7 +29,7 @@ export const spiritforgedKoTranslations = Object.freeze({
     "collectorNumber": "SFD-004/221",
     "englishName": "Bushwhack",
     "koName": "급습",
-    "koHeader": "[급습], 2 에너지, 1 격노 힘",
+    "koHeader": "[급습], 2 에너지, 1 분노 힘",
     "koTypeLine": "주문",
     "koText": "비공식 번역\n[숨겨짐] (지금 힘을 지불해 숨기고, 이후 에너지 0으로 반응할 수 있습니다.)\n이번 턴에 아군 유닛이 준비 상태로 진입합니다. 탈진 상태의 골드 도구 토큰 1개를 사용합니다."
   },
@@ -37,7 +37,7 @@ export const spiritforgedKoTranslations = Object.freeze({
     "collectorNumber": "SFD-005/221",
     "englishName": "Detonate",
     "koName": "폭파",
-    "koHeader": "[폭파], 1 에너지, 1 격노 힘",
+    "koHeader": "[폭파], 1 에너지, 1 분노 힘",
     "koTypeLine": "주문",
     "koText": "비공식 번역\n도구 1개를 처치합니다. 그 조종자는 카드 2장을 뽑습니다."
   },
@@ -45,7 +45,7 @@ export const spiritforgedKoTranslations = Object.freeze({
     "collectorNumber": "SFD-006/221",
     "englishName": "Eager Drakehound",
     "koName": "열성적인 드레이크 사냥개",
-    "koHeader": "[열성적인 드레이크 사냥개], 3 에너지, 1 격노 힘, 3 위력",
+    "koHeader": "[열성적인 드레이크 사냥개], 3 에너지, 1 분노 힘, 3 위력",
     "koTypeLine": "유닛, 개, 용, 녹서스",
     "koText": "비공식 번역\n이 카드는 준비 상태로 진입합니다."
   },
@@ -71,7 +71,7 @@ export const spiritforgedKoTranslations = Object.freeze({
     "koName": "톱니 단검",
     "koHeader": "[톱니 단검], 1 에너지",
     "koTypeLine": "도구, 장착물",
-    "koText": "비공식 번역\n[장착] 격노 힘 (격노 힘: 이 카드를 내가 통제하는 유닛 1명에게 부착합니다.)\n[맹공 2] (이 카드가 공격자인 동안 +2 위력을 획득합니다.)"
+    "koText": "비공식 번역\n[장착] 분노 힘 (분노 힘: 이 카드를 내가 통제하는 유닛 1명에게 부착합니다.)\n[맹공 2] (이 카드가 공격자인 동안 +2 위력을 획득합니다.)"
   },
   "SFD-010/221": {
     "collectorNumber": "SFD-010/221",
@@ -103,7 +103,7 @@ export const spiritforgedKoTranslations = Object.freeze({
     "koName": "폭파단 생도",
     "koHeader": "[폭파단 생도], 2 에너지, 2 위력",
     "koTypeLine": "유닛, 필트오버",
-    "koText": "비공식 번역\n이 카드를 사용할 때, 추가 비용으로 에너지 1과 격노 힘 1을 지불할 수 있습니다.\n이 카드를 사용하면, 추가 비용을 지불한 경우 전장에 있는 유닛 1명에게 2의 피해를 입힙니다."
+    "koText": "비공식 번역\n이 카드를 사용할 때, 추가 비용으로 에너지 1과 분노 힘 1을 지불할 수 있습니다.\n이 카드를 사용하면, 추가 비용을 지불한 경우 전장에 있는 유닛 1명에게 2의 피해를 입힙니다."
   },
   "SFD-014/221": {
     "collectorNumber": "SFD-014/221",
@@ -127,7 +127,7 @@ export const spiritforgedKoTranslations = Object.freeze({
     "koName": "곡궁",
     "koHeader": "[곡궁], 2 에너지",
     "koTypeLine": "도구, 장착물",
-    "koText": "비공식 번역\n[장착] 격노 힘 (격노 힘: 이 카드를 내가 통제하는 유닛 1명에게 부착합니다.)\n이 카드가 공격하거나 방어하면, 이곳에 있는 적 유닛 1명에게 2의 피해를 입힙니다."
+    "koText": "비공식 번역\n[장착] 분노 힘 (분노 힘: 이 카드를 내가 통제하는 유닛 1명에게 부착합니다.)\n이 카드가 공격하거나 방어하면, 이곳에 있는 적 유닛 1명에게 2의 피해를 입힙니다."
   },
   "SFD-017/221": {
     "collectorNumber": "SFD-017/221",
@@ -151,7 +151,7 @@ export const spiritforgedKoTranslations = Object.freeze({
     "koName": "조립 설비",
     "koHeader": "[조립 설비], 4 에너지",
     "koTypeLine": "도구",
-    "koText": "비공식 번역\n에너지 1, 격노 힘 1, 내 폐기장에 있는 유닛 1명을 재활용, 이 카드를 탈진: 내 기지에 3 위력 기계 유닛 토큰 1개를 사용합니다."
+    "koText": "비공식 번역\n에너지 1, 분노 힘 1, 내 폐기장에 있는 유닛 1명을 재활용, 이 카드를 탈진: 내 기지에 3 위력 기계 유닛 토큰 1개를 사용합니다."
   },
   "SFD-020/221": {
     "collectorNumber": "SFD-020/221",
@@ -159,13 +159,13 @@ export const spiritforgedKoTranslations = Object.freeze({
     "koName": "드레이븐, 정복자",
     "koHeader": "[드레이븐, 정복자], 4 에너지, 4 위력",
     "koTypeLine": "챔피언 유닛, 드레이븐, 녹서스",
-    "koText": "비공식 번역\n이 카드가 전투에서 승리하면, 탈진 상태의 골드 도구 토큰 1개를 사용합니다.\n이 카드가 공격하거나 방어하면, 격노 힘 1을 지불하여 이번 턴에 이 카드가 +2 위력을 획득하게 할 수 있습니다."
+    "koText": "비공식 번역\n이 카드가 전투에서 승리하면, 탈진 상태의 골드 도구 토큰 1개를 사용합니다.\n이 카드가 공격하거나 방어하면, 분노 힘 1을 지불하여 이번 턴에 이 카드가 +2 위력을 획득하게 할 수 있습니다."
   },
   "SFD-021/221": {
     "collectorNumber": "SFD-021/221",
     "englishName": "Ferrous Forerunner",
     "koName": "철의 선봉대",
-    "koHeader": "[철의 선봉대], 6 에너지, 1 격노 힘, 6 위력",
+    "koHeader": "[철의 선봉대], 6 에너지, 1 분노 힘, 6 위력",
     "koTypeLine": "유닛, 기계, 요들, 밴들 시티",
     "koText": "비공식 번역\n[죽음의 종소리] — 내 기지에 3 위력 기계 유닛 토큰 2개를 사용합니다. (이 카드가 사망하면, 이 효과를 적용합니다.)"
   },
@@ -173,17 +173,17 @@ export const spiritforgedKoTranslations = Object.freeze({
     "collectorNumber": "SFD-022/221",
     "englishName": "Long Sword",
     "koName": "롱소드",
-    "koHeader": "[롱소드], 2 에너지, 1 격노 힘",
+    "koHeader": "[롱소드], 2 에너지, 1 분노 힘",
     "koTypeLine": "도구, 장착물",
-    "koText": "비공식 번역\n[속사] (이 카드는 [반응]을 가집니다. 이 카드를 사용하면, 내가 통제하는 유닛 1명에게 부착합니다.)\n[장착] 격노 힘 (격노 힘: 이 카드를 내가 통제하는 유닛 1명에게 부착합니다.)"
+    "koText": "비공식 번역\n[속사] (이 카드는 [반응]을 가집니다. 이 카드를 사용하면, 내가 통제하는 유닛 1명에게 부착합니다.)\n[장착] 분노 힘 (분노 힘: 이 카드를 내가 통제하는 유닛 1명에게 부착합니다.)"
   },
   "SFD-023/221": {
     "collectorNumber": "SFD-023/221",
     "englishName": "Piercing Light",
     "koName": "꿰뚫는 빛",
-    "koHeader": "[꿰뚫는 빛], 2 에너지, 1 격노 힘",
+    "koHeader": "[꿰뚫는 빛], 2 에너지, 1 분노 힘",
     "koTypeLine": "주문",
-    "koText": "비공식 번역\n[반복] 에너지 2, 격노 힘 1 (추가 비용을 지불하면 이 주문의 효과를 반복할 수 있습니다.)\n전장에 있는 유닛 1명에게 2의 피해를 입힌 후, 다른 유닛 최대 1명에게 2의 피해를 입힙니다."
+    "koText": "비공식 번역\n[반복] 에너지 2, 분노 힘 1 (추가 비용을 지불하면 이 주문의 효과를 반복할 수 있습니다.)\n전장에 있는 유닛 1명에게 2의 피해를 입힌 후, 다른 유닛 최대 1명에게 2의 피해를 입힙니다."
   },
   "SFD-024/221": {
     "collectorNumber": "SFD-024/221",
@@ -197,7 +197,7 @@ export const spiritforgedKoTranslations = Object.freeze({
     "collectorNumber": "SFD-025/221",
     "englishName": "Rengar, Pouncing",
     "koName": "렝가, 도약하는 자",
-    "koHeader": "[렝가, 도약하는 자], 3 에너지, 1 격노 힘, 3 위력",
+    "koHeader": "[렝가, 도약하는 자], 3 에너지, 1 분노 힘, 3 위력",
     "koTypeLine": "챔피언 유닛, 고양이, 렝가, 이쉬탈",
     "koText": "비공식 번역\n[반응] (주문 및 스킬이 처리되기 전을 포함해 시점에 관계없이 사용합니다. 내가 통제하는 전장에도 사용할 수 있습니다.)\n[맹공 2] (이 카드가 공격자인 동안 +2 위력을 획득합니다.)\n내가 공격 중인 전장에 이 카드를 사용할 수 있습니다."
   },
@@ -213,7 +213,7 @@ export const spiritforgedKoTranslations = Object.freeze({
     "collectorNumber": "SFD-027/221",
     "englishName": "Dunebreaker",
     "koName": "사막 파괴자",
-    "koHeader": "[사막 파괴자], 7 에너지, 1 격노 힘, 7 위력",
+    "koHeader": "[사막 파괴자], 7 에너지, 1 분노 힘, 7 위력",
     "koTypeLine": "유닛, 공허",
     "koText": "비공식 번역\n내 손에 있는 카드가 2장 이하라면, 이 카드는 준비 상태로 진입합니다.\n이 카드가 점거하면, 카드 2장을 뽑습니다."
   },
@@ -231,7 +231,7 @@ export const spiritforgedKoTranslations = Object.freeze({
     "koName": "렉사이, 돌파자",
     "koHeader": "[렉사이, 돌파자], 3 에너지, 3 위력",
     "koTypeLine": "챔피언 유닛, 렉사이, 공허",
-    "koText": "비공식 번역\n[가속] (추가 비용으로 에너지 1과 격노 힘 1을 지불하면 이 카드가 준비 상태로 진입합니다.)\n[맹공] (이 카드가 공격자인 동안 +1 위력을 획득합니다.)\n플레이어의 손 이외의 영역에서 사용된 아군 유닛이 [가속]을 가집니다."
+    "koText": "비공식 번역\n[가속] (추가 비용으로 에너지 1과 분노 힘 1을 지불하면 이 카드가 준비 상태로 진입합니다.)\n[맹공] (이 카드가 공격자인 동안 +1 위력을 획득합니다.)\n플레이어의 손 이외의 영역에서 사용된 아군 유닛이 [가속]을 가집니다."
   },
   "SFD-030/221": {
     "collectorNumber": "SFD-030/221",
@@ -239,7 +239,7 @@ export const spiritforgedKoTranslations = Object.freeze({
     "koName": "아레이온의 천벌",
     "koHeader": "[아레이온의 천벌], 3 에너지",
     "koTypeLine": "도구, 장착물",
-    "koText": "비공식 번역\n[장착] 에너지 1, 격노 힘 1 (에너지 1, 격노 힘 1: 이 카드를 내가 통제하는 유닛 1명에게 부착합니다.)\n이 카드의 점거 효과는 정복 효과로도 적용되며, 정복 효과는 점거 효과로도 적용됩니다."
+    "koText": "비공식 번역\n[장착] 에너지 1, 분노 힘 1 (에너지 1, 분노 힘 1: 이 카드를 내가 통제하는 유닛 1명에게 부착합니다.)\n이 카드의 점거 효과는 정복 효과로도 적용되며, 정복 효과는 점거 효과로도 적용됩니다."
   },
   "SFD-031/221": {
     "collectorNumber": "SFD-031/221",
@@ -823,7 +823,7 @@ export const spiritforgedKoTranslations = Object.freeze({
     "koName": "자울 물고기",
     "koHeader": "[자울 물고기], 7 에너지, 2 신체 힘, 6 위력",
     "koTypeLine": "유닛, 빌지워터",
-    "koText": "비공식 번역\n[가속] (추가 비용으로 에너지 1과 신체 힘 1을 지불하면 이 카드가 준비 상태로 진입합니다.)\n내 [강력] 유닛 1명당 이 카드의 비용이 에너지 2만큼 감소합니다. (유닛은 위력이 5 이상인 동안 [강력]입니다.)"
+    "koText": "비공식 번역\n[가속] (추가 비용으로 에너지 1과 신체 힘 1을 지불하면 이 카드가 준비 상태로 진입합니다.)\n내 [위력적] 유닛 1명당 이 카드의 비용이 에너지 2만큼 감소합니다. (유닛은 위력이 5 이상인 동안 [위력적]입니다.)"
   },
   "SFD-104/221": {
     "collectorNumber": "SFD-104/221",
@@ -847,7 +847,7 @@ export const spiritforgedKoTranslations = Object.freeze({
     "koName": "힘의 과시",
     "koHeader": "[힘의 과시], 2 에너지, 1 신체 힘",
     "koTypeLine": "주문",
-    "koText": "비공식 번역\n[반응] (주문 및 스킬이 처리되기 전을 포함해 시점에 관계없이 사용합니다.)\n내 [강력] 유닛 1명당 카드 1장을 뽑습니다. (유닛은 위력이 5 이상인 동안 [강력]입니다.)"
+    "koText": "비공식 번역\n[반응] (주문 및 스킬이 처리되기 전을 포함해 시점에 관계없이 사용합니다.)\n내 [위력적] 유닛 1명당 카드 1장을 뽑습니다. (유닛은 위력이 5 이상인 동안 [위력적]입니다.)"
   },
   "SFD-107/221": {
     "collectorNumber": "SFD-107/221",
@@ -1335,7 +1335,7 @@ export const spiritforgedKoTranslations = Object.freeze({
     "koName": "이름 없는 영웅",
     "koHeader": "[이름 없는 영웅], 2 에너지, 2 위력",
     "koTypeLine": "유닛, 정예, 데마시아",
-    "koText": "비공식 번역\n[죽음의 종소리] — 이 카드가 [강력]이었다면, 카드 2장을 뽑습니다. (이 카드가 사망하면, 이 효과를 적용합니다. 이 카드는 위력이 5 이상인 동안 [강력]입니다.)"
+    "koText": "비공식 번역\n[죽음의 종소리] — 이 카드가 [위력적]이었다면, 카드 2장을 뽑습니다. (이 카드가 사망하면, 이 효과를 적용합니다. 이 카드는 위력이 5 이상인 동안 [위력적]입니다.)"
   },
   "SFD-168/221": {
     "collectorNumber": "SFD-168/221",
@@ -1439,7 +1439,7 @@ export const spiritforgedKoTranslations = Object.freeze({
     "koName": "피오라, 자격을 갖춘 자",
     "koHeader": "[피오라, 자격을 갖춘 자], 3 에너지, 3 위력",
     "koTypeLine": "챔피언 유닛, 피오라, 데마시아",
-    "koText": "비공식 번역\n내가 통제하는 유닛이 [강력]이 되면, 질서 힘 1을 지불하여 해당 유닛을 준비시킬 수 있습니다. (유닛은 위력이 5 이상인 동안 [강력]입니다.)"
+    "koText": "비공식 번역\n내가 통제하는 유닛이 [위력적]이 되면, 질서 힘 1을 지불하여 해당 유닛을 준비시킬 수 있습니다. (유닛은 위력이 5 이상인 동안 [위력적]입니다.)"
   },
   "SFD-181/221": {
     "collectorNumber": "SFD-181/221",
@@ -1453,7 +1453,7 @@ export const spiritforgedKoTranslations = Object.freeze({
     "collectorNumber": "SFD-182/221",
     "englishName": "Danger Zone",
     "koName": "위험 지대",
-    "koHeader": "[위험 지대], 1 에너지, 1 격노/정신 힘",
+    "koHeader": "[위험 지대], 1 에너지, 1 분노/정신 힘",
     "koTypeLine": "주문, 럼블",
     "koText": "비공식 번역\n[반응] (주문 및 스킬이 처리되기 전을 포함해 시점에 관계없이 사용합니다.)\n[반복] 에너지 1, 힘 1 (추가 비용을 지불하면 이 주문의 효과를 반복할 수 있습니다.)\n이번 턴에 내 기계에게 +1 위력을 부여합니다."
   },
@@ -1469,7 +1469,7 @@ export const spiritforgedKoTranslations = Object.freeze({
     "collectorNumber": "SFD-184/221",
     "englishName": "Relentless Pursuit",
     "koName": "끈질긴 추격",
-    "koHeader": "[끈질긴 추격], 2 에너지, 1 격노/신체 힘",
+    "koHeader": "[끈질긴 추격], 2 에너지, 1 분노/신체 힘",
     "koTypeLine": "주문, 루시안",
     "koText": "비공식 번역\n[행동] (내 턴 또는 결전 시 사용합니다.)\n아군 유닛 1명을 이동시킵니다. 조종자가 같은 장착물 최대 1개를 해당 유닛에 부착할 수 있습니다. 이번 턴에 그 유닛은 ‘이 카드가 정복하면, 이 카드를 내 기지로 이동시킬 수 있습니다.’를 가집니다."
   },
@@ -1485,7 +1485,7 @@ export const spiritforgedKoTranslations = Object.freeze({
     "collectorNumber": "SFD-186/221",
     "englishName": "Spinning Axe",
     "koName": "회전 도끼",
-    "koHeader": "[회전 도끼], 2 에너지, 1 격노/혼돈 힘",
+    "koHeader": "[회전 도끼], 2 에너지, 1 분노/혼돈 힘",
     "koTypeLine": "도구, 드레이븐, 장착물",
     "koText": "비공식 번역\n[속사] (이 카드는 [반응]을 가집니다. 이 카드를 사용하면, 내가 통제하는 유닛 1명에게 부착합니다.)\n[장착] 힘 (힘: 이 카드를 내가 통제하는 유닛 1명에게 부착합니다.)\n[일시적] (이 카드가 부착되지 않았다면, 조종자의 시작 단계가 시작될 때 득점하기 전에 이 카드를 처치합니다.)"
   },
@@ -1501,7 +1501,7 @@ export const spiritforgedKoTranslations = Object.freeze({
     "collectorNumber": "SFD-188/221",
     "englishName": "Void Rush",
     "koName": "공허의 돌진",
-    "koHeader": "[공허의 돌진], 2 에너지, 1 격노/질서 힘",
+    "koHeader": "[공허의 돌진], 2 에너지, 1 분노/질서 힘",
     "koTypeLine": "주문, 렉사이",
     "koText": "비공식 번역\n내 주 덱 맨 위의 카드 2장을 공개합니다. 그중 1장을 추방한 후 비용을 2만큼 줄여 사용할 수 있습니다. 추방하지 않은 카드는 모두 뽑습니다."
   },
@@ -1639,7 +1639,7 @@ export const spiritforgedKoTranslations = Object.freeze({
     "koName": "위대한 결투가",
     "koHeader": "[위대한 결투가]",
     "koTypeLine": "전설, 피오라",
-    "koText": "비공식 번역\n내 유닛이 [강력]이 되면, 이 카드를 탈진하여 룬 1장을 탈진 상태로 전개할 수 있습니다. (유닛은 위력이 5 이상인 동안 [강력]입니다.)"
+    "koText": "비공식 번역\n내 유닛이 [위력적]이 되면, 이 카드를 탈진하여 룬 1장을 탈진 상태로 전개할 수 있습니다. (유닛은 위력이 5 이상인 동안 [위력적]입니다.)"
   },
   "SFD-206/221": {
     "collectorNumber": "SFD-206/221",
@@ -1743,7 +1743,7 @@ export const spiritforgedKoTranslations = Object.freeze({
     "koName": "가라앉은 사원",
     "koHeader": "[가라앉은 사원]",
     "koTypeLine": "전장",
-    "koText": "비공식 번역\n내가 [강력] 유닛 1명 이상과 함께 이곳을 정복하면, 에너지 1을 지불하여 카드 1장을 뽑을 수 있습니다. (유닛은 위력이 5 이상인 동안 [강력]입니다.)"
+    "koText": "비공식 번역\n내가 [위력적] 유닛 1명 이상과 함께 이곳을 정복하면, 에너지 1을 지불하여 카드 1장을 뽑을 수 있습니다. (유닛은 위력이 5 이상인 동안 [위력적]입니다.)"
   },
   "SFD-219/221": {
     "collectorNumber": "SFD-219/221",

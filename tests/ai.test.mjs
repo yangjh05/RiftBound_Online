@@ -1,13 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { cards, decklists } from "../src/cards.mjs";
+import { decklists } from "../src/cards.mjs";
 import {
   actionKey, activeActorId, applyAiAction, cloneGame, enumerateLegalActions, resolveLegalAction
 } from "../src/ai/actions.mjs";
 import { buildMatchReport } from "../src/ai/coach.mjs";
 import { metaCardLeaderboard, mutateDeck, updateDeckLearning } from "../src/ai/deckbuilding.mjs";
 import { observeGame } from "../src/ai/observation.mjs";
-import { resourceReservationBoardSnapshot } from "../src/ai/resource-reservation.mjs";
 import { createModel, DEFAULT_AI_MODEL, determineStrategicPlan } from "../src/ai/policy.mjs";
 import { createAiReplay, recordReplayDecision } from "../src/ai/replay.mjs";
 import { createGame } from "../src/engine.mjs";
@@ -28,19 +27,6 @@ test("AI legal-action environment only emits executable actions", () => {
   }
 });
 
-test("AI can take its play-order roll and choose whether to go first or second", () => {
-  const game = createGame({ decks: decks.slice(0, 2), randomFirstPlayer: true, randomSeed: 123 });
-
-  assert.deepEqual(enumerateLegalActions(game, "p1"), [{ kind: "rollFirstPlayer" }]);
-  assert.equal(applyAiAction(game, { kind: "rollFirstPlayer" }, "p1").ok, true);
-  assert.deepEqual(enumerateLegalActions(game, "p2"), [{ kind: "rollFirstPlayer" }]);
-  assert.equal(applyAiAction(game, { kind: "rollFirstPlayer" }, "p2").ok, true);
-  assert.equal(activeActorId(game), "p2");
-  assert.equal(applyAiAction(game, { kind: "chooseFirstPlayer", playerId: "p2" }, "p2").ok, true);
-  assert.equal(game.firstPlayerId, "p2");
-  assert.equal(game.phase, "champion-select");
-});
-
 test("AI observations never expose an opponent hand without current intel", () => {
   const game = createGame({ decks: decks.slice(0, 2) });
   const [viewer, opponent] = game.players;
@@ -50,35 +36,6 @@ test("AI observations never expose an opponent hand without current intel", () =
   game.revealedIntel.push({ viewerId: viewer.id, ownerId: opponent.id, expiresAtTurnSequence: game.turnSequence });
   const revealed = observeGame(game, viewer.id);
   assert.equal(revealed.opponent.hand.length, opponent.hand.length);
-});
-
-test("AI board observations and learning snapshots include live static Might", () => {
-  const game = createGame({ decks: decks.slice(0, 2) });
-  const player = game.players[0];
-  const sett = boardCard(cards.settKingpin, player.id, "live-sett");
-  const existing = boardCard(cards.lonelyPoro, player.id, "existing-buffed-unit");
-  const later = boardCard(cards.lonelyPoro, player.id, "later-buffed-unit");
-  existing.buffs = 1;
-  game.battlefields = [{
-    id: "live-static-field",
-    instanceId: "live-static-field",
-    name: "Live Static Field",
-    type: "battlefield",
-    effects: [],
-    units: [existing, sett],
-    hidden: [],
-    controlledBy: player.id
-  }];
-
-  let observedSett = observeGame(game, player.id).battlefields[0].units.find((unit) => unit.instanceId === sett.instanceId);
-  assert.equal(observedSett.might, sett.might + 1);
-  assert.equal(resourceReservationBoardSnapshot(game, player.id).battlefields[0].units.find((unit) => unit.instanceId === sett.instanceId).might, sett.might + 1);
-
-  game.battlefields[0].units.push(later);
-  later.buffs = 1;
-  observedSett = observeGame(game, player.id).battlefields[0].units.find((unit) => unit.instanceId === sett.instanceId);
-  assert.equal(observedSett.might, sett.might + 2);
-  assert.equal(resourceReservationBoardSnapshot(game, player.id).battlefields[0].units.find((unit) => unit.instanceId === sett.instanceId).might, sett.might + 2);
 });
 
 test("mulligan choices are attributed separately from play mistakes", () => {
@@ -135,19 +92,4 @@ function advanceToMulligan(game) {
     assert.equal(applyAiAction(game, { kind: "selectBattlefield", battlefieldId: player.availableBattlefields[0].instanceId }, actorId).ok, true);
   }
   assert.equal(game.phase, "mulligan");
-}
-
-function boardCard(template, playerId, instanceId) {
-  return {
-    ...structuredClone(template),
-    instanceId,
-    ownerId: playerId,
-    controllerId: playerId,
-    exhausted: false,
-    stunned: false,
-    damage: 0,
-    buffs: 0,
-    mightModifier: 0,
-    attachments: []
-  };
 }

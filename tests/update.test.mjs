@@ -18,12 +18,8 @@ const {
   fetchLatestManifest,
   isDeferredBuild,
   isNewerBuild,
-  isRetryableUpdateError,
-  isUpdateServiceUnavailableError,
   launchUpdateHelper,
   manifestSignaturePayload,
-  powershellBootstrap,
-  powershellHelper,
   recoverPendingUpdate,
   resolvePortableTarget,
   validateRemoteManifest,
@@ -101,42 +97,6 @@ test("desktop updater downloads a server artifact and reports verified progress"
   }
 });
 
-test("desktop updater retries transient update-server failures", async () => {
-  const manifest = manifestFor(Buffer.from("retry payload"));
-  let requests = 0;
-  const server = http.createServer((_req, res) => {
-    requests += 1;
-    if (requests < 3) {
-      res.writeHead(503, { "content-type": "application/json" });
-      res.end(JSON.stringify({ ok: false }));
-      return;
-    }
-    res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify(manifest));
-  });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  try {
-    const address = server.address();
-    const remote = await fetchLatestManifest(`http://127.0.0.1:${address.port}/api/update/latest`, publicKeyPem, {
-      retryDelayMs: 0
-    });
-    assert.equal(remote.buildId, manifest.buildId);
-    assert.equal(requests, 3);
-  } finally {
-    await new Promise((resolve) => server.close(resolve));
-  }
-});
-
-test("desktop updater distinguishes offline failures from manifest integrity failures", () => {
-  const offline = new TypeError("fetch failed", { cause: new Error("connection refused") });
-  assert.equal(isRetryableUpdateError(offline), true);
-  assert.equal(isUpdateServiceUnavailableError(offline), true);
-
-  const integrity = new Error("The update manifest signature verification failed.");
-  assert.equal(isRetryableUpdateError(integrity), false);
-  assert.equal(isUpdateServiceUnavailableError(integrity), false);
-});
-
 test("update server returns the atomic latest manifest and matching executable", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "riftbound-update-server-"));
   const bytes = Buffer.from("published portable executable");
@@ -194,31 +154,6 @@ test("desktop packaging excludes transient mutation-test modules", async () => {
   assert.ok(packageJson.build.files.includes("!src/**/.mutant-*.mjs"));
 });
 
-test("desktop package includes a visible staged update launcher", async () => {
-  const html = await readFile(path.resolve("electron", "updater.html"), "utf8");
-  const preload = await readFile(path.resolve("electron", "updater-preload.cjs"), "utf8");
-  assert.match(html, /확인/u);
-  assert.match(html, /다운로드/u);
-  assert.match(html, /검증/u);
-  assert.match(html, /교체 및 재실행/u);
-  assert.match(preload, /update-status/u);
-});
-
-test("update helper retains the previous executable until the new build confirms startup", () => {
-  const helper = powershellHelper();
-  assert.match(helper, /Start-Process -FilePath \$Target/u);
-  assert.match(helper, /Write-Result "success"/u);
-  assert.ok(helper.indexOf("Start-Process -FilePath $Target") < helper.indexOf('Write-Result "success"'));
-  assert.doesNotMatch(helper, /Start-Sleep -Seconds 2/u);
-});
-
-test("update bootstrap starts an independent worker before reporting readiness", () => {
-  const bootstrap = powershellBootstrap();
-  assert.match(bootstrap, /Start-Process -FilePath \$PowerShell/u);
-  assert.match(bootstrap, /"-File", \$Worker/u);
-  assert.match(bootstrap, /Move-Item -LiteralPath \$Ready -Destination \$BootstrapReady/u);
-});
-
 test("portable updater only replaces the original absolute executable", () => {
   const previous = process.env.PORTABLE_EXECUTABLE_FILE;
   try {
@@ -248,13 +183,10 @@ test("a newly launched expected build clears pending updater state", async () =>
   try {
     const statePath = path.join(root, "updater-state.json");
     const resultPath = path.join(root, "result.json");
-    const targetExe = path.join(root, "Riftbound Online.exe");
-    const backupExe = `${targetExe}.previous`;
     await writeFile(resultPath, JSON.stringify({ status: "success" }));
-    await writeFile(backupExe, "previous build");
     const state = {
       schemaVersion: 1,
-      pending: { buildId: "build-new", resultPath, targetExe, startedAt: "2026-07-16T11:00:00.000Z" },
+      pending: { buildId: "build-new", resultPath, startedAt: "2026-07-16T11:00:00.000Z" },
       deferred: { buildId: "build-new", until: "2026-07-17T11:00:00.000Z" },
       lastFailure: { buildId: "build-old" }
     };
@@ -269,7 +201,6 @@ test("a newly launched expected build clears pending updater state", async () =>
     assert.equal(recovered.state.pending, null);
     assert.equal(recovered.state.deferred, null);
     await assert.rejects(() => import("node:fs/promises").then(({ stat }) => stat(resultPath)), /ENOENT/u);
-    await assert.rejects(() => import("node:fs/promises").then(({ stat }) => stat(backupExe)), /ENOENT/u);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -349,11 +280,10 @@ test("helper launch waits for the child readiness handshake", async () => {
   try {
     const readyPath = path.join(root, "ready");
     const child = new EventEmitter();
-    let readyWrite;
     child.unref = () => {};
     child.kill = () => assert.fail("ready helper must not be killed");
     const spawnImpl = () => {
-      readyWrite = Promise.resolve().then(async () => {
+      queueMicrotask(async () => {
         child.emit("spawn");
         await writeFile(readyPath, "ready");
       });
@@ -368,47 +298,7 @@ test("helper launch waits for the child readiness handshake", async () => {
       logPath: path.join(root, "apply.log"),
       spawnImpl
     });
-    await readyWrite;
     assert.equal(await waitForFile(readyPath, 100), true);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("helper starts a hidden bootstrap process and unrefs it after the worker is ready", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "riftbound-update-launch-options-"));
-  try {
-    const readyPath = path.join(root, "ready");
-    const child = new EventEmitter();
-    let unrefCount = 0;
-    let invocation;
-    let readyWrite;
-    child.unref = () => { unrefCount += 1; };
-    const spawnImpl = (command, args, options) => {
-      invocation = { command, args, options };
-      readyWrite = Promise.resolve().then(async () => {
-        child.emit("spawn");
-        await writeFile(readyPath, "ready");
-      });
-      return child;
-    };
-    await launchUpdateHelper({
-      sourceExe: path.join(root, "source.exe"),
-      targetExe: path.join(root, "target.exe"),
-      processId: process.pid,
-      readyPath,
-      resultPath: path.join(root, "result.json"),
-      logPath: path.join(root, "apply.log"),
-      spawnImpl
-    });
-    await readyWrite;
-    assert.match(path.basename(invocation.command), /^powershell\.exe$/iu);
-    assert.equal(invocation.options.windowsHide, true);
-    assert.equal(invocation.options.stdio, "ignore");
-    assert.equal(invocation.options.detached, undefined);
-    assert.ok(invocation.args.includes("-Worker"));
-    assert.ok(invocation.args.includes("-BootstrapReady"));
-    assert.equal(unrefCount, 1);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

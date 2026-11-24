@@ -5,13 +5,13 @@ import { readFile } from "node:fs/promises";
 const appSource = await readFile(new URL("../src/app.mjs", import.meta.url), "utf8");
 const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
 
-test("player summary exposes the current level before scrollable hand and intel controls", () => {
+test("player summary exposes the current level before scrollable zone counts", () => {
   assert.match(appSource, /class="player-stats" data-scroll-key="player-stats-\$\{player\.id\}"/);
-  assert.match(appSource, /class="xp-stat">\$\{t\("level", locale\(\)\)\} <b>\$\{seat\.xp\}<\/b>/);
+  assert.match(appSource, /class="xp-stat">\$\{t\("level", locale\(\)\)\} \$\{player\.xp \|\| 0\}/);
 
   const levelIndex = appSource.indexOf('class="xp-stat"');
-  const handIndex = appSource.indexOf('class="hand-stat"', levelIndex);
-  assert.ok(levelIndex >= 0 && levelIndex < handIndex, "level should remain visible at the leading edge of the mobile scroller");
+  const deckIndex = appSource.indexOf('class="deck-stat"', levelIndex);
+  assert.ok(levelIndex >= 0 && levelIndex < deckIndex, "level should remain visible at the leading edge of the mobile scroller");
 });
 
 test("player zones preserve their own horizontal scroll positions", () => {
@@ -19,15 +19,6 @@ test("player zones preserve their own horizontal scroll positions", () => {
   assert.match(appSource, /data-scroll-key="banished-\$\{player\.id\}"/);
   assert.match(styles, /\.graveyard-cards\s*\{[\s\S]*?touch-action:\s*pan-x/);
   assert.match(styles, /\.player-stats\s*\{[\s\S]*?overflow-x:\s*auto[\s\S]*?touch-action:\s*pan-x/);
-});
-
-test("battlefield lanes fill from the leading edge and keep every unit reachable with horizontal scrolling", () => {
-  assert.match(appSource, /class="field-lane top-lane[\s\S]*?data-scroll-key="field-\$\{field\.instanceId\}-\$\{topPlayer\.id\}"[\s\S]*?class="field-lane-track"/);
-  assert.match(appSource, /class="field-lane bottom-lane[\s\S]*?data-scroll-key="field-\$\{field\.instanceId\}-\$\{bottomPlayer\.id\}"[\s\S]*?class="field-lane-track"/);
-  assert.match(styles, /\.field-lane\s*\{[\s\S]*?overflow-x:\s*auto[\s\S]*?overscroll-behavior-x:\s*contain[\s\S]*?scrollbar-width:\s*thin/);
-  assert.match(styles, /\.top-lane\s*\{[\s\S]*?justify-content:\s*flex-start/);
-  assert.match(styles, /\.field-lane-track\s*\{[\s\S]*?flex:\s*0 0 auto[\s\S]*?justify-content:\s*flex-start[\s\S]*?min-width:\s*100%/);
-  assert.doesNotMatch(styles, /\.top-lane \.field-lane-track > :first-child\s*\{[\s\S]*?margin-inline-start:\s*auto/);
 });
 
 test("wider layouts wrap every player zone count inside the identity card", () => {

@@ -34,7 +34,8 @@ import {
 import { createEvaluatorBootstrapResultIndex } from "./evaluator-bootstrap-index.mjs";
 import {
   selfPlayChildExecArgv,
-  selfPlayProcessEnvironment
+  selfPlayProcessEnvironment,
+  selfPlayDynamicCapacityLimit
 } from "./ai-selfplay-process-pool.mjs";
 import {
   independentActionAuditNearMissRescueEligible
@@ -1683,6 +1684,7 @@ function seedBanksDisjoint(entry, bank) {
 
 export async function createAuditPool(options) {
   const maximumProcessCount = Math.max(1, Number(options.processes) || 1);
+  const processLimit = () => selfPlayDynamicCapacityLimit(options, maximumProcessCount);
   const initialProcessCount = Math.max(
     1,
     Math.min(
@@ -1708,20 +1710,21 @@ export async function createAuditPool(options) {
     await createActionAuditOptionsHandoff(childOptions);
   const environment = selfPlayProcessEnvironment(
     maximumProcessCount,
-    process.env
+    { ...process.env, ...options.workerEnvironment }
   );
   const slots = [];
   const retiringSlotIndexes = new Set();
   const slotShouldRetire = (slot) =>
     actionAuditSlotRetirementRequested(slot, retiringSlotIndexes);
   const spawnManagedAuditSlot = async (index) => {
-    const slot = await spawnAuditSlot(index, optionsHandoff, environment);
+    const slot = await spawnAuditSlot(index, optionsHandoff, environment, options.workerPath);
     slot.retireRequested = slotShouldRetire(slot);
     return slot;
   };
   let closed = false;
   try {
     for (let index = 0; index < initialProcessCount; index += 1) {
+      if (index >= processLimit()) break;
       // Spawn progressively. An already-created idle worker must never consume
       // the reserve that the scheduler then waits to recover before assigning
       // that same worker a task.
@@ -1729,11 +1732,13 @@ export async function createAuditPool(options) {
         && freeMemory() < minimumFreeMemoryBytes + WORKER_RECYCLE_RSS_BYTES) {
         break;
       }
-      await waitForMemoryAvailability(
+      const memoryAvailable = await waitForMemoryAvailability(
         (progress) => options.onProgress?.(progress),
         minimumFreeMemoryBytes,
-        freeMemory
+        freeMemory,
+        () => index >= processLimit()
       );
+      if (!memoryAvailable || index >= processLimit()) break;
       slots.push(await spawnManagedAuditSlot(index));
     }
   } catch (error) {
@@ -1776,6 +1781,8 @@ export async function createAuditPool(options) {
   };
   const waitForQueuedTask = async (slot) => {
     while (!closed && !slotShouldRetire(slot)) {
+      reconcileCapacity();
+      if (slotShouldRetire(slot)) break;
       const item = takePreferredActionAuditTask(
         queue,
         slot.lastCandidateId
@@ -1796,6 +1803,9 @@ export async function createAuditPool(options) {
     desiredProcessCount,
     initialProcessCount,
     maximumProcessCount,
+    dynamicMaximumProcessCount: processLimit(),
+    workers: liveSlots().map(slot => ({ processId: slot.child.pid,
+      taskId: slot.task?.taskId || null, retiring: slotShouldRetire(slot) })),
     pipelineRequests: new Set(
       queue.map((item) => item.request).filter((item) => !item.failed)
     ).size,
@@ -1903,6 +1913,7 @@ export async function createAuditPool(options) {
       && !slot.pendingRequest.settled)?.pendingRequest
     || null;
   const startWorker = async () => {
+    if (liveSlots().length >= processLimit()) return false;
     const slotIndex = slots.findIndex((slot) => slot == null);
     const index = slotIndex >= 0 ? slotIndex : slots.length;
     retiringSlotIndexes.delete(index);
@@ -1923,7 +1934,7 @@ export async function createAuditPool(options) {
     wakeWorkers();
     return true;
   };
-  const retireWorkerAfterCurrentTask = () => {
+  const retireWorkerAfterCurrentTask = (minimum = 1) => {
     const candidates = [...liveSlots()]
       .filter((slot) => !slotShouldRetire(slot))
       .reverse();
@@ -1931,7 +1942,7 @@ export async function createAuditPool(options) {
       !candidate.task && !candidate.pendingRequest)
       || candidates.find((candidate) => !candidate.task)
       || candidates[0];
-    if (!slot || desiredProcessCount <= 1) return false;
+    if (!slot || desiredProcessCount <= minimum) return false;
     desiredProcessCount -= 1;
     retiringSlotIndexes.add(slot.index);
     slot.retireRequested = true;
@@ -1945,8 +1956,15 @@ export async function createAuditPool(options) {
     wakeWorkers();
     return true;
   };
+  function reconcileCapacity() {
+    const limit = processLimit();
+    while (desiredProcessCount > limit && retireWorkerAfterCurrentTask(0)) {}
+    return limit;
+  }
   const performScaleCheck = async () => {
     if (closed || scaleChangeInFlight) return;
+    const dynamicMaximum = reconcileCapacity();
+    if (dynamicMaximum === 0) { healthyScaleSamples = 0; return; }
     const workers = liveSlots();
     const freeMemoryBytes = freeMemory();
     const eligibleWorkers = workers.filter((slot) =>
@@ -1974,7 +1992,7 @@ export async function createAuditPool(options) {
     );
     const shouldGrow = actionAuditPoolShouldScaleUp({
       currentProcesses: Math.max(desiredProcessCount, workers.length),
-      maximumProcesses: maximumProcessCount,
+      maximumProcesses: dynamicMaximum,
       queuedTasks: queue.length,
       idleProcesses: idleWorkers,
       freeMemoryBytes,
@@ -1995,7 +2013,7 @@ export async function createAuditPool(options) {
       if (!started) desiredProcessCount -= 1;
       lastScaleChangeAt = Date.now();
     } catch (error) {
-      desiredProcessCount = Math.max(1, desiredProcessCount - 1);
+      desiredProcessCount = Math.max(0, desiredProcessCount - 1);
       throw error;
     } finally {
       scaleChangeInFlight = null;
@@ -2017,6 +2035,7 @@ export async function createAuditPool(options) {
         })
         .finally(() => {
           if (!closed && (queue.length > 0
+            || typeof options.dynamicProcessLimit === "function"
             || freeMemory() < minimumFreeMemoryBytes
             || liveSlots().length !== desiredProcessCount)) {
             scheduleScaleCheck();
@@ -2026,6 +2045,7 @@ export async function createAuditPool(options) {
     scaleTimer.unref?.();
   }
   workerLoops.push(...slots.map((_, index) => runWorkerLoop(index)));
+  if (typeof options.dynamicProcessLimit === "function") scheduleScaleCheck();
   return {
     get processCount() {
       return liveSlots().length;
@@ -2086,7 +2106,7 @@ export async function createAuditPool(options) {
         scheduleScaleCheck(0);
       });
     },
-    async close() {
+    async close(closeOptions = {}) {
       if (closed) return;
       closed = true;
       if (scaleTimer) clearTimeout(scaleTimer);
@@ -2095,6 +2115,7 @@ export async function createAuditPool(options) {
         await scaleChangeInFlight.catch(() => {});
       }
       const closingError = new Error("Detached action-audit pool closed.");
+      if (closeOptions.pause) closingError.code = "AUDIT_POOL_PAUSED";
       for (const request of new Set(queue.map((item) => item.request))) {
         failRequest(request, closingError);
       }
@@ -2349,6 +2370,14 @@ export function takePreferredActionAuditTask(
   preferredCandidateId = null
 ) {
   if (!Array.isArray(pending) || pending.length === 0) return null;
+  // Precommitted holdouts must not sit behind thousands of old training
+  // shards. Preempt only between durable shards; never interrupt a rollout.
+  const heldIndex = pending.findIndex(item => (item.task || item).auditRole === 'validation');
+  if (heldIndex >= 0) {
+    const sameHeld = preferredCandidateId ? pending.findIndex(item => item.candidateId === preferredCandidateId
+      && (item.task || item).auditRole === 'validation') : -1;
+    return pending.splice(sameHeld >= 0 ? sameHeld : heldIndex, 1)[0];
+  }
   const preferredIndex = preferredCandidateId
     ? pending.findIndex((task) => task?.candidateId === preferredCandidateId)
     : -1;
@@ -2356,9 +2385,9 @@ export function takePreferredActionAuditTask(
   return pending.splice(index, 1)[0] || null;
 }
 
-function spawnAuditSlot(index, options, environment) {
+function spawnAuditSlot(index, options, environment, workerPath = WORKER_PATH) {
   return new Promise((resolve, reject) => {
-    const child = fork(WORKER_PATH, [], {
+    const child = fork(workerPath, [], {
       env: environment,
       execArgv: selfPlayChildExecArgv(),
       serialization: "advanced",

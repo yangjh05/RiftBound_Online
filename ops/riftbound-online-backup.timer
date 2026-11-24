@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Riftbound Online backup
+
+[Timer]
+OnCalendar=*-*-* 03:30:00 UTC
+Persistent=true
+RandomizedDelaySec=15m
+Unit=riftbound-online-backup.service
+
+[Install]
+WantedBy=timers.target

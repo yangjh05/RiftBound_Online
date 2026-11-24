@@ -332,7 +332,7 @@ export function trainEvaluatorValuePairBatch(
     const sampleWeight = Number.isFinite(configuredSampleWeight)
       ? Math.max(0, Math.min(1, configuredSampleWeight))
       : 1;
-    pairWeights[index] = sampleWeight;
+    pairWeights[index] = sampleWeight * Math.max(0, Math.min(1, Number(sample.rankingWeight ?? 1)));
     branchWeights[index * 2] = sampleWeight;
     branchWeights[index * 2 + 1] = sampleWeight;
     stateValues.set(sample.preferredState, index * 2 * STATE_DIM);
@@ -573,6 +573,35 @@ export function evaluatorValueTrainingSamples(trajectories, options = {}) {
         validActionReference ? actionReference?.leafValueReference : null
       ].filter(validLeafValueReference);
       for (const reference of leafReferences) {
+        // Training-only shadow Q under the explicitly recorded heuristic
+        // continuation. This is not certified Q for the changing actor policy.
+        // Regress both actions, including ties; conditioning on decisive wins
+        // would systematically bias action values upwards.
+        if (options.trainFixedContinuationShadowQ === true
+          && options.certificationRole === "training"
+          && trajectory.fixedShadowContinuation === "heuristic-only-v1"
+          && validLeafActionEffectComparison(reference.actionEffectComparison)) {
+          const pairs = evenlySpacedEvidencePairs(reference.actionEffectComparison.evaluatorStatePairs, maximumActionPairs);
+          for (const pair of pairs) {
+            if (pair.recommendedCaptureStep !== 0 || pair.selectedCaptureStep !== 0) continue;
+            const preferredStructuredState = validEvidenceStructuredState(pair.recommendedStructuredState, step, options)
+              ? pair.recommendedStructuredState : null;
+            const comparedStructuredState = validEvidenceStructuredState(pair.selectedStructuredState, step, options)
+              ? pair.selectedStructuredState : null;
+            if (!preferredStructuredState || !comparedStructuredState) continue;
+            samples.push({ source: "fixed-continuation-shadow-action-q",
+              targetHead: reference.auditStratum?.phaseBand === "mulligan"
+                ? EVALUATOR_TARGET_HEADS.mulliganQ : EVALUATOR_TARGET_HEADS.generalActionQ,
+              sampleWeight: 1 / pairs.length, rankingWeight: 0,
+              gameId: trajectory.gameId || null, phaseBand: reference.auditStratum?.phaseBand || "unknown",
+              actionClass: reference.auditStratum?.actionClass || "unknown", deckSeat: evaluatorTrainingDeckSeat(trajectory),
+              preferredState: Float32Array.from(pair.recommendedState), comparedState: Float32Array.from(pair.selectedState),
+              preferredStructuredState, comparedStructuredState, structuredV2Eligible: true,
+              informationSetHash: step.informationSetHash || null,
+              preferredTarget: terminalAuditOutcomeValueTarget(pair.recommendedOutcome),
+              comparedTarget: terminalAuditOutcomeValueTarget(pair.selectedOutcome) });
+          }
+        }
         for (const pair of evenlySpacedEvidencePairs(
           reference.pairs,
           maximumLeafPairs
@@ -1951,7 +1980,7 @@ export function trainBehaviorCloning(model, trajectories, options = {}) {
   } else {
     model.metadata = {
       ...model.metadata,
-      humanAuxiliary: {
+      [options.policyInitializationOnly ? 'tacticalBaselineInitialization' : 'humanAuxiliary']: {
         trainedAt: new Date().toISOString(),
         epochs,
         trajectories: trajectories.length,
@@ -2659,6 +2688,8 @@ export function accumulateLeafValueRankingAudit(
     if (trajectory.gameId) accumulator.gameIds.add(trajectory.gameId);
     for (const step of trajectory.steps || []) {
       const actionReference = step.actionRankingReference;
+      const naturalComparisonsBefore =
+        accumulator.naturalActionEffectByGame.get(gameId)?.comparisons || 0;
       const opportunityStratum = normalizeEvaluatorAuditStratum({
         state: step.state,
         recommendedAction: step.recommendedActionKey,
@@ -2792,7 +2823,13 @@ export function accumulateLeafValueRankingAudit(
         gameId,
         coverageKey,
         opportunityStratum.phaseBand,
-        options
+        { ...options, hasAuditedNaturalComparison:
+          (accumulator.naturalActionEffectByGame.get(gameId)?.comparisons || 0)
+            > naturalComparisonsBefore,
+          singleLegalPolicyAction: step.legalCount === 1
+            && step.originalLegalCount === 1 && step.selectedIndex === 0
+            && step.legalActionKeys?.length === 1
+            && step.selectedActionKey === step.legalActionKeys[0] }
       );
     }
   }
@@ -2905,24 +2942,29 @@ function accumulateUnauditedNaturalLeafObservation(
   phaseBand,
   options = {}
 ) {
-  if (![1, 2].includes(observation?.version)
+  if (![1, 2, 3].includes(observation?.version)
     || ![
       "natural-leaf-audit-sampling-observation-v1",
-      "natural-leaf-audit-sampling-observation-v2"
+      "natural-leaf-audit-sampling-observation-v2",
+      "natural-leaf-audit-sampling-observation-v3"
     ].includes(observation?.contract)
-    || observation.status === "audited"
-    || !["identical-action-zero-regret", "audit-unavailable"]
+    || (observation.status === "audited" && options.hasAuditedNaturalComparison)
+    || !["audited", "identical-action-zero-regret", "audit-unavailable"]
       .includes(observation.status)
     || !validLeafAuditSamplingFrame(observation.samplingFrame)
     || observation.samplingFrame?.distribution !== "natural-distribution"
-    || observation.samplingFrame?.candidateSelection
-      !== "hash-priority-reservoir-policy-decision-v1"
+    || !["hash-priority-reservoir-policy-decision-v1",
+      "hash-priority-mixture-reservoir-policy-decision-v1"]
+      .includes(observation.samplingFrame?.candidateSelection)
+    || (observation.samplingFrame.version === 3
+      && observation.samplingFrame.selectedPhaseBand !== phaseBand)
     || (options.certificationRole
       && observation.samplingFrame.certificationRole
         !== options.certificationRole)
     || (options.datasetKey
       && observation.samplingFrame.datasetKey !== options.datasetKey)) return;
-  const identical = observation.status === "identical-action-zero-regret";
+  const identical = observation.status === "identical-action-zero-regret"
+    || options.singleLegalPolicyAction === true;
   const sampleWeight = 1 / Number(
     observation.samplingFrame.selectionProbability
   );
@@ -3065,8 +3107,11 @@ function accumulateLeafActionEffectRanking(
       || formalSamplingFrame.datasetKey === options.datasetKey);
   if (formalSamplingFrameValid
     && formalSamplingFrame.distribution === "natural-distribution"
-    && formalSamplingFrame.candidateSelection
-      === "hash-priority-reservoir-policy-decision-v1") {
+    && ["hash-priority-reservoir-policy-decision-v1",
+      "hash-priority-mixture-reservoir-policy-decision-v1"]
+      .includes(formalSamplingFrame.candidateSelection)
+    && (formalSamplingFrame.version !== 3
+      || formalSamplingFrame.selectedPhaseBand === phaseBand)) {
     const sampleWeight = 1 / Number(
       formalSamplingFrame.selectionProbability
     );
@@ -3297,7 +3342,7 @@ function finalizeLeafActionEffectRanking(
       ...finalizeLeafActionEffectGroup(naturalByGame, options),
       evidenceSource: "paired-terminal-outcome-pairs-v1",
       auditDistribution: "natural-policy-decision-pairs",
-      samplingContract: "hash-priority-reservoir-policy-decision-v1",
+      samplingContract: "propensity-weighted-natural-policy-decisions-v1",
       provenanceValidated: true,
       phaseBands: naturalPhaseBands,
       deckSeats: naturalDeckSeats,
@@ -4316,9 +4361,11 @@ export function packPpoBatch(chunks, options = {}) {
   const ignoreCorrectionSignals = options.ignoreCorrectionSignals === true;
   const batchSize = chunks.length;
   const sequenceLength = Math.max(1, ...chunks.map((chunk) => chunk.steps.length));
+  const actionCount = Math.max(1, ...chunks.flatMap((chunk) => chunk.steps.map((step) => step.legalCount)));
+  if (actionCount > MAX_ACTIONS) throw new Error("Batch exceeds legal action capacity.");
   const states = new Float32Array(batchSize * sequenceLength * STATE_DIM);
   const initialMemories = new Float32Array(batchSize * NEURAL_HIDDEN_SIZE);
-  const actions = new Float32Array(batchSize * sequenceLength * MAX_ACTIONS * ACTION_DIM);
+  const actions = new Float32Array(batchSize * sequenceLength * actionCount * ACTION_DIM);
   const selectedIndices = new Int32Array(batchSize * sequenceLength);
   const legalCounts = new Int32Array(batchSize * sequenceLength);
   const oldLogProbabilities = new Float32Array(batchSize * sequenceLength);
@@ -4331,10 +4378,10 @@ export function packPpoBatch(chunks, options = {}) {
   const teacherIndices = new Int32Array(batchSize * sequenceLength);
   const teacherWeights = new Float32Array(batchSize * sequenceLength);
   const teacherMargins = new Float32Array(batchSize * sequenceLength);
-  const teacherTargets = new Float32Array(batchSize * sequenceLength * MAX_ACTIONS);
-  const teacherSupports = new Float32Array(batchSize * sequenceLength * MAX_ACTIONS);
-  const teacherActionValueTargets = new Float32Array(batchSize * sequenceLength * MAX_ACTIONS);
-  const teacherActionValueWeights = new Float32Array(batchSize * sequenceLength * MAX_ACTIONS);
+  const teacherTargets = new Float32Array(batchSize * sequenceLength * actionCount);
+  const teacherSupports = new Float32Array(batchSize * sequenceLength * actionCount);
+  const teacherActionValueTargets = new Float32Array(batchSize * sequenceLength * actionCount);
+  const teacherActionValueWeights = new Float32Array(batchSize * sequenceLength * actionCount);
   const diagnosticTargets = new Float32Array(batchSize * sequenceLength * 2);
   const diagnosticWeights = new Float32Array(batchSize * sequenceLength * 2);
   const beliefTargets = new Float32Array(batchSize * sequenceLength * CARD_BINS);
@@ -4347,7 +4394,7 @@ export function packPpoBatch(chunks, options = {}) {
     chunk.steps.forEach((step, stepIndex) => {
       const flat = batchIndex * sequenceLength + stepIndex;
       states.set(step.state, flat * STATE_DIM);
-      actions.set(step.actions, flat * MAX_ACTIONS * ACTION_DIM);
+      actions.set(step.actions.slice(0, step.legalCount * ACTION_DIM), flat * actionCount * ACTION_DIM);
       selectedIndices[flat] = step.selectedIndex;
       legalCounts[flat] = Math.max(1, step.legalCount);
       oldLogProbabilities[flat] = step.oldLogProbability;
@@ -4380,9 +4427,9 @@ export function packPpoBatch(chunks, options = {}) {
         : 0;
       const softTargets = step.teacherTargets;
       if (Array.isArray(softTargets) && softTargets.length) {
-        teacherTargets.set(softTargets.slice(0, MAX_ACTIONS), flat * MAX_ACTIONS);
+        teacherTargets.set(softTargets.slice(0, actionCount), flat * actionCount);
       } else if (teacherWeights[flat] > 0) {
-        teacherTargets[flat * MAX_ACTIONS + teacherIndices[flat]] = 1;
+        teacherTargets[flat * actionCount + teacherIndices[flat]] = 1;
       }
       const valueTargets = step.teacherActionValueTargets;
       const valueWeights = step.teacherActionValueWeights;
@@ -4395,15 +4442,15 @@ export function packPpoBatch(chunks, options = {}) {
       if (supportedActionValueLabel
         && (Array.isArray(valueTargets) || ArrayBuffer.isView(valueTargets))
         && (Array.isArray(valueWeights) || ArrayBuffer.isView(valueWeights))) {
-        teacherActionValueTargets.set(Array.from(valueTargets).slice(0, MAX_ACTIONS), flat * MAX_ACTIONS);
-        teacherActionValueWeights.set(Array.from(valueWeights).slice(0, MAX_ACTIONS), flat * MAX_ACTIONS);
+        teacherActionValueTargets.set(Array.from(valueTargets).slice(0, actionCount), flat * actionCount);
+        teacherActionValueWeights.set(Array.from(valueWeights).slice(0, actionCount), flat * actionCount);
       }
       if (teacherWeights[flat] > 0) {
         const explicitSupport = Array.isArray(step.teacherSupport) || ArrayBuffer.isView(step.teacherSupport)
           ? Array.from(step.teacherSupport)
           : null;
         for (let actionIndex = 0; actionIndex < legalCounts[flat]; actionIndex += 1) {
-          const offset = flat * MAX_ACTIONS + actionIndex;
+          const offset = flat * actionCount + actionIndex;
           // Only searched/proven alternatives belong to the distillation
           // support. The actually selected action is included as a contrast,
           // even when it has target probability zero. Unsearched actions stay
@@ -4412,8 +4459,8 @@ export function packPpoBatch(chunks, options = {}) {
             ? (Number(explicitSupport[actionIndex]) > 0 ? 1 : 0)
             : (teacherTargets[offset] > 0 || teacherActionValueWeights[offset] > 0 ? 1 : 0);
         }
-        teacherSupports[flat * MAX_ACTIONS + teacherIndices[flat]] = 1;
-        teacherSupports[flat * MAX_ACTIONS + selectedIndices[flat]] = 1;
+        teacherSupports[flat * actionCount + teacherIndices[flat]] = 1;
+        teacherSupports[flat * actionCount + selectedIndices[flat]] = 1;
       }
       for (const [diagnosticIndex, field] of [
         [0, "resourceReservationDiagnosticReward"],
@@ -4427,7 +4474,7 @@ export function packPpoBatch(chunks, options = {}) {
     });
   });
   return {
-    shape: [batchSize, sequenceLength], states, initialMemories, actions, selectedIndices, legalCounts,
+    actionCount, shape: [batchSize, sequenceLength], states, initialMemories, actions, selectedIndices, legalCounts,
     oldLogProbabilities, behaviorTemperatures, advantages, returns, outcomeTargets, stepMask, policyStepWeights,
     teacherIndices, teacherWeights, teacherMargins, teacherTargets, teacherSupports, teacherActionValueTargets,
     teacherActionValueWeights, diagnosticTargets, diagnosticWeights, beliefTargets

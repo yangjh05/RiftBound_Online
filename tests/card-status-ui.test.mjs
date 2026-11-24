@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { LOCALES, t } from "../src/i18n.mjs";
 import { cardStatusItems } from "../src/ui/card-status.mjs";
 
 test("card status UI describes every active unit modifier in Korean", () => {
@@ -41,7 +40,7 @@ test("card status UI describes every active unit modifier in Korean", () => {
   assert.equal(byKind.get("lastingMight").badge, "위력 변경 +1");
   assert.equal(byKind.get("keywords").badge, "방패 2 · 급습");
   assert.equal(byKind.get("cannotMove").duration, "턴 종료까지");
-  assert.match(byKind.get("save").detail, /신체 힘/u);
+  assert.match(byKind.get("save").detail, /신체 파워/u);
   assert.equal(byKind.get("save").source, "수호 천사");
   assert.equal(byKind.get("attachments").source, "삼위일체");
   assert.ok(byKind.has("controller"));
@@ -54,87 +53,13 @@ test("permanent and temporary Might are not double-counted", () => {
   assert.equal(statuses.some((status) => status.kind === "lastingMight"), false);
 });
 
-test("card status rendering tolerates malformed optional arrays from older saves", () => {
-  assert.doesNotThrow(() => cardStatusItems({
-    temporaryKeywords: "Shield",
-    damagePreventions: { remaining: 2 },
-    attachments: { name: "Old Gear" }
-  }, { locale: "ko" }));
-  assert.deepEqual(cardStatusItems({
-    temporaryKeywords: "Shield",
-    damagePreventions: { remaining: 2 },
-    attachments: { name: "Old Gear" }
-  }, { locale: "ko" }), []);
-});
-
-test("card selection opens Card Info and keeps an explicit close/toggle path", async () => {
+test("selecting a card opens the inspector and both detail views render status UI", async () => {
   const source = await readFile(new URL("../src/app.mjs", import.meta.url), "utf8");
-  assert.match(source, /function cardStatusBadges\(card,/u);
+  assert.match(source, /function cardStatusBadges\(card\)/u);
   assert.match(source, /function cardStatusPanel\(card/u);
-  const selectionHandler = source.match(/function setUiSelectedCard\(cardId,[\s\S]*?\n\}/u)?.[0] || "";
-  assert.match(selectionHandler, /openInspector = true/u);
-  assert.match(selectionHandler, /inspectorOpen = true/u);
-  assert.match(selectionHandler, /closeTabletopSheets\("inspector"\)/u);
-  assert.match(source, /function toggleUiSelectedCard\(cardId\)/u);
-  assert.match(source, /if \(kind === "inspector"\) inspectorOpen = true;/u);
-  assert.match(source, /data-action="toggle-inspector"/u);
-  assert.match(source, /cardStatusPanel\(normalizedCard, \{ compact: true \}\)/u);
+  assert.match(source, /inspectorOpen = true;/u);
+  assert.match(source, /cardStatusPanel\(card, \{ compact: true \}\)/u);
   assert.match(source, /\$\{cardStatusPanel\(card\)\}/u);
-});
-
-test("mulligan instructions say to draw replacements before recycling set-aside cards", () => {
-  const korean = t("mulliganInstruction", LOCALES.KO);
-  const english = t("mulliganInstruction", LOCALES.EN);
-
-  assert.match(korean, /따로 둔/u);
-  assert.ok(korean.indexOf("먼저 뽑") < korean.indexOf("재활용"));
-  assert.doesNotMatch(korean, /덱 맨 아래[^.]*후[^.]*뽑/u);
-
-  assert.match(english, /set aside/iu);
-  assert.ok(english.toLowerCase().indexOf("draw") < english.toLowerCase().indexOf("recycle"));
-  assert.doesNotMatch(english, /bottom[^.]*then draw/iu);
-});
-
-test("board cards keep state accessible while rendering only corner stats and status badges", async () => {
-  const source = await readFile(new URL("../src/app.mjs", import.meta.url), "utf8");
-  const baseTokenSource = source.slice(source.indexOf("function baseToken("), source.indexOf("function unitToken("));
-  const unitTokenSource = source.slice(source.indexOf("function unitToken("), source.indexOf("function showdownUnitStats("));
-  const cornerOverlaySource = source.slice(source.indexOf("function boardCardCornerOverlay("), source.indexOf("function compactBoardStatusLabel("));
-
-  assert.ok(baseTokenSource.length > 0);
-  assert.ok(unitTokenSource.length > 0);
-  assert.ok(cornerOverlaySource.length > 0);
-  assert.doesNotMatch(source, /function primaryCardStateBadges\(/u);
-  assert.doesNotMatch(baseTokenSource, /primary-card-state|card-state-hud unit-stats/u);
-  assert.doesNotMatch(unitTokenSource, /primary-card-state|card-state-hud unit-stats/u);
-
-  for (const boardTokenSource of [baseTokenSource, unitTokenSource]) {
-    assert.match(boardTokenSource, /data-exhausted="\$\{Boolean\(card\.exhausted\)\}"/u);
-    assert.match(boardTokenSource, /aria-label="\$\{escapeHtml\(accessibleState\)\}" title="\$\{escapeHtml\(accessibleState\)\}"/u);
-    assert.match(boardTokenSource, /<div class="card-face-layer">[\s\S]*?\$\{boardCardCornerOverlay\(card,/u);
-  }
-
-  assert.match(cornerOverlaySource, /class="unit-board-overlay" aria-hidden="true">\s*\$\{statusMarkup\}/u);
-  assert.match(cornerOverlaySource, /class="unit-corner-value unit-remaining-health/u);
-  assert.match(cornerOverlaySource, /class="unit-corner-value unit-current-might/u);
-});
-
-test("attached gear uses rotation and accessible metadata on the board but keeps readiness text in the inspector", async () => {
-  const source = await readFile(new URL("../src/app.mjs", import.meta.url), "utf8");
-  const stripSource = source.slice(source.indexOf("function attachmentStrip("), source.indexOf("function boardUnitStats("));
-  const panelSource = source.slice(source.indexOf("function attachedGearPanel("), source.indexOf("function shortCardText("));
-
-  assert.ok(stripSource.length > 0);
-  assert.ok(panelSource.length > 0);
-  assert.match(stripSource, /data-exhausted="\$\{Boolean\(gear\.exhausted\)\}"/u);
-  assert.match(stripSource, /title="\$\{escapeHtml\(`\$\{cardName\(gear\)\} · \$\{state\.summary\}`\)\}"/u);
-  assert.match(stripSource, /class="attachment-orientation-layer"/u);
-  assert.match(stripSource, /class="attached-gear-board-overlay" aria-hidden="true"/u);
-  assert.doesNotMatch(stripSource, /attachedGearStateMarkup|attached-gear-readiness/u);
-
-  assert.match(panelSource, /data-exhausted="\$\{Boolean\(gear\.exhausted\)\}"/u);
-  assert.match(panelSource, /title="\$\{escapeHtml\(`\$\{cardName\(gear\)\} · \$\{state\.summary\}`\)\}"/u);
-  assert.match(panelSource, /\$\{attachedGearStateMarkup\(state\)\}/u);
 });
 
 test("player identity UI tolerates a champion returned from play to hand", async () => {

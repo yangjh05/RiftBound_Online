@@ -3,12 +3,14 @@ import { profileDeck } from "./belief.mjs";
 import { cardAllowedInPool } from "../card-pools.mjs";
 import { championMatchesLegend } from "../engine/setup.mjs";
 import { DECK_RULES } from "../decks/rules.mjs";
+import { mutateLegalTrainingDeck } from "./legal-decks.mjs";
+import { isCardBanned } from "../decks/legality.mjs";
 
 const ALL_MAIN_CARDS = Object.values(cards).filter((card) => ["unit", "spell", "gear"].includes(card.type));
 const ALL_BATTLEFIELDS = Object.values(cards).filter((card) => card.type === "battlefield");
 const NON_IDENTITY_TAGS = new Set(["Champion", "Signature", "Signature Spell", "Action", "Reaction", "Unit", "Spell", "Gear"]);
 
-export function mutateDeck(deck, model, random = Math.random) {
+export function mutateDeck(deck, model = {}, random = Math.random) {
   const roll = random();
   if (roll < 0.15) return mutateRuneDistribution(deck, model, random);
   if (roll < 0.27) return mutateBattlefieldSuite(deck, model, random);
@@ -16,109 +18,17 @@ export function mutateDeck(deck, model, random = Math.random) {
   return mutateCardPackage(deck, model, random, roll > 0.82 ? 3 : roll > 0.62 ? 2 : 1);
 }
 
-export function mutateSideboardPackage(deck, model, random = Math.random) {
-  const next = structuredClone(deck);
-  next.sideboard ||= [];
-  const domains = new Set((next.legend?.domains || []).filter((domain) => domain !== "Any"));
-  const legendTags = new Set((next.legend?.tags || []).filter((tag) => !NON_IDENTITY_TAGS.has(tag)));
-  const registered = [...next.main, ...next.sideboard];
-  const counts = countCards(registered);
-  const nameCounts = countCardNames(registered);
-  const signatureTotal = registered.filter(isSignature).length;
-  const candidates = ALL_MAIN_CARDS.filter((card) =>
-    cardAllowed(card, domains, legendTags)
-    && cardAllowedForModel(card, model)
-    && (counts.get(card.cardNumber) || 0) < 3
-    && (nameCounts.get(card.name) || 0) < 3
-    && (!isSignature(card) || signatureTotal < 3)
-  ).sort((left, right) => learnedSideboardScore(model, right) - learnedSideboardScore(model, left));
-  if (!candidates.length) return next;
-  const added = candidates[Math.floor(random() * Math.min(12, candidates.length))];
-  let removed = null;
-  if (next.sideboard.length >= DECK_RULES.sideboardMax) {
-    const removable = [...next.sideboard].sort((left, right) => learnedSideboardScore(model, left) - learnedSideboardScore(model, right));
-    removed = removable[Math.floor(random() * Math.min(6, removable.length))];
-    const index = next.sideboard.findIndex((card) => card.cardNumber === removed.cardNumber);
-    next.sideboard[index] = added;
-  } else {
-    next.sideboard.push(added);
-  }
-  next.id = `${deck.id}-sideboard-${Date.now().toString(36)}`;
-  next.playerName = `${deck.playerName || deck.id} Meta Sideboard`;
-  next.evolution = { parentId: deck.id, kind: "sideboard", removed: removed?.cardNumber || null, added: added.cardNumber };
-  return next;
+export function mutateCardPackage(deck, model = {}, random = Math.random, packageSize = 1) {
+  return mutateLegalTrainingDeck(deck, model, random, { kind: "cardPackage", packageSize });
 }
-
-export function mutateCardPackage(deck, model, random = Math.random, packageSize = 1) {
-  const next = structuredClone(deck);
-  const domains = new Set((next.legend?.domains || []).filter((domain) => domain !== "Any"));
-  const legendTags = new Set((next.legend?.tags || []).filter((tag) => !NON_IDENTITY_TAGS.has(tag)));
-  const candidates = ALL_MAIN_CARDS.filter((card) => cardAllowed(card, domains, legendTags) && cardAllowedForModel(card, model));
-  const removable = next.main.map((card, index) => ({ card, index }))
-    .filter(({ card }) => !isOnlyChampion(next.main, card, next.legend));
-  if (!removable.length || !candidates.length) return next;
-  removable.sort((left, right) => learnedCardScore(model, left.card) - learnedCardScore(model, right.card));
-  const removePool = removable.slice(0, Math.max(1, Math.ceil(removable.length * 0.35)));
-  const changes = [];
-  const changedIndices = new Set();
-  for (let changeIndex = 0; changeIndex < Math.min(3, packageSize); changeIndex += 1) {
-    const availableRemovals = removePool.filter(({ index }) => !changedIndices.has(index));
-    if (!availableRemovals.length) break;
-    const removed = availableRemovals[Math.floor(random() * availableRemovals.length)];
-    const registeredAfterRemoval = [...next.main.filter((card, index) => index !== removed.index), ...(next.sideboard || [])];
-    const currentCounts = countCards(registeredAfterRemoval);
-    const signatureAfterRemoval = registeredAfterRemoval.filter(isSignature).length;
-    const additions = candidates.filter((card) =>
-      (currentCounts.get(card.cardNumber) || 0) < 3
-      && (!isSignature(card) || signatureAfterRemoval < 3)
-    );
-    additions.sort((left, right) => packageAdditionScore(model, next.main, right) - packageAdditionScore(model, next.main, left));
-    const addPool = additions.slice(0, Math.max(8, Math.ceil(additions.length * 0.2)));
-    const added = addPool[Math.floor(random() * addPool.length)];
-    if (!added) break;
-    next.main[removed.index] = added;
-    changedIndices.add(removed.index);
-    changes.push({ removed: removed.card.cardNumber, added: added.cardNumber });
-  }
-  if (!changes.length) return next;
-  next.id = `${deck.id}-evolved-${Date.now().toString(36)}`;
-  next.playerName = `${deck.playerName || deck.id} Evolved`;
-  next.evolution = { parentId: deck.id, kind: "cardPackage", changes };
-  return next;
+export function mutateRuneDistribution(deck, model = {}, random = Math.random) {
+  return mutateLegalTrainingDeck(deck, model, random, { kind: "runes" });
 }
-
-export function mutateRuneDistribution(deck, model, random = Math.random) {
-  const next = structuredClone(deck);
-  const domains = [...new Set((next.legend?.domains || []).filter((domain) => domain !== "Any"))];
-  if (domains.length < 2 || !next.runes?.length) return mutateCardPackage(deck, model, random, 1);
-  const from = domains[Math.floor(random() * domains.length)];
-  const to = domains.find((domain) => domain !== from) || from;
-  const fromRuneIndex = next.runes.findIndex((rune) => rune.domain === from);
-  const toRune = next.runes.find((rune) => rune.domain === to);
-  if (fromRuneIndex < 0 || !toRune) return next;
-  next.runes[fromRuneIndex] = structuredClone(toRune);
-  next.id = `${deck.id}-runes-${Date.now().toString(36)}`;
-  next.playerName = `${deck.playerName || deck.id} Rune Test`;
-  next.evolution = { parentId: deck.id, kind: "runes", from, to };
-  return next;
+export function mutateBattlefieldSuite(deck, model = {}, random = Math.random) {
+  return mutateLegalTrainingDeck(deck, model, random, { kind: "battlefields" });
 }
-
-export function mutateBattlefieldSuite(deck, model, random = Math.random) {
-  const next = structuredClone(deck);
-  if (!next.battlefields?.length) return next;
-  const current = new Set(next.battlefields.map((field) => field.cardNumber));
-  const candidates = ALL_BATTLEFIELDS.filter((field) => !current.has(field.cardNumber) && cardAllowedForModel(field, model));
-
-  if (!candidates.length) return next;
-  candidates.sort((left, right) => learnedConfigurationScore(model.battlefieldStats, right.cardNumber) - learnedConfigurationScore(model.battlefieldStats, left.cardNumber));
-  const replaceIndex = Math.floor(random() * next.battlefields.length);
-  const added = candidates[Math.floor(random() * Math.min(8, candidates.length))];
-  const removed = next.battlefields[replaceIndex];
-  next.battlefields[replaceIndex] = added;
-  next.id = `${deck.id}-fields-${Date.now().toString(36)}`;
-  next.playerName = `${deck.playerName || deck.id} Battlefield Test`;
-  next.evolution = { parentId: deck.id, kind: "battlefields", removed: removed.cardNumber, added: added.cardNumber };
-  return next;
+export function mutateSideboardPackage(deck, model = {}, random = Math.random) {
+  return mutateLegalTrainingDeck(deck, model, random, { kind: "sideboard" });
 }
 
 export function updateDeckLearning(model, decks, winnerId, players) {
@@ -274,7 +184,7 @@ function cardAllowed(card, domains, legendTags) {
 
 function cardAllowedForModel(card, model) {
   const poolId = model?.cardPoolId || model?.externalMeta?.cardPoolId;
-  return !poolId || cardAllowedInPool(card, poolId);
+  return !isCardBanned(card) && (!poolId || cardAllowedInPool(card, poolId));
 }
 
 function isSignature(card) {

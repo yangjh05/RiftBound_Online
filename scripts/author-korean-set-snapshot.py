@@ -18,7 +18,7 @@ DOMAIN_KO = {
     "Body": "신체",
     "Calm": "평정",
     "Chaos": "혼돈",
-    "Fury": "격노",
+    "Fury": "분노",
     "Mind": "정신",
     "Order": "질서",
 }
@@ -73,7 +73,7 @@ KEYWORD_KO = {
     "Reaction": "반응", "Repeat": "반복", "Shield": "보호막", "Tank": "탱커",
     "Temporary": "일시적", "Unique": "고유", "Vision": "통찰", "Weaponmaster": "무기의 달인",
     "Predict": "예측", "Level": "레벨", "Buff": "버프", "Stun": "기절", "Add": "추가",
-    "Mighty": "강력", "Empower": "강화", "Empowered": "강화됨", "Flow": "흐름",
+    "Mighty": "위력적", "Empower": "강화", "Empowered": "강화됨", "Flow": "흐름",
     "Disempower": "강화 해제", "Burn Out": "소진", "Burn": "소각", "Skip": "건너뛰기",
 }
 

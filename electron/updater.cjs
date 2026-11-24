@@ -155,7 +155,7 @@ async function startAutoUpdate({ app, dialog, win, logger = console, onStatus = 
     return { status: "applying", latest, downloadedExe, targetExe };
   } catch (error) {
     if (progressVisible && win && !win.isDestroyed?.()) win.setProgressBar(-1);
-    logger.warn?.(`[Updater] ${error?.message || error}`);
+    logger.warn?.(`[Updater] ${formatUpdaterError(error)}`);
     if (isUpdateServiceUnavailableError(error)) {
       onStatus({
         phase: "unavailable",
@@ -168,6 +168,15 @@ async function startAutoUpdate({ app, dialog, win, logger = console, onStatus = 
     onStatus({ phase: "error", message: "업데이트 확인 중 문제가 발생했습니다.", detail: error?.message || String(error) });
     return { status: "error", error };
   }
+}
+
+function formatUpdaterError(error) {
+  const message = error?.message || String(error);
+  const cause = error?.cause;
+  if (!cause) return message;
+  const causeMessage = cause?.message || String(cause);
+  const causeCode = cause?.code ? ` (${cause.code})` : "";
+  return `${message}: ${causeMessage}${causeCode}`;
 }
 
 function formatBytes(value) {

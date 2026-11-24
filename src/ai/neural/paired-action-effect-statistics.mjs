@@ -105,6 +105,28 @@ function binomialCdf(maximumSuccesses, attempts, probability) {
   if (maximumSuccesses >= attempts) return 1;
   if (probability === 0) return 1;
   if (probability === 1) return 0;
+  if (attempts > 128) {
+    // Normalize relative to the mode. Starting with P(X=0) underflows for
+    // large audit banks, incorrectly moving the inverted confidence bounds.
+    // All terms here are <= 1 and at least the mode has weight 1.
+    const mode = Math.min(attempts, Math.floor((attempts + 1) * probability));
+    const odds = probability / (1 - probability);
+    let denominator = 1;
+    let numerator = mode <= maximumSuccesses ? 1 : 0;
+    let term = 1;
+    for (let k = mode; k > 0; k -= 1) {
+      term *= k / (attempts - k + 1) / odds;
+      denominator += term;
+      if (k - 1 <= maximumSuccesses) numerator += term;
+    }
+    term = 1;
+    for (let k = mode; k < attempts; k += 1) {
+      term *= (attempts - k) / (k + 1) * odds;
+      denominator += term;
+      if (k + 1 <= maximumSuccesses) numerator += term;
+    }
+    return Math.max(0, Math.min(1, numerator / denominator));
+  }
   const complement = 1 - probability;
   let term = Math.pow(complement, attempts);
   let total = term;

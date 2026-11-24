@@ -2,6 +2,7 @@ import {
   deserializeNeuralModel,
   serializeNeuralModel
 } from "../src/ai/neural/model.mjs";
+import { trainingPrecisionCheckpointGames } from "./evaluator-bootstrap-collection-window.mjs";
 
 export const EVALUATOR_BOOTSTRAP_STAGE_HANDOFF_VERSION = 2;
 export const EVALUATOR_BOOTSTRAP_STAGE_MAX_ATTEMPTS = 3;
@@ -23,6 +24,20 @@ export function evaluatorBootstrapStageAttemptDecision({
 }
 
 export function serializeEvaluatorBootstrapStageRequest(options, metadata = {}) {
+  const checkpoint = options?.stopWhenEvidenceCheckpoint;
+  const waveGames = Number(
+    checkpoint?.requirement?.shadowActionEffectDemand?.requestedGames
+  );
+  if (checkpoint?.role === "training" && Number.isInteger(waveGames)
+    && waveGames > 0) {
+    // This boundary is shared by every caller, including resumed Shadow runs.
+    options = {
+      ...options,
+      extensionGames: Math.min(waveGames, 64),
+      rollingWindowGames: trainingPrecisionCheckpointGames(options)
+        || Math.min(waveGames, 32)
+    };
+  }
   const {
     onAuditProgress: _onAuditProgress,
     collection = {},

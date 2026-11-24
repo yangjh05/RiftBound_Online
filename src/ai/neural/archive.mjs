@@ -1,22 +1,26 @@
 import { createWriteStream } from "node:fs";
-import { mkdir, readFile, rename, rm } from "node:fs/promises";
+import { mkdir, readFile, rm } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { createGzip, gunzip } from "node:zlib";
 import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
+import { renameWithRetry } from "../../../scripts/file-replace.mjs";
 
 const gunzipAsync = promisify(gunzip);
 
 export async function writeTrajectoryArchive(filename, payload) {
   await mkdir(path.dirname(filename), { recursive: true });
-  const temporary = `${filename}.tmp-${process.pid}-${Date.now()}`;
+  const temporary = `${filename}.tmp-${process.pid}-${randomUUID()}`;
   try {
     await pipeline(
       trajectoryArchiveJsonChunks(payload),
       createGzip(),
       createWriteStream(temporary)
     );
-    await rename(temporary, filename);
+    // Windows readers can briefly block replacement. Keep the last complete
+    // archive intact while retrying the atomic rename; never unlink it first.
+    await renameWithRetry(temporary, filename);
   } catch (error) {
     await rm(temporary, { force: true }).catch(() => {});
     throw error;

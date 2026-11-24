@@ -1,7 +1,8 @@
 import { actionKey, enumerateLegalActions } from "./actions.mjs";
 import { ACTION_DIM, CARD_BINS, MAX_ACTIONS, NEURAL_HIDDEN_SIZE, STATE_DIM, encodeActionSet, encodeOpponentDeckTarget, encodeState } from "./neural/encoding.mjs";
+import { validateActionManifest } from "./neural/action-manifest.mjs";
 
-export const HUMAN_SAMPLE_VERSION = 2;
+export const HUMAN_SAMPLE_VERSION = 3;
 
 export function encodeHumanDecisionSample(game, actorId, selectedAction, analysis) {
   const fullLegal = enumerateLegalActions(game, actorId);
@@ -18,7 +19,9 @@ export function encodeHumanDecisionSample(game, actorId, selectedAction, analysi
     actions: legal.map((action, index) => sparse(actionSet.encoded.subarray(index * ACTION_DIM, (index + 1) * ACTION_DIM))),
     legalCount: legal.length,
     originalLegalCount: fullLegal.length,
-    legalActionKeys: fullLegal.map(actionKey),
+    legalActionKeys: legal.map(actionKey),
+    actionManifestVersion: 2,
+    originalLegalActionKeys: fullLegal.map(actionKey),
     selectedActionKey: selectedKey,
     recommendedActionKey: recommendedKey,
     selectedIndex,
@@ -43,12 +46,13 @@ export function hydrateHumanReplayTrajectories(replays, options = {}) {
       if (decision.actorId !== replay.humanPlayerId) continue;
       const sample = decision.trainingSample;
       if (sample?.version !== HUMAN_SAMPLE_VERSION || !sample?.legalCount) continue;
+      if (validateActionManifest(sample)) continue;
       const highQuality = sample.quality?.rollout
         && sample.quality?.confidence !== "low"
         && (sample.quality?.intervalWidth ?? 1) <= (options.maxIntervalWidth || 0.35);
       if (!highQuality) continue;
       const state = dense(sample.state, STATE_DIM);
-      const actions = new Float32Array(MAX_ACTIONS * ACTION_DIM);
+      const actions = new Float32Array(sample.legalCount * ACTION_DIM);
       sample.actions.slice(0, MAX_ACTIONS).forEach((encoded, index) => actions.set(dense(encoded, ACTION_DIM), index * ACTION_DIM));
       const won = replay.winnerId === decision.actorId ? 1 : replay.winnerId ? -1 : 0;
       steps.push({
@@ -67,6 +71,8 @@ export function hydrateHumanReplayTrajectories(replays, options = {}) {
           ? sample.recommendedActionKey
           : sample.selectedActionKey,
         legalActionKeys: sample.legalActionKeys,
+        actionManifestVersion: 2,
+        originalLegalActionKeys: sample.originalLegalActionKeys,
         originalLegalCount: sample.originalLegalCount,
         imitation: true,
         source: "human-coaching"

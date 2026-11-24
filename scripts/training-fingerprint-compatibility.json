@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "kind": "additive-natural-audit-sampling-v3",
+      "rawFingerprint": "sha256:0c917d63ded1f1cf29eaec474dc93ea7a4a32e4580995315a329292eea7c9e0c",
+      "compatibleFingerprint": "sha256:2d7d82283e9825597f91fb6ed7c57b949d6408e7d460cdfc1a733a715a84c8ba",
+      "auditReport": "docs/audits/ai-natural-phase-sampling-2026-09-13.md",
+      "reviewedAt": "2026-09-12T19:20:44.034Z",
+      "policyActionsPreserved": true,
+      "savedTargetsPreserved": true,
+      "samplingFramesSupported": [
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "kind": "additive-detached-leaf-audit-v1",
+      "rawFingerprint": "sha256:65e2413ea331872d61c5549249e2488ea06845cda6c730e039b8c2590f57bfd8",
+      "compatibleFingerprint": "sha256:2d7d82283e9825597f91fb6ed7c57b949d6408e7d460cdfc1a733a715a84c8ba",
+      "auditReport": "docs/audits/ai-adaptive-policy-q-2026-09-14.md",
+      "reviewedAt": "2026-09-14T11:19:55.228Z",
+      "defaultPolicyActionsPreserved": true,
+      "savedTargetsPreserved": true,
+      "explicitOptIn": true,
+      "verification": {
+        "regression": ".tmp-adaptive-policy-q-20260914/regression.log",
+        "detached": ".tmp-adaptive-policy-q-20260914/detached-tests-final.log",
+        "neural": ".tmp-adaptive-policy-q-20260914/neural-regression.log",
+        "realGameAndPpo": ".tmp-adaptive-policy-q-20260914/fast-smoke-result.json"
+      }
+    },
+    {
+      "kind": "training-only-tactical-demonstration-v1",
+      "rawFingerprint": "sha256:967fd2205b33e8d4b61f9d29be19d35d887a9811b8a7d2c5fbd2fb1e7097f2fe",
+      "compatibleFingerprint": "sha256:d60b4d142690e62f5f719291a11a4bd1c7520b852c104df4745cba9911ab8cd3",
+      "auditReport": "docs/audits/ai-tactical-preview-repair-2026-09-15.md",
+      "reviewedAt": "2026-09-15T06:34:29.919Z",
+      "policyActionsPreserved": true,
+      "evaluationBehaviorPreserved": true,
+      "savedTargetsPreserved": true,
+      "verification": {
+        "regression": ".tmp-ai-tactical-repair-20260915/regression.log",
+        "replay": ".tmp-ai-tactical-repair-20260915/replays/000008-verification.json"
+      }
+    },
+    {
+      "kind": "training-only-tactical-demonstration-v1",
+      "rawFingerprint": "sha256:8f3a81b91e7fa910377032aa3bd1453483d358169704d3730022f5437f6b85ca",
+      "compatibleFingerprint": "sha256:cc70c18484018b12344882b47f2eb5223ca95fa94b7e2ffcad2e74ca889eaf80",
+      "auditReport": "docs/audits/ai-strategic-costs-and-removal-combos-2026-09-15.md",
+      "reviewedAt": "2026-09-15T12:51:57.884Z",
+      "policyActionsPreserved": true,
+      "evaluationBehaviorPreserved": true,
+      "savedTargetsPreserved": true,
+      "verification": {
+        "sourceComparison": ".tmp-ai-strategic-costs-20260915/pruning-compatibility.json",
+        "regression": ".tmp-ai-strategic-costs-20260915/regression-tests.log"
+      }
+    },
+    {
+      "kind": "equivalent-evaluation-inference-v1",
+      "rawFingerprint": "sha256:51606ba34c4e99c5e64f572cc32283da52d87d7610ef6b6a3b8c8a117b571872",
+      "compatibleFingerprint": "sha256:28fa113a51f570db64364f2aaaefe702c8fb6a50ab32a91fb9d93106e881955f",
+      "auditReport": "docs/audits/ai-throughput-2026-09-16.md",
+      "reviewedAt": "2026-09-16T02:07:17.427Z",
+      "policyActionsPreserved": true,
+      "evaluationBehaviorPreserved": true,
+      "savedTargetsPreserved": true,
+      "recurrentMemoryPreserved": true,
+      "verification": {
+        "regression": ".tmp-ai-throughput-20260916/tests.log",
+        "frozenComparisons": ".tmp-ai-throughput-20260916/verification.json"
+      }
+    },
+    {
+      "kind": "equivalent-archive-io-v1",
+      "rawFingerprint": "sha256:a807369ec7f3087b885827212391c50549890536bf19ee099186604bf5b0e55a",
+      "compatibleFingerprint": "sha256:01cd750c5f8aa74a7f7abb54bff76bec4a0358436eb25017491197b580dd635c",
+      "auditReport": "docs/audits/ai-archive-recovery-2026-09-17.md",
+      "reviewedAt": "2026-09-17T00:38:53.476Z",
+      "policyActionsPreserved": true,
+      "evaluationBehaviorPreserved": true,
+      "savedTargetsPreserved": true,
+      "archivePayloadPreserved": true,
+      "verification": {
+        "regression": ".tmp-ai-archive-recovery-20260917/tests.log",
+        "preservation": ".tmp-ai-archive-recovery-20260917/verification.json"
+      }
+    }
+  ]
+}

@@ -1,3 +1,4 @@
+import { validateActionManifest } from "./action-manifest.mjs";
 import { createHash } from "node:crypto";
 import { ACTION_DIM, CARD_BINS, MAX_ACTIONS, STATE_DIM } from "./encoding.mjs";
 import { NEURAL_HIDDEN_SIZE } from "./model.mjs";
@@ -120,8 +121,8 @@ export function validateTrajectories(trajectories, { engineFingerprint = null } 
       if (!Number.isInteger(step.legalCount) || step.legalCount < 1 || step.legalCount > MAX_ACTIONS) errors.push(`${prefix} has invalid legal count.`);
       if (step.actions?.length !== step.legalCount * ACTION_DIM) errors.push(`${prefix} has invalid action encoding length.`);
       if (!Number.isInteger(step.selectedIndex) || step.selectedIndex < 0 || step.selectedIndex >= step.legalCount) errors.push(`${prefix} has invalid selected index.`);
-      if (engineFingerprint && (!step.selectedActionKey || !step.legalActionKeys?.includes(step.selectedActionKey))) errors.push(`${prefix} does not preserve its selected legal action.`);
-      if (engineFingerprint && step.legalActionKeys?.length !== step.originalLegalCount) errors.push(`${prefix} has an incomplete legal-action manifest.`);
+      const manifestError = engineFingerprint ? validateActionManifest(step) : null;
+      if (manifestError) errors.push(`${prefix}: ${manifestError}`);
       if (![step.state, step.actions, step.beliefTarget, step.initialMemory].every(finiteArray)) errors.push(`${prefix} contains a non-finite tensor value.`);
       if (![step.advantage, step.return, step.teacherConfidence].every(Number.isFinite)) errors.push(`${prefix} contains a non-finite scalar.`);
       if (Number(trajectory.learningTargetVersion) >= 3) {

@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { policyQPrecisionTarget, precisionEvidenceRequirement, policyQPrecisionDemandItem,
+  precisionRetryCollectionGames, precisionTargetFromMeasuredRisk }
+  from "./evaluator-policy-q-precision.mjs";
 
 const EVALUATOR_AUDIT_PHASE_BANDS = Object.freeze([
   "mulligan", "early", "mid", "late"
@@ -129,7 +132,7 @@ const POLICY_Q_SHADOW_READINESS_LEGACY_GRID = Object.freeze({
 });
 
 export const POLICY_Q_SHADOW_READINESS_GRID = Object.freeze({
-  version: 8,
+  version: 10,
   validationFraction: 0.2,
   architectureScreen: Object.freeze({
     learningRate: 0.0001,
@@ -347,6 +350,42 @@ export function selectPolicyQShadowConfiguration(results = []) {
 }
 
 export function policyQShadowReadinessDemand(
+  gate = {},
+  grid = POLICY_Q_SHADOW_READINESS_GRID
+) {
+  const raw = policyQShadowRawReadinessDemand(gate, grid);
+  const candidates = (gate.candidates || []).filter(item => item?.leafValueRanking)
+    .sort((a, b) => candidateScore(b) - candidateScore(a));
+  const cohort = candidates.filter(item => item.architecture?.id === candidates[0]?.architecture?.id);
+  return { ...raw, items: raw.items.map(item => {
+    if (item.evidenceKind !== "action-effect") return item;
+    const distribution = item.auditDistribution === "natural-distribution" ? "natural" : "targeted";
+    const requirement = precisionEvidenceRequirement(grid, item.phaseBand || "overall", distribution);
+    const target = policyQPrecisionTarget(requirement, distribution);
+    const summaries = cohort.map(candidate => {
+      const root = candidate.leafValueRanking.actionEffectRanking?.[
+        distribution === "natural" ? "naturalDistributionAudit" : "targetedDecisiveAudit"];
+      return item.deckSeat ? root?.deckSeatPhases?.[`${item.deckSeat}::${item.phaseBand}`]
+        : item.phaseBand ? root?.phaseBands?.[item.phaseBand] : root;
+    }).filter(Boolean);
+    const actual = { riskAssessedContributingGames: minimumFinite(summaries.map(s => s.riskAssessedContributingGames)),
+      decisiveContributingGames: minimumFinite(summaries.map(s => s.decisiveAccuracyInterval?.contributingGames)),
+      decisiveEffectiveGames: minimumFinite(summaries.map(s => s.decisiveAccuracyInterval?.effectiveGames)),
+      effectiveGames: minimumFinite(summaries.map(s => {
+        const interval = s.populationRiskBootstrap?.meanRegret;
+        const radius = Number(interval?.concentrationUpperBound) - Number(interval?.pointEstimate);
+        return radius > 0 ? Math.min(Number(s.contributingGames), Math.log(20) / (2 * radius ** 2)) : 0;
+      })) };
+    const measuredTarget = distribution === "natural"
+      ? Math.max(target.independentGames, ...summaries.map(s => precisionTargetFromMeasuredRisk(s, target, requirement)))
+      : target.independentGames;
+    return policyQPrecisionDemandItem({ ...item, targetValidationGames: measuredTarget,
+      targetEffectiveGames: target.effectiveGames }, grid, actual,
+    Math.max(0, ...cohort.map(c => Number(c.leafValueRanking.games) || 0)));
+  }) };
+}
+
+function policyQShadowRawReadinessDemand(
   gate = {},
   grid = POLICY_Q_SHADOW_READINESS_GRID
 ) {
@@ -640,23 +679,24 @@ export function expandPolicyQShadowReadinessRequirement(
       sum + Math.max(0, Math.ceil(Number(item.requiredAdditionalGames) || 0)), 0)
   );
   if (actionEffectItems.length && !leafItems.length) {
-    // Re-evaluate precision after a small independent-game wave. Large fixed
-    // 160-game extensions conceal zero-yield audit contracts for many hours.
-    const requestedGames = Math.min(
+    // Precision plans separate a bounded collection checkpoint from the small
+    // worker pools. Legacy count-only demands retain their 32-game behavior.
+    const requestedGames = precisionRetryCollectionGames(actionEffectItems) ?? Math.min(
       32,
       Math.max(16, actionEffectAdditionalGames)
     );
-    const acceptedGames = Math.max(
-      0,
-      Math.floor(Number(options.currentAcceptedGames) || 0)
-    );
+    const acceptedGames = options.trainingAudit?.acceptedGames;
+    if (!Number.isInteger(acceptedGames) || acceptedGames < 0) {
+      throw new Error("Policy-Q shadow collection requires the training partition game count.");
+    }
     return {
       ...requirement,
       // Action-effect audits are collected in leaf-audit games, but ordinary
       // discordant leaf-pair quotas must not be inflated.  A game ceiling is
       // enough to schedule the requested precommitted targeted/natural tasks.
-      // Anchor the new quota after the already accepted dataset.  Using only
-      // the original requirement allowed a large resumed dataset to satisfy
+      // Anchor the quota within training, the same role checked by the gate.
+      // Calibration and protected-partition games cannot satisfy this quota.
+      // Using only the original requirement allowed a large resumed dataset to satisfy
       // every retry immediately without collecting any action-effect audit.
       minimumGames: Math.ceil(
         Math.max(
@@ -665,10 +705,13 @@ export function expandPolicyQShadowReadinessRequirement(
         )
       ),
       shadowActionEffectDemand: {
-        version: 2,
-        contract: "policy-q-shadow-action-effect-collection-v2",
+        version: 3,
+        contract: "policy-q-shadow-training-action-effect-collection-v3",
+        role: "training",
         collectionFloorGames: acceptedGames,
         requestedGames,
+        precisionPlanning: precisionRetryCollectionGames(actionEffectItems) !== null,
+        precisionTargets: structuredClone(readiness?.diagnosticDemand?.precisionTargets || []),
         items: structuredClone(actionEffectItems)
       }
     };
@@ -993,8 +1036,8 @@ function policyQShadowActionEffectStatus(
   const naturalProvenanceValid = contractValid
     && terminalEvidenceValid
     && naturalRoot.auditDistribution === "natural-policy-decision-pairs"
-    && naturalRoot.samplingContract
-      === "hash-priority-reservoir-policy-decision-v1"
+    && ["hash-priority-reservoir-policy-decision-v1",
+      "propensity-weighted-natural-policy-decisions-v1"].includes(naturalRoot.samplingContract)
     && naturalRoot.provenanceValidated === true;
   const decisiveGames = Number(
     targeted.decisiveAccuracyInterval?.contributingGames
@@ -1395,8 +1438,8 @@ function requireNaturalRegretAudit(
   phasePolicies = PHASE_POLICY_Q_REQUIREMENTS
 ) {
   if (summary.auditDistribution !== "natural-policy-decision-pairs"
-    || summary.samplingContract
-      !== "hash-priority-reservoir-policy-decision-v1"
+    || !["hash-priority-reservoir-policy-decision-v1",
+      "propensity-weighted-natural-policy-decisions-v1"].includes(summary.samplingContract)
     || summary.provenanceValidated !== true
     || summary.populationEstimand
       !== "ipw-per-decision-natural-policy-decision-pairs-v2"

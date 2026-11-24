@@ -11,11 +11,10 @@ test("desktop startup does not eagerly load the trained neural checkpoint", () =
   assert.match(appSource, /await ensureNeuralAiLoaded\(\)/);
 });
 
-test("AI matches require the selected trained generation to load", () => {
-  assert.match(appSource, /if \(!await ensureNeuralAiLoaded\(\)\) return/);
-  assert.match(appSource, /async function startAiGameFromMenu\(\)[\s\S]*?appView = "game";\s+render\(\);/);
-  assert.match(appSource, /AI 대전을 시작할 수 없습니다/);
-  assert.match(appSource, /trainingDeckIdForGeneration\(pair\[1\], generation\)/);
+test("AI features retain the baseline-policy fallback when no trained model is available", () => {
+  assert.match(appSource, /await ensureNeuralAiLoaded\(\);\s+localMatch = createMatchState/);
+  assert.doesNotMatch(appSource, /if \(!await ensureNeuralAiLoaded\(\)\) return/);
+  assert.match(appSource, /완성 모델을 사용할 수 없어 기본 AI로 실행합니다/);
 });
 
 test("TensorFlow rollout code stays behind the deep-review dynamic import", () => {

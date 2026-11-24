@@ -262,6 +262,11 @@ export function localizeKoreanPackName(value) {
 export function localizeKoreanNetworkError(value) {
   const text = String(value || "");
   if (EXACT_TEXT.has(text)) return EXACT_TEXT.get(text);
+  if (text.includes("Cards outside the room card pool") && text.includes("Banned cards are not allowed")) {
+    return "선택 환경에 포함되지 않은 카드와 금지 카드가 있습니다. 방 설정과 제출할 덱을 확인해 주세요.";
+  }
+  if (text.startsWith("Cards outside the room card pool")) return "선택 환경에 포함되지 않은 카드가 있습니다. 방 설정과 제출할 덱을 확인해 주세요.";
+  if (text.startsWith("Banned cards are not allowed")) return "금제 적용 방에서 사용할 수 없는 금지 카드가 있습니다. 제출할 덱을 수정해 주세요.";
   const localized = localizeKoreanUiText(text);
   if (localized !== text && !hasUnexpectedEnglish(localized, ["AI", "XP", "HTTP"])) return localized;
   const sentences = text.match(/[^.]+(?:\.|$)/gu)?.map((part) => part.trim()).filter(Boolean) || [];
@@ -302,7 +307,7 @@ function koreanDomain(domain) {
     Body: "신체",
     Calm: "평온",
     Chaos: "혼돈",
-    Fury: "격노",
+    Fury: "분노",
     Mind: "정신",
     Order: "질서"
   }[domain] || domain;

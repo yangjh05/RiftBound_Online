@@ -2,12 +2,21 @@ import { hiddenCardIsControlledBy } from "../rules/zones.mjs";
 import { movementProfile, tacticalActionProfile, temporaryChoicePurposeProfile, temporaryCommitmentProfile } from "./action-tactics.mjs";
 import { enumerateMulliganPlans } from "./mulligan.mjs";
 import { addAiPerformance, measureAiPerformance } from "./performance.mjs";
+import { cloneAiState } from "./clone-state.mjs";
+import { hasCombatSacrificePayoff, previewCombatLines, simpleCombatSpell } from "./combat-safety.mjs";
+import { inspectAttackPlan, filterCommittedCombatActions, advanceCombatCommitment,
+  validCommitment, combatCommitmentStateKey } from "./attack-plan.mjs";
+import { filterReadyEntryOrder } from "./ready-entry-order.mjs";
+import { previewTacticalAction } from "./tactical-baseline.mjs";
+import {needsPaymentOptionDecision,paymentOptionActions,applyPaymentOptions} from './payment-options.mjs';
+import {hasPublicRemovalCombo} from './removal-combo.mjs';
 import {
   activateCard,
   beginPlayCard,
   beginPlayCardFromTrash,
   beginPlayChampion,
   canStandardMoveUnits,
+  cardHasKeyword,
   cancelPayment,
   chooseFirstPlayer,
   chooseEffectOption,
@@ -16,8 +25,11 @@ import {
   confirmPayment,
   declineEffectChoice,
   endTurn,
+  currentMight,
   firstPlayerDecisionActorId,
   hideCard,
+  hiddenCardsAtBattlefieldForPlayer,
+  hiddenSlotLimit,
   legalActivatedAbilityOptions,
   legalCardPlayDestinations,
   legalChampionPlayDestinations,
@@ -40,7 +52,7 @@ import {
 const STRATEGIC_KINDS = new Set([
   "selectChampion", "selectBattlefield", "toggleMulliganCard", "confirmMulligan", "skipMulligan", "submitMulligan",
   "beginPlayCard", "beginPlayCardFromTrash", "beginPlayChampion", "hideCard", "moveUnit", "moveUnits",
-  "activateCard", "chooseEffectOption", "declineEffectChoice", "passShowdown", "endTurn"
+  "activateCard", "chooseEffectOption", "choosePaymentOptions", "declineEffectChoice", "passShowdown", "endTurn"
 ]);
 
 // These fields describe the current decision for scoring/encoding, but they are
@@ -52,6 +64,10 @@ const ACTION_ANNOTATION_FIELDS = new Set([
   "triggerOrderSelected",
   "triggerOrderOptional"
 ]);
+
+const combatPlanApi = { cloneGame, enumerateLegalActions, planPaymentActions, actionKey,
+  hasCombatSacrificePayoff, previewCombatLines, simpleCombatSpell, isMechanicalResourceActivation,
+  applyAiAction: (game, action, actorId) => applyAiAction(game, action, actorId, {skipCombatPlan:true}) };
 
 export function activeActorId(game) {
   if (game.pendingChoice?.playerId) return game.pendingChoice.playerId;
@@ -84,7 +100,7 @@ export function enumerateLegalActions(game, actorId = activeActorId(game), optio
         return typeof options.acceptPreview !== "function" || options.acceptPreview(action, null) !== false;
       }
       const clone = cloneGame(game);
-      if (!applyAiAction(clone, action, actorId)?.ok) return false;
+      if (!applyAiAction(clone, action, actorId, {skipCombatPlan:true})?.ok) return false;
       if (["beginPlayCard", "beginPlayCardFromTrash", "beginPlayChampion", "hideCard", "activateCard"].includes(action.kind) && clone.pendingPayment
         && !canCompletePayment(clone)) return false;
       return typeof options.acceptPreview !== "function" || options.acceptPreview(action, clone) !== false;
@@ -92,19 +108,136 @@ export function enumerateLegalActions(game, actorId = activeActorId(game), optio
   });
 }
 
+// The tabletop only needs declaration and movement affordances. Building the
+// full AI action space here used to simulate unrelated abilities, choices, and
+// every two/three-unit movement combination on each UI render. A batch move is
+// therefore included only for the exact selection supplied by the UI.
+export function enumerateUiLegalActions(game, actorId = activeActorId(game), options = {}) {
+  if (!actorId || actorId !== activeActorId(game) || game.phase === "complete") return [];
+  const player = game.players.find((candidate) => candidate.id === actorId);
+  if (!player || game.pendingChoice || game.pendingPayment) return [];
+  const declined = new Set(game.aiDeclinedIntents?.turnSequence === game.turnSequence
+    ? game.aiDeclinedIntents.keys
+    : []);
+
+  const actions = [];
+  for (const card of player.hand) {
+    for (const destination of legalCardPlayDestinations(game, card.instanceId)) {
+      actions.push({ kind: "beginPlayCard", cardId: card.instanceId, destination });
+    }
+  }
+  for (const card of player.trash) {
+    for (const destination of legalCardPlayDestinations(game, card.instanceId)) {
+      actions.push({ kind: "beginPlayCardFromTrash", cardId: card.instanceId, destination });
+    }
+  }
+  for (const destination of legalChampionPlayDestinations(game)) {
+    actions.push({ kind: "beginPlayChampion", destination });
+  }
+
+  // Revealing from Hidden and hiding a card can open additional declarations
+  // or a payment continuation. Keep the authoritative preview for these less
+  // direct paths instead of treating their inexpensive preflight as complete.
+  for (const field of game.battlefields) {
+    for (const entry of field.hidden || []) {
+      if (!hiddenCardIsControlledBy(entry, actorId) || !entry?.card?.instanceId) continue;
+      for (const destination of legalCardPlayDestinations(game, entry.card.instanceId)) {
+        const action = { kind: "beginPlayCard", cardId: entry.card.instanceId, destination };
+        if (declined.has(actionKey(action))) continue;
+        if (uiDeclarationPreviewIsLegal(game, action, actorId)) actions.push(action);
+      }
+    }
+  }
+  if (game.phase === "action" && !game.actionChain) {
+    const controlledFields = game.battlefields.filter((field) => field.controlledBy === actorId
+      && hiddenCardsAtBattlefieldForPlayer(field, actorId) < hiddenSlotLimit(field));
+    const hideSources = [
+      ...player.hand,
+      player.champion?.zone === "champion" && !player.championPlayed ? player.champion : null
+    ].filter((card) => card && cardHasKeyword(game, card, "Hidden"));
+    const candidates = hideSources.flatMap((card) => controlledFields
+      .map((field) => ({ kind: "hideCard", cardId: card.instanceId, destination: field.instanceId })))
+      .filter((action) => !declined.has(actionKey(action)));
+    // Hide cost legality is independent of the source card and chosen controlled
+    // battlefield after the necessary keyword/slot checks above, so one
+    // authoritative preview covers every preflight-valid destination.
+    if (candidates.length && uiDeclarationPreviewIsLegal(game, candidates[0], actorId)) {
+      actions.push(...candidates);
+    }
+  }
+
+  const destinations = ["base", ...game.battlefields.map((field) => field.instanceId)];
+  const movable = [
+    ...player.base.filter((card) => card.type === "unit"),
+    ...game.battlefields.flatMap((field) =>
+      field.units.filter((card) => card.type === "unit" && card.controllerId === actorId))
+  ];
+  for (const unit of movable) {
+    for (const destinationId of destinations) {
+      if (canStandardMoveUnits(game, [unit.instanceId], destinationId)) {
+        actions.push({ kind: "moveUnit", unitId: unit.instanceId, destinationId });
+      }
+    }
+  }
+
+  actions.push(...enumerateUiMoveUnitsActions(game, options?.moveUnitIds, actorId));
+
+  const unique = new Map();
+  for (const action of actions) {
+    const key = actionKey(action);
+    if (!declined.has(key)) unique.set(key, action);
+  }
+  return [...unique.values()];
+}
+
+export function enumerateUiMoveUnitsActions(game, unitIds, actorId = activeActorId(game)) {
+  if (!actorId || actorId !== activeActorId(game) || game.phase === "complete"
+    || game.pendingChoice || game.pendingPayment) return [];
+  const selectedUnitIds = [...new Set((unitIds || []).filter((id) => typeof id === "string" && id))];
+  if (selectedUnitIds.length < 2) return [];
+  const destinations = ["base", ...game.battlefields.map((field) => field.instanceId)];
+  const declined = new Set(game.aiDeclinedIntents?.turnSequence === game.turnSequence
+    ? game.aiDeclinedIntents.keys
+    : []);
+  return destinations.flatMap((destinationId) => {
+    if (!canStandardMoveUnits(game, selectedUnitIds, destinationId)) return [];
+    const action = { kind: "moveUnits", unitIds: [...selectedUnitIds], destinationId };
+    return declined.has(actionKey(action)) ? [] : [action];
+  });
+}
+
+function uiDeclarationPreviewIsLegal(game, action, actorId) {
+  const preview = cloneGame(game);
+  if (!applyAiAction(preview, action, actorId)?.ok) return false;
+  return !preview.pendingPayment || canCompletePayment(preview);
+}
+
 // Basic Rune conversion is a mechanical part of paying a declared cost, not a
 // strategic action for an AI policy to take speculatively. Keep it in the full
 // legal command set for human play, while the payment planner uses the direct
 // Rune/pool payment commands. Resources generated by other effects remain in
 // runePool and are still offered as payment options.
-export function enumerateAiPolicyActions(game, actorId = activeActorId(game)) {
+export function enumerateAiPolicyActions(game, actorId = activeActorId(game), options = {}) {
+  if (game.pendingPayment?.playerId === actorId && needsPaymentOptionDecision(game))
+    return paymentOptionActions(game, canCompletePayment);
   if (game.phase === "mulligan") return enumerateMulliganPlans(game, actorId);
+  const immediateWins = new Set();
   const legal = enumerateLegalActions(game, actorId, {
     useSharedStandardMoveLegality: true,
-    acceptPreview: (action, preview) => declarationHasSafeTargetContinuation(game, actorId, action, preview)
+    acceptPreview: (action, preview) => {
+      if (preview?.phase === "complete" && preview.winnerId === actorId
+        && !preview.pendingChoice && !preview.pendingPayment && !preview.actionChain && !preview.showdown) {
+        immediateWins.add(actionKey(action));
+      }
+      return declarationHasSafeTargetContinuation(game, actorId, action, preview);
+    }
   });
   const policyLegal = legal.filter((action) => !isMechanicalResourceActivation(game, action)
     && !isSelectedTriggerOrderToggle(action));
+  // This action already ends the game before another response can occur.
+  // Conditional combat improvements must never enter this hard mask.
+  const provenWins = policyLegal.filter(action => immediateWins.has(actionKey(action)));
+  if (provenWins.length) return provenWins;
   const movementProfiles = new Map(policyLegal
     .filter((action) => action.kind === "moveUnit" || action.kind === "moveUnits")
     .map((action) => [action, movementProfile(game, actorId, action)]));
@@ -119,25 +252,29 @@ export function enumerateAiPolicyActions(game, actorId = activeActorId(game)) {
   const hasAlignedEffectChoice = [...effectChoiceProfiles.values()].some((profile) => profile.targetAlignment > 0);
   const canDeclineOptionalEffect = Boolean(game.pendingChoice?.optional)
     && policyLegal.some((action) => action.kind === "declineEffectChoice");
-  const hasStrictImpactMovement = [...movementProfiles.values()].some((profile) => profile.strictlyBeneficial);
   const filtered = policyLegal.filter((action) => {
     const movement = movementProfiles.get(action);
-    if (movement?.noOpponentImpact) return false;
-    if (!temporaryCommitmentProfile(game, actorId, action).clearPurpose) return false;
+    if (movement && inspectAttackPlan(game, actorId, action, movement, combatPlanApi)?.kind === 'unsupported-loss') return false;
+    if (!options.skipTemporaryPurpose && !temporaryCommitmentProfile(game, actorId, action).clearPurpose
+      && !hasPublicRemovalCombo(game,actorId,action,previewTacticalAction)) return false;
     const temporaryChoice = temporaryChoiceProfiles.get(action);
     const effectChoice = effectChoiceProfiles.get(action);
-    if (hasClearTemporaryChoice && temporaryChoice?.isTemporaryChoice && !temporaryChoice.clearPurpose
-      && !hasJustifiedMisalignedUpside(effectChoice)) return false;
+    if (!options.skipTemporaryPurpose && hasClearTemporaryChoice && temporaryChoice?.isTemporaryChoice && !temporaryChoice.clearPurpose
+      && !hasJustifiedMisalignedUpside(effectChoice)
+      && !hasPublicRemovalCombo(game,actorId,action,previewTacticalAction)) return false;
     if (effectChoice && isDominatedEffectChoice(effectChoice, hasAlignedEffectChoice, canDeclineOptionalEffect)) return false;
-    if (action.kind === "endTurn" && hasStrictImpactMovement) return false;
-    if (action.kind === "endTurn" && [...movementProfiles.entries()].some(([candidate, profile]) =>
-      profile.temporaryCreatesCleanBreakthrough && actionUsesTemporaryUnit(game, candidate))) return false;
+    // Keep holding resources available: an apparently profitable move may
+    // invite a response. The tactical initializer teaches a preference, and
+    // PPO must be able to learn when to override it.
     return true;
   });
   const executable = filtered.length
     ? filtered
     : forcedRequiredChoiceFallback(game, policyLegal, effectChoiceProfiles);
-  return prioritizeMovementActions(executable, movementProfiles);
+  const ordered = options.skipReadyEntryOrdering ? executable : filterReadyEntryOrder(game, actorId,
+    executable, { previewTacticalAction, actionKey, enumerateAiPolicyActions });
+  return filterCommittedCombatActions(game, actorId,
+    prioritizeMovementActions(ordered, movementProfiles), combatPlanApi);
 }
 
 function isDominatedEffectChoice(profile, hasAlignedChoice, canDecline) {
@@ -326,19 +463,26 @@ function aiDecisionStateDigest(game) {
     })),
     pendingPayment: game?.pendingPayment ? {
       playerId: game.pendingPayment.playerId || null,
-      energy: game.pendingPayment.energy ?? null,
-      power: game.pendingPayment.power ?? null,
+      energy: game.pendingPayment.energyCost ?? null,
+      power: game.pendingPayment.powerCost ?? null,
+      energyRuneIds: [...(game.pendingPayment.energyRuneIds || [])].sort(),
+      powerRuneIds: [...(game.pendingPayment.powerRuneIds || [])].sort(),
+      optionalEffects: (game.pendingPayment.optionalPowerEffects || []).map(e => [e.id, Boolean(e.selected)]),
+      aiOptionSelection: game.pendingPayment.aiOptionSelection || null,
       poolEnergyIds: [...(game.pendingPayment.poolEnergyIds || [])].sort(),
       poolPowerIds: [...(game.pendingPayment.poolPowerIds || [])].sort()
     } : null,
     actionChain: game?.actionChain ? {
       priorityPlayerId: game.actionChain.priorityPlayerId || null,
       passedPlayerIds: [...(game.actionChain.passedPlayerIds || [])].sort(),
-      links: game.actionChain.links?.length || game.actionChain.actions?.length || 0
+      consecutivePasses: game.actionChain.consecutivePasses || 0,
+      chain: digestDecisionChain(game.actionChain.chain || game.actionChain.links || game.actionChain.actions)
     } : null,
     showdown: game?.showdown ? {
       priorityPlayerId: game.showdown.priorityPlayerId || null,
       passedPlayerIds: [...(game.showdown.passedPlayerIds || [])].sort(),
+      consecutivePasses: game.showdown.consecutivePasses || 0,
+      chain: digestDecisionChain(game.showdown.chain),
       battlefieldId: game.showdown.battlefieldId || null
     } : null
   };
@@ -368,7 +512,7 @@ export function isMechanicalResourceActivation(game, action) {
     .some((ability) => ability.id === action.abilityId && ability.resourceOnly);
 }
 
-export function resolveLegalAction(game, command, actorId = activeActorId(game)) {
+function resolveActionCandidate(game, command, actorId, acceptsCandidate) {
   if (!command || !actorId) return null;
   const normalized = Object.fromEntries(Object.entries(command)
     .filter(([, value]) => value !== undefined && value !== null));
@@ -379,15 +523,13 @@ export function resolveLegalAction(game, command, actorId = activeActorId(game))
       unitId: normalized.unitId,
       destinationId: normalized.destinationId
     };
-    const clone = cloneGame(game);
-    return applyAiAction(clone, explicitMove, actorId)?.ok ? explicitMove : null;
+    return acceptsCandidate(explicitMove) ? explicitMove : null;
   }
   if (normalized.kind === "moveUnits") {
     const unitIds = Array.isArray(normalized.unitIds) ? normalized.unitIds : [];
     if (unitIds.length < 2 || new Set(unitIds).size !== unitIds.length || !normalized.destinationId) return null;
     const explicitMove = { kind: "moveUnits", unitIds: [...unitIds], destinationId: normalized.destinationId };
-    const clone = cloneGame(game);
-    return applyAiAction(clone, explicitMove, actorId)?.ok ? explicitMove : null;
+    return acceptsCandidate(explicitMove) ? explicitMove : null;
   }
   // Command authorization must evaluate only the command the player actually
   // submitted. Enumerating every possible play/activation here made an
@@ -396,23 +538,50 @@ export function resolveLegalAction(game, command, actorId = activeActorId(game))
   const candidates = candidateActions(game, actorId, normalized.kind);
   const unique = new Map();
   for (const action of candidates) unique.set(actionKey(action), action);
-  const declined = new Set(game.aiDeclinedIntents?.turnSequence === game.turnSequence ? game.aiDeclinedIntents.keys : []);
-  const legal = [...unique.values()].filter((action) => {
-    if (declined.has(actionKey(action))) return false;
-    const clone = cloneGame(game);
-    if (!applyAiAction(clone, action, actorId)?.ok) return false;
-    return true;
-  });
   const exactKey = actionKey(normalized);
-  const exact = legal.find((action) => actionKey(action) === exactKey);
-  if (exact) return exact;
+  const exact = unique.get(exactKey);
+  if (exact && acceptsCandidate(exact)) return exact;
   // Backward compatibility is intentionally limited to the old activation
   // command shape. Never infer a target, payment, or effect choice on behalf
   // of a player, even when only one option currently exists.
   if (normalized.kind !== "activateCard" || normalized.abilityId != null) return null;
-  const compatible = legal.filter((action) => Object.entries(normalized)
-    .every(([key, value]) => sameActionValue(action[key], value)));
+  const compatible = [...unique.values()].filter((action) => Object.entries(normalized)
+    .every(([key, value]) => sameActionValue(action[key], value)))
+    .filter(acceptsCandidate);
   return compatible.length === 1 ? compatible[0] : null;
+}
+
+function digestDecisionChain(chain = []) {
+  // Resolving a redundant trigger can change no units or resources. The
+  // remaining ordered work is still progress; generated IDs/logs are not.
+  return chain.map(item => [item.itemType, item.playerId, item.status,
+    item.card?.instanceId, item.card?.declaredPlayTargets, item.destination,
+    item.trigger?.kind, item.trigger?.sourceCardId, item.trigger?.data]);
+}
+
+// Local UI commands are executed immediately by engine functions that already
+// perform the authoritative legality check. Canonicalizing here without running
+// the command on a full game clone avoids executing expensive payment/choice
+// continuations twice while retaining exact candidate matching.
+export function canonicalizeActionCommand(game, command, actorId = activeActorId(game)) {
+  const declined = new Set(game.aiDeclinedIntents?.turnSequence === game.turnSequence
+    ? game.aiDeclinedIntents.keys
+    : []);
+  return resolveActionCandidate(game, command, actorId, (action) => !declined.has(actionKey(action)));
+}
+
+export function resolveLegalAction(game, command, actorId = activeActorId(game)) {
+  const declined = new Set(game.aiDeclinedIntents?.turnSequence === game.turnSequence ? game.aiDeclinedIntents.keys : []);
+  const legalityByKey = new Map();
+  return resolveActionCandidate(game, command, actorId, (action) => {
+    const key = actionKey(action);
+    if (declined.has(key)) return false;
+    if (legalityByKey.has(key)) return legalityByKey.get(key);
+    const clone = cloneGame(game);
+    const legal = Boolean(applyAiAction(clone, action, actorId)?.ok);
+    legalityByKey.set(key, legal);
+    return legal;
+  });
 }
 
 export function auditDecisionBoundary(game, actorId = activeActorId(game), knownPolicyActions = null) {
@@ -576,10 +745,9 @@ function candidateActions(game, actorId, kindFilter = null) {
       : [];
   }
   if (game.phase === "mulligan") {
-    const selected = new Set(game.mulligan?.selectedCardIds || []);
     return [
       ...(wants("toggleMulliganCard") ? player.hand.map((card) => ({ kind: "toggleMulliganCard", cardId: card.instanceId })) : []),
-      ...(wants("confirmMulligan") && selected.size ? [{ kind: "confirmMulligan" }] : []),
+      ...(wants("confirmMulligan") ? [{ kind: "confirmMulligan" }] : []),
       ...(wants("skipMulligan") ? [{ kind: "skipMulligan" }] : [])
     ];
   }
@@ -607,6 +775,7 @@ function candidateActions(game, actorId, kindFilter = null) {
       ...game.battlefields.flatMap((field) => field.units.filter((card) => card.controllerId === actorId))
     ].filter(Boolean);
     return [
+      ...(wants("choosePaymentOptions") && needsPaymentOptionDecision(game) ? paymentOptionActions(game, canCompletePayment) : []),
       ...(wants("activateCard") ? addSources.flatMap((card) => activatedAbilityActions(game, card)) : []),
       ...(wants("togglePaymentRune") ? player.runes.flatMap((rune) => [
         { kind: "togglePaymentRune", runeId: rune.instanceId, mode: "energy" },
@@ -622,17 +791,28 @@ function candidateActions(game, actorId, kindFilter = null) {
     ];
   }
 
-  const destinations = ["base", ...game.battlefields.map((field) => field.instanceId)];
-  const hiddenCards = game.battlefields.flatMap((field) => (field.hidden || [])
-    .filter((item) => hiddenCardIsControlledBy(item, actorId))
-    .map((item) => ({ card: item.card, destination: field.instanceId })));
-  const controlledCards = [
+  const destinations = wants("moveUnit") || wants("moveUnits")
+    ? ["base", ...game.battlefields.map((field) => field.instanceId)]
+    : [];
+  const hiddenCards = wants("beginPlayCard")
+    ? game.battlefields.flatMap((field) => (field.hidden || [])
+      .filter((item) => hiddenCardIsControlledBy(item, actorId))
+      .map((item) => ({ card: item.card, destination: field.instanceId })))
+    : [];
+  const controlledCards = wants("activateCard") ? [
     player.legend,
     player.champion?.zone === "played" ? player.champion : null,
     ...player.base,
     ...player.runes,
     ...game.battlefields.flatMap((field) => field.units.filter((card) => card.controllerId === actorId))
-  ].filter(Boolean);
+  ].filter(Boolean) : [];
+  const hideSources = wants("hideCard") ? [
+    ...player.hand,
+    player.champion?.zone === "champion" && !player.championPlayed ? player.champion : null
+  ].filter((card) => card && cardHasKeyword(game, card, "Hidden")) : [];
+  const hideDestinations = wants("hideCard") ? game.battlefields.filter((field) =>
+    field.controlledBy === actorId
+    && hiddenCardsAtBattlefieldForPlayer(field, actorId) < hiddenSlotLimit(field)) : [];
   const movable = wants("moveUnit") || wants("moveUnits") ? [
     ...player.base.filter((card) => card.type === "unit"),
     ...game.battlefields.flatMap((field) => field.units.filter((card) => card.type === "unit" && card.controllerId === actorId))
@@ -644,9 +824,10 @@ function candidateActions(game, actorId, kindFilter = null) {
     ...(wants("beginPlayCardFromTrash") ? player.trash
       .flatMap((card) => legalCardPlayDestinations(game, card.instanceId)
         .map((destination) => ({ kind: "beginPlayCardFromTrash", cardId: card.instanceId, destination }))) : []),
-    ...(wants("hideCard") ? player.hand.flatMap((card) => game.battlefields.map((field) => ({ kind: "hideCard", cardId: card.instanceId, destination: field.instanceId }))) : []),
+    ...(wants("hideCard") ? hideSources.flatMap((card) => hideDestinations
+      .map((field) => ({ kind: "hideCard", cardId: card.instanceId, destination: field.instanceId }))) : []),
     ...(wants("moveUnit") ? movable.flatMap((unit) => destinations.map((destinationId) => ({ kind: "moveUnit", unitId: unit.instanceId, destinationId }))) : []),
-    ...(wants("moveUnits") ? batchMoveCandidates(movable, destinations) : []),
+    ...(wants("moveUnits") ? batchMoveCandidates(game, movable, destinations) : []),
     ...(wants("activateCard") ? controlledCards.flatMap((card) => activatedAbilityActions(game, card)) : []),
     ...(wants("beginPlayChampion") ? legalChampionPlayDestinations(game)
       .map((destination) => ({ kind: "beginPlayChampion", destination })) : [])
@@ -668,25 +849,47 @@ function activatedAbilityActions(game, card) {
   }));
 }
 
-function batchMoveCandidates(units, destinations) {
+function batchMoveCandidates(game, units, destinations) {
   if (units.length < 2) return [];
-  const subsets = [];
-  const limit = Math.min(units.length, 3);
-  for (let size = 2; size <= limit; size += 1) choose([], 0, size);
-  if (units.length > 3) subsets.push(units.map((unit) => unit.instanceId));
-  return subsets.flatMap((unitIds) => destinations.map((destinationId) => ({ kind: "moveUnits", unitIds, destinationId })));
-
-  function choose(chosen, start, remaining) {
-    if (!remaining) {
-      subsets.push(chosen.map((unit) => unit.instanceId));
-      return;
+  return destinations.flatMap((destinationId) => {
+    const eligible = units.filter((unit) => canStandardMoveUnits(game, [unit.instanceId], destinationId));
+    const subsets = new Map();
+    const add = (group) => {
+      if (group.length < 2) return;
+      const unitIds = group.map((unit) => unit.instanceId).sort();
+      subsets.set(JSON.stringify(unitIds), { kind: "moveUnits", unitIds, destinationId });
+    };
+    // Enumerate all subsets on ordinary boards. For large boards keep the
+    // existing small-group coverage plus bounded attacks and leave-one-behind
+    // groups, instead of an exponential power set.
+    const limit = eligible.length <= 8 ? eligible.length : 3;
+    add(eligible);
+    for (let size = 2; size <= limit; size += 1) choose([], 0, size);
+    if (eligible.length > 8) {
+      for (const omitted of eligible) add(eligible.filter((unit) => unit !== omitted));
+      const byMight = [...eligible].sort((a, b) => currentMight(game, b) - currentMight(game, a));
+      for (let size = 4; size < eligible.length; size += 1) {
+        add(byMight.slice(0, size));
+        add(byMight.slice(-size));
+      }
     }
-    for (let index = start; index <= units.length - remaining; index += 1) choose([...chosen, units[index]], index + 1, remaining - 1);
-  }
+    return [...subsets.values()];
+    function choose(chosen, start, remaining) {
+      if (!remaining) return add(chosen);
+      for (let index = start; index <= eligible.length - remaining; index += 1) {
+        choose([...chosen, eligible[index]], index + 1, remaining - 1);
+      }
+    }
+  });
 }
 
-export function applyAiAction(game, action, actorId = activeActorId(game)) {
+export function applyAiAction(game, action, actorId = activeActorId(game), options = {}) {
   if (!action || actorId !== activeActorId(game)) return { ok: false, message: "AI action actor does not have focus." };
+  const previousCombatPlan = options.skipCombatPlan ? null : game.aiCombatCommitment;
+  const previousCombatPlanValid = previousCombatPlan
+    && validCommitment(game, previousCombatPlan.actorId, previousCombatPlan);
+  const attackPlan = !options.skipCombatPlan && ['moveUnit','moveUnits'].includes(action.kind)
+    ? inspectAttackPlan(game, actorId, action, movementProfile(game, actorId, action), combatPlanApi) : null;
   const turnEvent = publicActionTurnEvent(game, actorId, action);
   const turnEventSequenceBefore = Number(game.publicTurnEventSequence) || 0;
   addAiPerformance("applyCalls");
@@ -708,6 +911,12 @@ export function applyAiAction(game, action, actorId = activeActorId(game)) {
     game.aiDecisionContext = null;
   }
   if (result?.ok && ["confirmPayment", "declineEffectChoice"].includes(action.kind) && !game.pendingPayment && !game.pendingChoice) game.aiDecisionContext = null;
+  if (result?.ok && !options.skipCombatPlan) {
+    advanceCombatCommitment(game, actorId, action, previousCombatPlan, previousCombatPlanValid, combatPlanApi);
+    if (attackPlan?.kind === 'supported-attack' && game.showdown?.battlefieldId === attackPlan.battlefieldId) {
+      game.aiCombatCommitment = {...attackPlan,stateKey:combatCommitmentStateKey(game,actorId)};
+    }
+  }
   return result;
 
   function execute() {
@@ -732,6 +941,7 @@ export function applyAiAction(game, action, actorId = activeActorId(game)) {
     case "togglePaymentPoolEnergy": return togglePaymentPoolEnergy(game, action.energyId);
     case "togglePaymentPoolPower": return togglePaymentPoolPower(game, action.powerId);
     case "toggleOptionalPaymentEffect": return toggleOptionalPaymentEffect(game, action.effectId);
+    case "choosePaymentOptions": return applyPaymentOptions(game, action);
     case "confirmPayment": return confirmPayment(game);
     case "cancelPayment": return cancelPayment(game);
     case "chooseEffectOption": return chooseEffectOption(game, action.optionId);
@@ -891,7 +1101,7 @@ export function actionKey(action) {
 
 export function cloneGame(game) {
   addAiPerformance("cloneCalls");
-  return measureAiPerformance("cloneMs", () => structuredClone(game));
+  return measureAiPerformance("cloneMs", () => cloneAiState(game));
 }
 
 function uniqueViolations(violations) {

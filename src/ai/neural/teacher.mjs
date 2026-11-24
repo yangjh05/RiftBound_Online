@@ -9,6 +9,7 @@ import { DEFAULT_AI_MODEL, scoreActions } from "../policy.mjs";
 import {
   buildTeacherMacroDemonstration,
   hydrateActionAuditRolloutResults,
+  independentSimulationSeeds,
   mergeActionAuditRolloutResults,
   pairedEvaluatorLeafStateEvidence,
   pairedIndependentTerminalActionAudit,
@@ -108,9 +109,9 @@ export function simulationTeacherDecision(game, actorId, legalActions, options =
       neuralBelief: options.neuralBelief,
       captureProductionLeafAudit: productionLeafAuditEnabled,
       productionLeafAuditMaximumSteps:
-        stage.startsWith("independent-terminal-action-audit-")
+        productionLeafAuditEnabled
           ? Math.max(
-            192,
+            1,
             Math.min(
               1200,
               Number(options.actionAuditMaximumSteps) || 1200
@@ -612,11 +613,34 @@ export function simulationTeacherDecision(game, actorId, legalActions, options =
       Number(options.independentLeafPairLimit)
     )))
     : 2;
-  if (independentLeafPairLimit > 0
+  const finalLeafAuditSimulations = Math.max(0, Math.min(1024,
+    Math.floor(Number(options.leafAuditSimulations ?? 128))));
+  const deferredLeafAuditCandidate = options.detachedIndependentLeafAudit === true
+    && finalLeafAuditSimulations > 0 && independentLeafPairLimit > 0
+    && options.captureProductionLeafAudit === true
+    && options.captureIndependentLeafAudit !== false && leafAuditAlternative
+    && actionKey(leafAuditAlternative.action) !== actionKey(best.action)
+    ? {
+      version: 1, contract: "detached-leaf-audit-candidate-v1",
+      auditKey: independentActionAuditKey(options.informationSetHash,
+        best.action, leafAuditAlternative.action),
+      informationSetHash: options.informationSetHash,
+      recommendedAction: structuredClone(best.action),
+      selectedAction: structuredClone(leafAuditAlternative.action),
+      occupiedAuditSeeds: [...occupiedAuditSeeds],
+      search: { depth: search.depth, minimumTurnTransitions: search.minimumTurnTransitions },
+      samplingFrame: structuredClone(options.evidenceSamplingFrame || null),
+      maximumSimulations: finalLeafAuditSimulations,
+      priority: { decisionLeverage: Number(profile.decisionLeverage) || 0,
+        uncertainty: Number(options.uncertainty) || 0 }
+    } : null;
+  if (deferredLeafAuditCandidate) independentLeafAuditAttempted = true;
+  if (finalLeafAuditSimulations > 0 && independentLeafPairLimit > 0
     && options.captureProductionLeafAudit === true
     && options.captureIndependentLeafAudit !== false
     && leafAuditAlternative
-    && actionKey(leafAuditAlternative.action) !== actionKey(best.action)) {
+    && actionKey(leafAuditAlternative.action) !== actionKey(best.action)
+    && !deferredLeafAuditCandidate) {
     independentLeafAuditAttempted = true;
     const decisiveEffectThreshold = Math.max(
       0,
@@ -633,7 +657,6 @@ export function simulationTeacherDecision(game, actorId, legalActions, options =
       Number(evidenceProtocolManifest?.statistics
         ?.minimumNearEquivalentSamples) || 32
     );
-    const finalLeafAuditSimulations = 128;
     const finalConfidence = 0.99;
     let first = null;
     let secondLeaf = null;
@@ -686,7 +709,7 @@ export function simulationTeacherDecision(game, actorId, legalActions, options =
           independentSeedContract: true,
           determinizationRequired: true,
           sequentialAuditContract: {
-            version: 3,
+            version: finalLeafAuditSimulations === 128 ? 3 : 4,
             finalSimulations: finalLeafAuditSimulations,
             completedStage: finalLeafAuditSimulations,
             evidenceSeedUse: "single-fixed-final-bank-v1",
@@ -850,6 +873,7 @@ export function simulationTeacherDecision(game, actorId, legalActions, options =
     actionAuditAttempted,
     actionAuditKey,
     deferredActionAuditCandidate,
+    deferredLeafAuditCandidate,
     independentLeafValuePairs,
     independentLeafAuditAttempted,
     independentLeafActionEffectComparison,
@@ -1224,26 +1248,7 @@ export function independentActionAuditSeedBank(
     ...(descriptor.occupiedAuditSeeds || []),
     ...(excludedSeeds || [])
   ].map((seed) => Number(seed) >>> 0));
-  const selected = new Set();
-  const seeds = [];
-  let fallback = 0x9e3779b9;
-  while (seeds.length < Math.max(0, Number(count) || 0)) {
-    let seed = Math.floor(random() * 0x100000000) >>> 0;
-    let attempts = 0;
-    while ((excluded.has(seed) || selected.has(seed)) && attempts < 16) {
-      seed = Math.floor(random() * 0x100000000) >>> 0;
-      attempts += 1;
-    }
-    while (excluded.has(seed) || selected.has(seed)) {
-      fallback = (
-        Math.imul(fallback ^ seed, 1664525) + 1013904223
-      ) >>> 0;
-      seed = fallback;
-    }
-    selected.add(seed);
-    seeds.push(seed);
-  }
-  return seeds;
+  return independentSimulationSeeds(Math.max(0, Number(count) || 0), random, excluded);
 }
 
 export function runIndependentActionAuditSeedBatch(

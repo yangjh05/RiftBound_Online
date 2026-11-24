@@ -1,10 +1,12 @@
 import { cardReactionPermissionSources, keywordListHas, printedKeywordValue, temporaryKeywordValue } from "../rules/keywords.mjs";
 import { hiddenCardIsControlledBy } from "../rules/zones.mjs";
-import { currentCombatMight } from "../engine.mjs";
+import { currentCombatMight, currentMight, moveUnits, passShowdown, actingPlayer, cardHasKeyword } from "../engine.mjs";
+import { cloneAiState } from './clone-state.mjs';
 import { cardResourceAffordability } from "./resource-strategy.mjs";
+import { damageChoiceContext, targetChoiceContext, targetResponseContext } from "./damage-context.mjs";
 
 const BENEFICIAL_EFFECTS = new Set([
-  "modifyMight", "readyUnit", "heal", "preventDamage", "grantKeyword",
+  "modifyMight", "readyUnit", "heal", "preventDamage", "grantKeyword", "giveKeyword",
   "attachGear", "createToken", "drawCards", "gainBuff"
 ]);
 
@@ -33,8 +35,16 @@ function computeTacticalActionProfile(game, actorId, action) {
     || (action?.kind === "beginPlayChampion" ? player(game, actorId)?.champion : null)
     || choice?.card
     || findCard(game, choice?.sourceId);
-  const target = findCard(game,
-    option?.cardId || option?.unitId || choice?.data?.targetId || action?.unitId || action?.unitIds?.[0]);
+  // Destination options identify a location, not a recipient of the effect.
+  // In particular, a battlefield's controllerId is its card owner, not the
+  // side benefiting from moving a unit there. Keep every legal destination
+  // available for the engine continuation to compare (including retreats
+  // and moving an enemy). Target selection was a separate decision.
+  const destinationChoice = action?.kind === "chooseEffectOption"
+    && isLocation(game, option?.destination);
+  const target = findCard(game, destinationChoice
+    ? choice?.data?.targetId || choice?.data?.unitId
+    : option?.cardId || option?.unitId || option?.id || choice?.data?.targetId || action?.unitId || action?.unitIds?.[0]);
   const destinationId = action?.destinationId || action?.destination || option?.destination
     || (isLocation(game, option?.id) ? option.id : null);
   const specs = choice
@@ -42,7 +52,7 @@ function computeTacticalActionProfile(game, actorId, action) {
     : ["beginPlayCard", "beginPlayChampion", "activateCard"].includes(action?.kind)
       ? source?.effects || []
       : [];
-  const polarity = effectPolarity(specs);
+  const polarity = destinationChoice ? "neutral" : effectPolarity(specs);
   const targetRelation = target?.controllerId === actorId
     ? "friendly"
     : target?.controllerId ? "enemy" : "none";
@@ -58,7 +68,14 @@ function computeTacticalActionProfile(game, actorId, action) {
   const savesFromLethal = targetRelation === "friendly" && polarity === "beneficial"
     && pendingThreat.damage >= pendingThreat.remainingMight
     && pendingThreat.damage < pendingThreat.remainingMight + buffAmount;
-  const targetImpact = savesFromLethal ? 1 : targetEffectImpact(game, actorId, target, specs, polarity);
+  const damageContext = action?.kind === 'chooseEffectOption'
+    ? damageChoiceContext(game, actorId, source, target, specs) : null;
+  const targetContext = action?.kind === 'chooseEffectOption'
+    ? targetChoiceContext(game, actorId, target, specs, damageContext) : null;
+  const responseContext = targetResponseContext(game, actorId, target, damageContext || targetContext);
+  const targetImpact = damageContext
+    ? Math.min(1, damageContext.usefulDamage / Math.max(1, damageContext.damage))
+    : savesFromLethal ? 1 : targetEffectImpact(game, actorId, target, specs, polarity);
   const destructiveTargetEffect = hasDestructiveTargetEffect(specs);
   const targetAlreadyThreatened = targetRelation === "friendly"
     && Boolean(target?.instanceId)
@@ -78,7 +95,8 @@ function computeTacticalActionProfile(game, actorId, action) {
     && !(targetAlreadyThreatened && casterSideBenefit > 0)
     && !independentOpponentImpact;
   const movement = movementProfile(game, actorId, action, destinationId);
-  const wastedTargetRisk = playTargetRisk(game, actorId, action, source);
+  const wastedTargetRisk = playTargetRisk(game, actorId, action, source)
+    - (damageContext?.alreadyLethal ? 1.35 : 0);
   const tacticalPrior = clamp(
     targetAlignment * (polarity === "beneficial" ? 1.8 : 1.35) * targetImpact
       + casterSideBenefit
@@ -99,8 +117,11 @@ function computeTacticalActionProfile(game, actorId, action) {
     incomingDamage: pendingThreat.damage,
     savesFromLethal,
     targetImpact,
-    effectAmount: effectAmount(specs),
-    targetMight: currentUnitMight(target),
+    effectAmount: damageContext?.damage ?? effectAmount(specs),
+    damageContext,
+    targetContext,
+    responseContext,
+    targetMight: remainingUnitDurability(game, target),
     destructiveTargetEffect,
     targetAlreadyThreatened,
     friendlyDestructionPayoff,
@@ -108,6 +129,8 @@ function computeTacticalActionProfile(game, actorId, action) {
     clearlySelfDestructive,
     destinationId,
     ...movement,
+    canRemoveEnemyNoResponse: movement.canRemoveEnemyNoResponse
+      || (targetRelation === 'enemy' && Boolean(damageContext?.lethal || targetContext?.lethal)),
     wastedTargetRisk,
     tacticalPrior
   };
@@ -131,11 +154,14 @@ export function temporaryCommitmentProfile(game, actorId, action) {
   const isTemporaryCommitment = flattened.some((spec) => spec?.temporary === true
     || spec?.untilEndOfTurn === true
     || /this turn|end of (?:the )?turn/iu.test(String(spec?.duration || "")))
-    || /this turn/iu.test(String(source.text || ""));
+    || (source.type === "spell" && /this turn/iu.test(String(source.text || "")));
   if (!isTemporaryCommitment) {
     return { isTemporaryCommitment: false, clearPurpose: true, reason: "lasting-effect" };
   }
   const leavesPermanent = action.kind === "beginPlayCard" && source.type !== "spell";
+  // A bounded numerical estimate cannot disprove a card/ability trigger or
+  // a multi-card setup. Preserve those choices for the policy and teacher.
+  const uncertainPayoff = temporaryPayoffNeedsSimulation(game, actorId, source, flattened);
   const durableBenefit = flattened.some((spec) => {
     const kind = String(spec?.kind || "").toLowerCase();
     return Number(spec?.draw || spec?.gainXp || spec?.xp || 0) > 0
@@ -144,7 +170,7 @@ export function temporaryCommitmentProfile(game, actorId, action) {
   const responseWindow = Boolean(game.showdown || game.actionChain)
     && temporaryResponseCanMatter(game, actorId, flattened);
   const breakthrough = temporaryBreakthroughOpportunity(game, actorId, flattened);
-  const clearPurpose = leavesPermanent || durableBenefit || responseWindow || breakthrough;
+  const clearPurpose = leavesPermanent || durableBenefit || responseWindow || breakthrough || uncertainPayoff;
   return {
     isTemporaryCommitment,
     clearPurpose,
@@ -152,7 +178,7 @@ export function temporaryCommitmentProfile(game, actorId, action) {
       : durableBenefit ? "durable-side-benefit"
         : responseWindow ? "active-response-window"
           : breakthrough ? "breakthrough-setup"
-            : "no-current-turn-payoff"
+            : uncertainPayoff ? "unresolved-combination-payoff" : "no-current-turn-payoff"
   };
 }
 
@@ -161,6 +187,10 @@ export function temporaryChoicePurposeProfile(game, actorId, action) {
     return { isTemporaryChoice: false, clearPurpose: true, reason: "not-temporary-choice" };
   }
   const choice = game.pendingChoice;
+  const targetSpec = choice?.data?.currentDeclaration?.spec || choice?.data?.descriptor?.spec;
+  if (!targetSpec && !["modifyMight", "giveKeyword", "readyUnit", "heal", "preventDamage"].includes(choice.effect)) {
+    return { isTemporaryChoice: false, clearPurpose: true, reason: "not-temporary-target-choice" };
+  }
   const source = choice.card || findCard(game, choice.sourceId);
   const option = (choice.options || []).find((candidate) =>
     String(candidate?.id ?? candidate?.value ?? candidate) === String(action.optionId));
@@ -170,6 +200,9 @@ export function temporaryChoicePurposeProfile(game, actorId, action) {
     || /this turn/iu.test(String(source?.text || ""));
   if (!isTemporaryChoice) {
     return { isTemporaryChoice: false, clearPurpose: true, reason: "lasting-choice" };
+  }
+  if (temporaryPayoffNeedsSimulation(game, actorId, source, flattened)) {
+    return { isTemporaryChoice: true, clearPurpose: true, reason: "unresolved-combination-payoff" };
   }
   const durableBenefit = flattened.some((spec) => {
     const kind = String(spec?.kind || "").toLowerCase();
@@ -248,6 +281,19 @@ function temporaryTargetCreatesBreakthrough(game, actorId, target, specs) {
     if (movementProfile(adjustedGame, actorId, action).canRemoveEnemyNoResponse) return true;
   }
   return false;
+}
+
+function temporaryPayoffNeedsSimulation(game, actorId, source, specs) {
+  const understood = new Set(['modifyMight', 'giveKeyword', 'grantKeyword']);
+  if (specs.some(spec => !understood.has(spec.kind) || spec.condition || spec.optional || spec.repeat)) return true;
+  // Keyword utility is contextual (Assault/Shield/Ganking/Tank/etc.). A
+  // missing numeric estimate is not evidence that granting it is wasteful.
+  if (specs.some(spec => ['giveKeyword', 'grantKeyword'].includes(spec.kind))) return true;
+  if (controlledCards(game, actorId).some(card => (card.effects || []).some(effect =>
+    ['cardPlayed', 'spellPlayed', 'cardOrAbilityPlayed', 'chosen', 'targeted'].includes(effect.timing)))) return true;
+  return (player(game, actorId)?.hand || []).some(card => card.instanceId !== source?.instanceId
+    && card.type === 'spell' && (card.effects || []).some(effect =>
+      effect.kind === 'modifyMight' || effect.kind === 'giveKeyword' || effect.kind === 'readyUnit'));
 }
 
 function withCardReplacement(game, replacement) {
@@ -373,7 +419,7 @@ function hasDestructiveTargetEffect(specs) {
 
 function friendlyDestructionHasExplicitPayoff(game, actorId, target, specs) {
   const destructive = flattenEffectSpecs(specs);
-  const targetMight = currentUnitMight(target);
+  const targetMight = remainingUnitDurability(game, target);
   const guaranteedRemoval = destructive.some((spec) => {
     const kind = String(spec?.kind || "");
     if (/kill|destroy|banish/iu.test(kind)) return true;
@@ -427,7 +473,7 @@ function playerDrawUrgency(game, actorId) {
 }
 
 function pendingTargetThreat(game, target) {
-  const remainingMight = currentUnitMight(target);
+  const remainingMight = remainingUnitDurability(game, target);
   if (!target) return { damage: 0, remainingMight };
   const items = [
     ...(game?.actionChain?.chain || []),
@@ -452,7 +498,7 @@ function targetEffectImpact(game, actorId, target, specs, polarity) {
   const location = unitLocation(game, target.instanceId);
   const activeFieldId = game?.showdown?.battlefieldId;
   if (!temporary || !activeFieldId || location?.id !== activeFieldId) return 1;
-  const balance = fieldBalance(location.field, actorId);
+  const balance = fieldBalance(game, location.field, actorId);
   const maximumSwing = effectAmount(specs);
   // An expiring combat modifier has little target-side value once even its
   // best friendly use cannot change the current showdown. Caster-side effects
@@ -504,22 +550,32 @@ function computeMovementProfile(game, actorId, action, destinationId) {
     return { ...neutral, isMovement: true, prior: -2 };
   }
   const destination = game.battlefields?.find((field) => field.instanceId === destinationId) || null;
-  const movingMight = movingUnits.reduce((sum, unit) => sum + estimatedCombatMight(unit, "attacker"), 0);
+  const projected = withUnitsAtDestination(game, movingUnits, destinationId);
+  const movingMight = movingUnits.reduce((sum, unit) => {
+    if (!unitLocation(projected.game, unit.instanceId)) return sum;
+    const moved = findCard(projected.game, unit.instanceId);
+    return sum + (projected.destination
+      ? estimatedCombatMight(moved, "attacker", projected.game, projected.destination)
+      : currentMight(projected.game, moved));
+  }, 0);
   const sourceControlRisk = sourceLocations.some((location) => {
     if (location.type !== "battlefield" || location.field?.controlledBy !== actorId) return false;
-    const remaining = (location.field.units || []).filter((unit) => !movingIds.has(unit.instanceId));
+    const sourceField = projected.game.battlefields.find(field => field.instanceId === location.id);
+    if (!sourceField) return true;
+    const remaining = sourceField.units || [];
     const friendly = remaining.filter((unit) => unit.controllerId === actorId);
     const enemies = remaining.filter((unit) => unit.controllerId !== actorId);
     if (!friendly.length) return true;
-    return estimatedForceMight(friendly, "defender", enemies, game, location.field)
-      <= estimatedForceMight(enemies, "attacker", friendly, game, location.field);
+    return estimatedForceMight(friendly, "defender", enemies, projected.game, sourceField)
+      <= estimatedForceMight(enemies, "attacker", friendly, projected.game, sourceField);
   });
   if (destinationId === "base") {
     const sourceFields = [...new Set(sourceLocations
       .filter((location) => location.type === "battlefield")
       .map((location) => location.field))];
     const sourceBalance = sourceFields.length
-      ? sourceFields.reduce((sum, field) => sum + fieldBalance(field, actorId, movingIds), 0) / sourceFields.length
+      ? sourceFields.reduce((sum, field) => sum + fieldBalance(projected.game,
+        projected.game.battlefields.find(candidate => candidate.instanceId === field.instanceId), actorId), 0) / sourceFields.length
       : 0;
     const retreatsFromLostField = sourceFields.length > 0 && sourceBalance < -2;
     return {
@@ -536,14 +592,9 @@ function computeMovementProfile(game, actorId, action, destinationId) {
     };
   }
   if (!destination) return { ...neutral, isMovement: true };
-  const projected = withUnitsAtDestination(game, movingUnits, destinationId);
   const projectedDestination = projected.destination;
-  const existingFriendly = (destination.units || []).filter((unit) => unit.controllerId === actorId
-    && !movingIds.has(unit.instanceId));
   const enemyUnits = (projectedDestination.units || []).filter((unit) => unit.controllerId !== actorId);
   const friendlyUnits = (projectedDestination.units || []).filter((unit) => unit.controllerId === actorId);
-  const before = estimatedForceMight(existingFriendly, "attacker", enemyUnits, game, destination)
-    - estimatedForceMight(enemyUnits, "defender", existingFriendly, game, destination);
   const attackingMight = estimatedForceMight(friendlyUnits, "attacker", enemyUnits,
     projected.game, projectedDestination);
   const defendingMight = estimatedForceMight(enemyUnits, "defender", friendlyUnits,
@@ -551,7 +602,7 @@ function computeMovementProfile(game, actorId, action, destinationId) {
   const after = attackingMight - defendingMight;
   const enemyLethalThreshold = minimumLegalLethal(enemyUnits, "defender", projected.game, projectedDestination);
   const friendlyLethalThreshold = minimumLegalLethal(friendlyUnits, "attacker", projected.game, projectedDestination);
-  const canRemoveEnemyNoResponse = enemyUnits.length > 0
+  const canRemoveEnemyNoResponse = !projected.unresolved && enemyUnits.length > 0
     && enemyLethalThreshold > 0
     && attackingMight >= enemyLethalThreshold;
   const enemyCanRemoveFriendly = enemyUnits.length > 0
@@ -561,11 +612,13 @@ function computeMovementProfile(game, actorId, action, destinationId) {
     attackingMight,
     enemyLethalThreshold,
     friendlyUnits,
-    enemyUnits
+    enemyUnits,
+    triggersApplied: projected.triggersApplied,
+    projectedGame: projected.game
   });
   const tacticalRemovalPossible = enemyUnits.length > 0 && !canRemoveEnemyNoResponse
     && followup.removalPossible;
-  const noOpponentImpact = enemyUnits.length > 0
+  const noOpponentImpact = !projected.unresolved && enemyUnits.length > 0
     && !canRemoveEnemyNoResponse
     && !tacticalRemovalPossible;
   const hopelessReinforcement = noOpponentImpact && enemyCanRemoveFriendly;
@@ -576,7 +629,7 @@ function computeMovementProfile(game, actorId, action, destinationId) {
   const temporaryCreatesCleanBreakthrough = canRemoveEnemyNoResponse
     && !canRemoveWithoutTemporary
     && !enemyCanRemoveFriendly;
-  const strictlyBeneficial = !sourceControlRisk
+  const strictlyBeneficial = !projected.unresolved && !sourceControlRisk
     && !enemyCanRemoveFriendly
     && (controlGain || canRemoveEnemyNoResponse);
   const prior = noOpponentImpact ? -2
@@ -589,6 +642,7 @@ function computeMovementProfile(game, actorId, action, destinationId) {
     destinationType: "battlefield",
     movingUnitCount: movingUnits.length,
     movingMight,
+    movementTriggersUnresolved: Boolean(projected.unresolved),
     attackingMight,
     defendingMight,
     enemyLethalThreshold,
@@ -645,7 +699,7 @@ function movementTacticalFollowup(game, actorId, movingUnits, destination, conte
     (effect?.timing === "attackOrDefend" && (!effect.role || effect.role === "attacker"))
       || effect?.timing === "showdownBeginsHere"));
   const sourceFieldEffects = sourceFields.flatMap((field) => (field.effects || []).filter((effect) => effect?.timing === "onMove"));
-  const triggerPotential = [
+  const triggerPotential = context.triggersApplied ? emptyCombatPotential() : [
     ...movingEffects,
     ...participantEffects,
     ...sourceFieldEffects,
@@ -654,8 +708,8 @@ function movementTacticalFollowup(game, actorId, movingUnits, destination, conte
     emptyCombatPotential());
 
   const ambushDestinationEligible = context.friendlyUnits.length > 0;
-  const resourceGame = withMovementCostsPaid(game, movingUnits);
-  const handCandidates = (actor.hand || []).filter((card) =>
+  const resourceGame = context.projectedGame || withMovementCostsPaid(game, movingUnits);
+  const handCandidates = (player(resourceGame, actorId)?.hand || []).filter((card) =>
     cardReactionPermissionSources(card, { ambushDestinationEligible }).length > 0
     && cardResourceAffordability(resourceGame, actorId, card).payable);
   const hiddenCandidates = (destination.hidden || [])
@@ -720,6 +774,9 @@ function combatEffectPotential(specs, actorId) {
       if ((signed > 0 && !enemyOnly) || (signed < 0 && !friendlyOnly)) {
         result.swing = Math.max(result.swing, Math.abs(signed));
       }
+    } else if (["givekeyword", "grantkeyword"].includes(kind)
+      && (spec.keywords || []).some(keyword => /^(assault|shield)(?:\s|$)/i.test(keyword))) {
+      result.swing = Math.max(result.swing, amount || 1);
     } else if (/might|buff|reduce|weaken/.test(kind) && amount > 0) {
       result.swing = Math.max(result.swing, amount);
     } else if (["onMove", "attackOrDefend", "showdownBeginsHere"].includes(spec?.timing) && amount > 0
@@ -757,6 +814,9 @@ function estimatedForceMight(units, role, enemies, game = null, battlefield = nu
   const opposingRole = role === "attacker" ? "defender" : "attacker";
   return (units || []).reduce((sum, unit) => {
     if (unit.stunned) return sum;
+    const noDamage = (unit.effects || []).find(effect => effect.timing === 'static' && effect.kind === 'doesNotDealCombatDamage');
+    if (noDamage && (!noDamage.unlessExactlyOneOtherFriendlyHere
+      || units.filter(ally => ally.instanceId !== unit.instanceId).length !== 1)) return sum;
     const might = estimatedCombatMight(unit, role, game, battlefield);
     const suppressed = (enemies || []).some((enemy) => hasStaticEffectApprox(enemy, "suppressWeakerEnemyCombatDamage")
       && might < estimatedCombatMight(enemy, opposingRole, game, battlefield));
@@ -768,8 +828,9 @@ function minimumLegalLethal(units, role, game = null, battlefield = null) {
   if (!(units || []).length) return 0;
   const active = units.map((unit) => ({
     unit,
-    tank: hasKeywordApprox(unit, "Tank"),
-    backline: hasKeywordApprox(unit, "Backline") || hasStaticEffectApprox(unit, "combatDamageAssignmentLast")
+    tank: game ? cardHasKeyword(game, unit, "Tank") : hasKeywordApprox(unit, "Tank"),
+    backline: (game ? cardHasKeyword(game, unit, "Backline") : hasKeywordApprox(unit, "Backline"))
+      || hasStaticEffectApprox(unit, "combatDamageAssignmentLast")
   }));
   const tanks = active.filter((item) => item.tank && !item.backline);
   const conflicting = active.filter((item) => item.tank && item.backline);
@@ -797,17 +858,75 @@ function estimatedCombatMight(unit, role, game = null, battlefield = null) {
 }
 
 function withUnitsAtDestination(game, movingUnits, destinationId) {
+  // Most moves need only a projected board. Triggered changes (including a
+  // defending legend's debuff) must instead use the engine's move/chain flow.
+  // Never guess a target or payment when that flow stops for a choice.
+  const publicSources = (game.players || []).flatMap(player => [player.legend,
+    ...(player.base || [])]).concat((game.battlefields || []).flatMap(field => [field, ...field.units])).filter(Boolean);
+  const hasTriggers = publicSources.some(card => [card, ...(card.attachments || [])].some(source =>
+    (source.effects || []).some(effect => ['onMove','attackOrDefend','showdownBeginsHere'].includes(effect.timing)
+      || effect.kind === 'enemyAttacksControlledBattlefieldMightReduction')));
+  if (hasTriggers && !game.pendingChoice && !game.pendingPayment && !game.showdown && !game.actionChain) {
+    const projected = cloneAiState(game);
+    const unknown = id => ({instanceId:id,type:'unknown',effects:[],keywords:[]});
+    for (const player of projected.players) {
+      player.mainDeck=(player.mainDeck||[]).map((_,i)=>unknown(`move-unseen-deck-${player.id}-${i}`));
+      if (player.id!==movingUnits[0]?.controllerId) player.hand=(player.hand||[]).map((_,i)=>unknown(`move-unseen-hand-${player.id}-${i}`));
+    }
+    for (const field of projected.battlefields) field.hidden=(field.hidden||[]).map((hidden,i)=>
+      hiddenCardIsControlledBy(hidden,movingUnits[0]?.controllerId)?hidden:{...hidden,card:unknown(`move-unseen-hidden-${field.instanceId}-${i}`)});
+    const unknownTriggerOutcome=publicSources.some(card=>[card,...(card.attachments||[])].some(source=>
+      (source.effects||[]).some(effect=>['onMove','attackOrDefend','showdownBeginsHere'].includes(effect.timing)
+        && /draw|deck|reveal|predict|random/i.test(JSON.stringify(effect)))));
+    projected.interactive = true;
+    projected.manualActionChainPriority = true;
+    if (moveUnits(projected, movingUnits.map(unit => unit.instanceId), destinationId).ok) {
+      let passes = 0;
+      while (!projected.pendingChoice && !projected.pendingPayment && passes++ < 32
+        && ((projected.showdown?.chain?.length || 0) > 0 || projected.actionChain)) {
+        if (!passShowdown(projected, actingPlayer(projected)?.id).ok) break;
+      }
+      const destination = projected.battlefields.find(field => field.instanceId === destinationId || field.id === destinationId);
+      const unresolved=Boolean(unknownTriggerOutcome || projected.pendingChoice || projected.pendingPayment || projected.actionChain
+        || projected.showdown?.chain?.length || projected.stagedEvents?.length);
+      if (destination || destinationId === 'base') return {game:projected,destination,unresolved,triggersApplied:!unresolved};
+    }
+  }
   const movingIds = new Set((movingUnits || []).map((unit) => unit.instanceId));
+  const attackerId = movingUnits[0]?.controllerId;
+  const sourceDestination = game.battlefields?.find(field => field.instanceId === destinationId || field.id === destinationId);
+  const combat = sourceDestination?.units.some(unit => unit.controllerId !== attackerId);
+  const copies = new Map();
+  const copy = (unit, atDestination = false) => {
+    if (!unit) return unit;
+    if (copies.has(unit.instanceId)) return copies.get(unit.instanceId);
+    const result = { ...unit };
+    if (movingIds.has(unit.instanceId)) result.exhausted = true;
+    // Role-dependent auras inspect the other participants' designations as
+    // well as the role argument passed to currentCombatMight. Set every role
+    // together, on copies, before asking the engine for either side's Might.
+    if (combat && atDestination) result.combatRole = unit.controllerId === attackerId ? 'attacker' : 'defender';
+    else if (combat || movingIds.has(unit.instanceId)) delete result.combatRole;
+    copies.set(unit.instanceId, result);
+    return result;
+  };
   const players = (game.players || []).map((candidate) => ({
     ...candidate,
-    base: (candidate.base || []).filter((unit) => !movingIds.has(unit.instanceId))
+    base: (candidate.base || []).filter((unit) => !movingIds.has(unit.instanceId)).map(unit => copy(unit))
   }));
   const battlefields = (game.battlefields || []).map((field) => ({
     ...field,
     units: (field.units || []).filter((unit) => !movingIds.has(unit.instanceId))
+      .map(unit => copy(unit, field === sourceDestination))
   }));
   const destination = battlefields.find((field) => field.instanceId === destinationId || field.id === destinationId);
-  if (destination) destination.units = [...destination.units, ...(movingUnits || [])];
+  if (destination) destination.units.push(...movingUnits.map(unit => copy(unit, true)));
+  else if (destinationId === 'base') {
+    for (const unit of movingUnits) players.find(player => player.id === unit.controllerId)?.base.push(copy(unit));
+  }
+  // A played champion can alias a board unit. Keep its global aura pointing
+  // at the same projected object instead of the pre-move object.
+  for (const player of players) if (copies.has(player.champion?.instanceId)) player.champion = copies.get(player.champion.instanceId);
   return { game: { ...game, players, battlefields }, destination };
 }
 
@@ -845,20 +964,19 @@ function playTargetRisk(game, actorId, action, source) {
   return 0;
 }
 
-function fieldBalance(field, actorId, excludedId = null) {
-  return fieldMight(field, actorId, true, excludedId) - fieldMight(field, actorId, false, excludedId);
+function fieldBalance(game, field, actorId, excludedId = null) {
+  return fieldMight(game, field, actorId, true, excludedId) - fieldMight(game, field, actorId, false, excludedId);
 }
 
-function fieldMight(field, actorId, friendly, excludedId = null) {
+function fieldMight(game, field, actorId, friendly, excludedId = null) {
   const excluded = excludedId instanceof Set ? excludedId : new Set(excludedId ? [excludedId] : []);
   return (field?.units || []).filter((unit) => !excluded.has(unit.instanceId)
     && (unit.controllerId === actorId) === friendly)
-    .reduce((sum, unit) => sum + currentUnitMight(unit), 0);
+    .reduce((sum, unit) => sum + currentMight(game, unit), 0);
 }
 
-function currentUnitMight(unit) {
-  return Math.max(0, Number(unit?.might || 0) + Number(unit?.mightModifier || 0)
-    + Number(unit?.buffs || 0) - Number(unit?.damage || 0));
+function remainingUnitDurability(game, unit) {
+  return unit ? Math.max(0, currentMight(game, unit) - (Number(unit.damage) || 0)) : 0;
 }
 
 function unitLocation(game, unitId) {

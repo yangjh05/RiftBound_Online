@@ -1,5 +1,6 @@
-import { createHash } from "node:crypto";
 import { STATE_DIM } from "./encoding.mjs";
+import { validLeafAuditSchedule } from "./leaf-audit-schedule.mjs";
+import { sha256Hex } from "./sha256.mjs";
 import { validPublicStructuredEvidenceSnapshot } from "./structured-evidence.mjs";
 import {
   ACTION_EVIDENCE_GRADES,
@@ -441,6 +442,10 @@ export function validLeafActionEffectComparison(value) {
     && value.provenance.independentSeedContract === true
     && value.provenance.determinizationRequired === true
     && validSequentialLeafAuditContract(sequential, attemptedPairs)
+    && (value.samplingFrame?.plannedFinalSimulations == null
+      || Number(value.samplingFrame.plannedFinalSimulations) === attemptedPairs
+      || (sequential?.version === 5
+        && Number(value.samplingFrame.plannedFinalSimulations) === sequential.finalSimulations))
     && approximatelyEqual(
       sequential.perStageConfidence,
       audit.confidence
@@ -459,6 +464,18 @@ export function validLeafActionEffectComparison(value) {
 }
 
 function validSequentialLeafAuditContract(sequential, attemptedPairs) {
+  if (sequential?.version === 5) return validLeafAuditSchedule(sequential, attemptedPairs);
+  if (sequential?.version === 4) {
+    // One bank committed before any final outcomes are observed; never an
+    // extension chosen after looking at an earlier final confidence bound.
+    return Number.isInteger(Number(sequential.finalSimulations))
+      && Number(sequential.finalSimulations) > 0
+      && Number(sequential.finalSimulations) <= 1024
+      && Number(sequential.completedStage) === Number(sequential.finalSimulations)
+      && attemptedPairs === Number(sequential.finalSimulations)
+      && sequential.evidenceSeedUse === "single-fixed-final-bank-v1"
+      && sequential.confidenceSpending === "single-precommitted-final-look-v1";
+  }
   if (sequential?.version === 1) {
     return validLeafAuditStageSchedule(sequential?.stages)
       && sequential.stages.includes(Number(sequential.completedStage))
@@ -499,7 +516,9 @@ export function validLeafAuditSamplingFrame(frame) {
     && frame.contract === "leaf-audit-sampling-frame-v1";
   const reservoirNatural = frame.version === 2
     && frame.contract === "natural-leaf-audit-sampling-frame-v2";
-  if ((!legacyNatural && !reservoirNatural)
+  const mixtureNatural = frame.version === 3
+    && frame.contract === "natural-leaf-audit-sampling-frame-v3";
+  if ((!legacyNatural && !reservoirNatural && !mixtureNatural)
     || typeof frame.datasetKey !== "string" || !frame.datasetKey
     || !Number.isInteger(Number(frame.taskIndex))
     || Number(frame.taskIndex) < 0
@@ -511,17 +530,20 @@ export function validLeafAuditSamplingFrame(frame) {
           === "precommitted-bernoulli-policy-decision-v1")
         || (reservoirNatural && frame.candidateSelection
           === "hash-priority-reservoir-policy-decision-v1")
+        || (mixtureNatural && frame.candidateSelection
+          === "hash-priority-mixture-reservoir-policy-decision-v1")
       )
       || !(probability > 0 && probability <= 1)
       || (legacyNatural && frame.targeted !== false)
-      || (reservoirNatural && (
+      || ((reservoirNatural || mixtureNatural) && (
         !Number.isInteger(Number(frame.eligibleDecisions))
         || Number(frame.eligibleDecisions) < 1
-        || Math.abs(probability
-          - 1 / Number(frame.eligibleDecisions)) > 1e-12
+        || (reservoirNatural && Math.abs(probability
+          - 1 / Number(frame.eligibleDecisions)) > 1e-12)
         || frame.weighting !== "inverse-propensity-per-decision-v1"
         || typeof frame.parentTaskManifestHash !== "string"
       ))
+      || (mixtureNatural && !validNaturalMixturePopulation(frame))
     ))
     || (targeted && (
       !legacyNatural
@@ -532,11 +554,32 @@ export function validLeafAuditSamplingFrame(frame) {
       || frame.targeted !== true
     ))) return false;
   const { taskManifestHash, ...committed } = frame;
-  const expected = createHash("sha256")
-    .update(JSON.stringify(committed))
-    .digest("hex");
+  const expected = sha256Hex(JSON.stringify(committed));
   return typeof taskManifestHash === "string"
     && taskManifestHash === expected;
+}
+
+function validNaturalMixturePopulation(frame) {
+  const phases = ["mulligan", "early", "mid", "late", "unknown"];
+  const counts = frame.phaseDecisionCounts || {};
+  const probabilities = frame.channelProbabilities || {};
+  if (Object.keys(counts).length !== phases.length
+    || phases.some(phase => !Number.isSafeInteger(counts[phase]) || counts[phase] < 0)
+    || phases.reduce((sum, phase) => sum + counts[phase], 0) !== frame.eligibleDecisions
+    || Object.keys(probabilities).length !== 3
+    || probabilities.population !== 0.25 || probabilities.mulligan !== 0.5
+    || probabilities.early !== 0.25 || !phases.includes(frame.selectedPhaseBand)
+    || !(counts[frame.selectedPhaseBand] > 0)) return false;
+  const draw = parseInt(sha256Hex(
+    `${frame.parentTaskManifestHash}:natural-mixture-channel-v1`
+  ).slice(0, 8), 16) / 0x100000000;
+  const channel = draw < 0.25 ? "population" : draw < 0.75 ? "mulligan" : "early";
+  if (frame.samplingChannel !== channel
+    || (channel !== "population" && frame.selectedPhaseBand !== channel)) return false;
+  const expected = 0.25 / frame.eligibleDecisions
+    + (frame.selectedPhaseBand === "mulligan" ? 0.5 / counts.mulligan : 0)
+    + (frame.selectedPhaseBand === "early" ? 0.25 / counts.early : 0);
+  return Math.abs(frame.selectionProbability - expected) <= 1e-12;
 }
 
 function approximatelyEqual(left, right, tolerance = 1e-12) {

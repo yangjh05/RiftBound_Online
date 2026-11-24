@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-09-21T19:16:40.549Z",
+  "source": {
+    "authority": "Riot Games",
+    "url": "https://playriftbound.com/ko-kr/news/announcements/koreas-rift-opens-on-september-18/",
+    "method": "공식 발표 이미지의 카드 번호와 한국어 인쇄 문구를 직접 판독했습니다. rect는 발표 이미지에서 카드 바깥 여백을 제외하는 공식 CDN 표시 옵션입니다."
+  },
+  "cards": [
+    {
+      "cardNumber": "OGN-303a/298",
+      "name": "구미호",
+      "subtitle": null,
+      "englishName": "Nine-Tailed Fox",
+      "englishSubtitle": null,
+      "type": "legend",
+      "superTypes": [],
+      "domains": [
+        "Calm",
+        "Mind"
+      ],
+      "energy": null,
+      "power": 0,
+      "might": null,
+      "tags": [
+        "Ahri"
+      ],
+      "rulesTextHtml": "<p>적 유닛이 내가 통제하는 전장을 공격하면, 해당 유닛에게 -1 :rb_might:을 부여합니다. 1 :rb_might:까지 감소할 수 있습니다.</p>",
+      "englishRulesTextHtml": "<p>When an enemy unit attacks a battlefield you control, give it -1 :rb_might: this turn, to a minimum of 1 :rb_might:.</p>",
+      "imageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/news_live/5460eec92189cb7e00c1c4a740c1146c8ad85c40-1848x1063.jpg?rect=557,19,734,1025&w=734&h=1025",
+      "englishImageUrl": null,
+      "sourceUrl": "https://playriftbound.com/ko-kr/news/announcements/koreas-rift-opens-on-september-18/",
+      "announcementImageUrl": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/news_live/5460eec92189cb7e00c1c4a740c1146c8ad85c40-1848x1063.jpg",
+      "artist": "Allen Song",
+      "printing": "Korea-exclusive Dynasty Ahri"
+    }
+  ]
+}

@@ -10,7 +10,7 @@ const domainNames = {
   Body: "신체",
   Calm: "평정",
   Chaos: "혼돈",
-  Fury: "격노",
+  Fury: "분노",
   Mind: "정신",
   Order: "질서"
 };
@@ -42,13 +42,13 @@ const checks = {
 };
 
 const semanticChecks = {
-  give: { english: /\bgive (?!me\b)/i, korean: /부여/u },
-  gain: { english: /\bgain\b/i, korean: /획득/u },
+  give: { english: /\bgive (?!me\b)/i, korean: /부여|위력을 얻/u },
+  gain: { english: /\bgain\b/i, korean: /획득|얻/u },
   dealDamage: { english: /\bdeal(?:s)?\b[^.\n]*(?:damage|\d)/i, korean: /피해[^.\n]*(?:입히|입힙|입힌|입힐)/u },
   kill: { english: /\bkill\b/i, korean: /처치/u },
   ready: { english: /\bready\b/i, korean: /준비/u },
   exhaust: { english: /\bexhaust\b/i, korean: /탈진/u },
-  draw: { english: /(?<!Quick-)\bdraw\b/i, korean: /(?:카드(?:를|가)?(?:\s*\d+장(?:을|씩)?)?|카드\s*\d+장을|(?:해당|그)\s*카드를|공개하여|그중\s*\d+장을|나머지(?:\s*카드)?를|추방하지 않은 카드는 모두)\s*뽑/u },
+  draw: { english: /(?<!Quick-)\bdraw\b/i, korean: /(?:카드(?:를|가)?(?:\s*\d+장(?:을|씩)?)?|카드\s*\d+장을|\d+장을|(?:해당|그)\s*카드를|공개하여|그중\s*\d+장을|나머지(?:\s*카드)?를|추방하지 않은 카드는 모두)\s*뽑/u },
   discard: { english: /\bdiscard\b/i, korean: /카드(?:를)?(?:\s*\d+장(?:을| 이상)?)?\s*버|카드\s*\d+장을\s*버/u },
   recycle: { english: /\brecycle\b/i, korean: /재활용/u },
   channel: { english: /\bchannel\b/i, korean: /전개/u },
@@ -61,7 +61,7 @@ const semanticChecks = {
 const findings = {};
 for (const [check, pattern] of Object.entries(checks)) {
   findings[check] = rows
-    .filter(({ translation }) => translation?.koText && pattern.test(translation.koText))
+    .filter(({ translation }) => translation?.translationStatus !== "official" && translation?.koText && pattern.test(translation.koText))
     .map(({ card, translation }) => ({
       number: card.cardNumber,
       englishName: card.name,
@@ -87,7 +87,7 @@ for (const [check, patterns] of Object.entries(semanticChecks)) {
 }
 
 findings.awkward = rows
-  .filter(({ translation }) => /효과(?:를|들을) 얻습니다/u.test(translation?.koText || ""))
+  .filter(({ translation }) => translation?.translationStatus !== "official" && /효과(?:를|들을) 얻습니다/u.test(translation?.koText || ""))
   .map(({ card, translation }) => ({
     number: card.cardNumber,
     englishName: card.name,
@@ -101,10 +101,18 @@ findings.missingMarker = rows
   .map(({ card }) => card.cardNumber);
 
 findings.officiallyConfirmed = rows
-  .filter(({ translation }) => translation?.officialTextSource)
+  .filter(({ translation }) => translation?.officialTextSource && translation?.translationStatus !== "unofficial-correction")
   .map(({ card, translation }) => ({
     number: card.cardNumber,
     source: translation.officialTextSource
+  }));
+
+findings.officialCorrections = rows
+  .filter(({ translation }) => translation?.translationStatus === "unofficial-correction")
+  .map(({ card, translation }) => ({
+    number: card.cardNumber,
+    officialText: translation.officialKoText,
+    correction: translation.translationCorrection
   }));
 
 findings.englishName = rows

@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadProjectEnv } from "./load-project-env.mjs";
+import { resolvePublicStaticPath } from "../server/public-static.mjs";
+import { healthPayload, securityHeaders } from "../server/http-security.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 loadProjectEnv(root);
@@ -22,32 +24,33 @@ const types = new Map([
   [".svg", "image/svg+xml; charset=utf-8"]
 ]);
 
-function resolveRequest(url) {
-  const pathname = decodeURIComponent(new URL(url, "http://localhost").pathname);
-  if (pathname === "/") return path.join(root, "index.html");
-  const normalized = path.normalize(pathname).replace(/^(\.\.[/\\])+/, "");
-  const filePath = path.join(root, normalized);
-  if (!filePath.startsWith(root)) return null;
-  return filePath;
-}
-
 async function handleRequest(req, res) {
+  if (req.method === "GET" && (req.url === "/health" || req.url === "/health/ready")) {
+    res.writeHead(200, securityHeaders({
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8"
+    }));
+    res.end(JSON.stringify(healthPayload()));
+    return;
+  }
   if (await handleUpdateRequest(req, res, { root })) return;
   if (await handleMultiplayerRequest(req, res)) return;
 
-  const filePath = resolveRequest(req.url || "/");
+  const filePath = resolvePublicStaticPath(root, req.url || "/");
   if (!filePath) {
-    res.writeHead(403);
+    res.writeHead(403, securityHeaders({ "content-type": "text/plain; charset=utf-8" }));
     res.end("Forbidden");
     return;
   }
 
   try {
     const data = await fs.readFile(filePath);
-    res.writeHead(200, { "content-type": types.get(path.extname(filePath)) || "application/octet-stream" });
+    res.writeHead(200, securityHeaders({
+      "content-type": types.get(path.extname(filePath)) || "application/octet-stream"
+    }));
     res.end(data);
   } catch {
-    res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+    res.writeHead(404, securityHeaders({ "content-type": "text/plain; charset=utf-8" }));
     res.end("Not found");
   }
 }
@@ -59,7 +62,7 @@ const server = http.createServer((req, res) => {
       if (!res.writableEnded && !res.destroyed) res.destroy();
       return;
     }
-    res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
+    res.writeHead(500, securityHeaders({ "content-type": "text/plain; charset=utf-8" }));
     res.end("Internal server error");
   });
 });

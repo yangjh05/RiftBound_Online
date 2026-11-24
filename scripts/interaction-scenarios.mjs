@@ -69,6 +69,7 @@ function runScenario({ moverCard, payloadCard, destinationMode, withObserver, wi
 
   const interactionBefore = captureInteractionState(game);
   const rulesBefore = captureRuleState(game);
+  const moveOperationId = `operation-${(game.nextOperationSequence || 0) + 1}`;
   const result = moveUnit(game, mover.instanceId, destination.instanceId);
   if (!result.ok) fail("move was rejected");
   assertRuleTransition(rulesBefore, game, { kind: "standardMove", unitIds: [mover.instanceId], ok: true });
@@ -76,8 +77,10 @@ function runScenario({ moverCard, payloadCard, destinationMode, withObserver, wi
   for (const key of causalInteractionCoverageKeys(interactionBefore, game, "move-and-settle")) coverage.add(key);
   validateStableGameState(game);
   assertRuleState(game, { action: "synthesized movement settled" });
-  const operation = (game.operations || []).find((candidate) => candidate.data?.unitIds?.includes(mover.instanceId));
-  if (!operation || operation.status !== "completed") fail(`move operation did not complete (${operation?.status || "missing"})`);
+  const operation = (game.operations || []).find((candidate) => candidate.id === moveOperationId);
+  const completed = (game.lifecycleEvents || []).some((event) =>
+    event.operationId === moveOperationId && event.kind === "move" && event.event === "completed");
+  if (operation || !completed) fail(`move operation did not complete (${operation?.status || "missing"})`);
   const destinationShowdownActive = game.phase === "showdown"
     && game.showdown?.battlefieldId === destination.instanceId;
   const destinationStagedEvent = (game.stagedEvents || [])

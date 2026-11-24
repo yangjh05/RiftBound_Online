@@ -13,6 +13,7 @@ import { hydrateWorkerModel } from "../src/ai/neural/selfplay.mjs";
 import { runIndependentActionAuditSeedBatch } from "../src/ai/neural/teacher.mjs";
 import { readActionAuditOptionsHandoff } from "./ai-action-audit-options-handoff.mjs";
 import { validateActionAuditTask } from "./ai-action-audit-task-contract.mjs";
+import { restoreGameReferences } from "./game-state-references.mjs";
 
 let initialized = false;
 let learner = null;
@@ -155,6 +156,7 @@ function hydrateCandidate(payload) {
   if (!snapshot?.game || !snapshot?.actorId || !snapshot?.descriptor) {
     throw new Error("Detached action-audit candidate archive is invalid.");
   }
+  if (snapshot.gameReferences) restoreGameReferences(snapshot.game, snapshot.gameReferences);
   const manifest = snapshot.descriptor?.evidenceProtocolManifest;
   const protocolEnabled = validActionEvidenceProtocolManifest(manifest);
   if (protocolEnabled

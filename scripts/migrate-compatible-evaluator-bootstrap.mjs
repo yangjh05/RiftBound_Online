@@ -17,7 +17,8 @@ import {
 } from "../src/ai/neural/audit-strata.mjs";
 import { renameWithRetry } from "./file-replace.mjs";
 import {
-  commitEvaluatorBootstrapSummary
+  commitEvaluatorBootstrapSummary,
+  evaluatorBootstrapSummaryMatchesArchive
 } from "./evaluator-bootstrap-transaction.mjs";
 
 const STATE_FILENAME = "bootstrap-state.json";
@@ -41,7 +42,9 @@ export function migratedEvaluatorBootstrapAllocationState(
     version: 1,
     datasetKey: targetDatasetKey,
     status: "collecting",
-    deckSeatSchedule: {
+    deckSeatSchedule: options.preserveEquivalentTargets === true
+      ? structuredClone(sourceState.deckSeatSchedule)
+      : {
       version: "deck-seat-schedule-v2",
       boundaryGameIndex: Number(options.migratedGames) || 0,
       activatedAt: migratedAt
@@ -119,6 +122,10 @@ export async function migrateCompatibleEvaluatorBootstrap(options = {}) {
         const archiveName = summaryName.replace(/\.summary\.json$/, ".json.gz");
         const archivePath = path.join(sourceDirectory, archiveName);
         const summary = await readJson(summaryPath);
+        if (options.preserveEquivalentTargets === true
+          && !await evaluatorBootstrapSummaryMatchesArchive(archivePath, summaryPath, summary)) {
+          throw new Error(`Equivalent migration requires a committed source archive: ${archiveName}`);
+        }
         if (summary?.datasetKey !== sourceDatasetKey
           || !Number.isInteger(Number(summary.workerIndex))
           || !Number.isInteger(Number(summary.gameIndex))) {
@@ -156,6 +163,8 @@ export async function migrateCompatibleEvaluatorBootstrap(options = {}) {
             trajectory,
             targetEngineFingerprint,
             {
+              preserveEquivalentTargets: options.preserveEquivalentTargets === true,
+              verifiedEquivalentSemantics: options.verifiedEquivalentSemantics === true,
               behaviorTemperature:
                 Number(trajectory.steps?.[0]?.behaviorTemperature) || 0.85,
               learningTargetVersion: trajectory.learningTargetVersion,
@@ -185,7 +194,7 @@ export async function migrateCompatibleEvaluatorBootstrap(options = {}) {
             sourceHoldoutObserved:
               sourceCertificationRole != null
           };
-          reclassifyTrajectoryAuditStrata(migrated);
+          if (options.preserveEquivalentTargets !== true) reclassifyTrajectoryAuditStrata(migrated);
           trajectories.push(migrated);
           migratedTrajectories += 1;
         }
@@ -272,6 +281,7 @@ export async function migrateCompatibleEvaluatorBootstrap(options = {}) {
     toEngineFingerprint: targetEngineFingerprint,
     migratedGames,
     migratedTrajectories,
+    policyReturnsPreserved: options.preserveEquivalentTargets === true,
     holdoutRolePolicy,
     roleReassignments,
     holdoutIndependence: holdoutRolePolicy
@@ -290,6 +300,7 @@ export async function migrateCompatibleEvaluatorBootstrap(options = {}) {
       targetDatasetKey,
       migratedAt,
       migratedGames,
+      preserveEquivalentTargets: options.preserveEquivalentTargets === true,
       compatibilityMigration
     })
   );
@@ -321,7 +332,9 @@ export async function migrateCompatibleEvaluatorBootstrap(options = {}) {
     roleReassignments,
     targetBackedUp,
     backupDirectory: targetBackedUp ? backupDirectory : null,
-    deckSeatScheduleBoundaryGameIndex: migratedGames
+    deckSeatScheduleBoundaryGameIndex: options.preserveEquivalentTargets === true
+      ? sourceState.deckSeatSchedule?.boundaryGameIndex ?? null
+      : migratedGames
   };
 }
 

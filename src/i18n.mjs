@@ -35,7 +35,7 @@ const KEYWORD_TRANSLATIONS = {
   Predict: { ko: "예측", confirmed: false },
   Stun: { ko: "기절", confirmed: true },
   Add: { ko: "추가", confirmed: true },
-  Mighty: { ko: "강력", confirmed: false },
+  Mighty: { ko: "위력적", confirmed: true },
   Empower: { ko: "강화", confirmed: true },
   Empowered: { ko: "강화됨", confirmed: true },
   Flow: { ko: "흐름", confirmed: false },
@@ -56,7 +56,7 @@ const DOMAIN_TRANSLATIONS = {
   Body: "신체",
   Calm: "평정",
   Chaos: "혼돈",
-  Fury: "격노",
+  Fury: "분노",
   Mind: "정신",
   Order: "질서",
   Any: "힘"
@@ -185,7 +185,7 @@ const UI_KO = {
   restartConfirmTitle: "새 게임을 시작하시겠습니까?",
   restartConfirmDetail: "현재 진행 상황을 초기화하고 처음부터 다시 시작합니다.",
   surrenderConfirmTitle: "게임을 포기하시겠습니까?",
-  surrenderConfirmDetail: "현재 게임을 종료하고 메뉴로 돌아갑니다.",
+  surrenderConfirmDetail: "현재 게임을 종료하고 결과 화면으로 이동합니다.",
   gameEnded: "게임 종료",
   victory: "승리",
   defeat: "패배",
@@ -475,7 +475,7 @@ const UI_EN = {
   restartConfirmTitle: "Start a new game?",
   restartConfirmDetail: "This resets the current match and starts again from the beginning.",
   surrenderConfirmTitle: "Surrender this game?",
-  surrenderConfirmDetail: "This ends the current match and returns to the menu.",
+  surrenderConfirmDetail: "This ends the current game and opens the result screen.",
   gameEnded: "Game Over",
   victory: "Victory",
   defeat: "Defeat",
@@ -713,8 +713,15 @@ export function translateKeywordList(keywords = [], locale = LOCALES.EN) {
 
 export function translateCardName(card, locale = LOCALES.EN) {
   if (locale !== LOCALES.KO) return card?.name || "";
+  if (cardKo(card)?.koName) return cardKo(card).koName;
   if (card?.type === "rune") return `${translateDomain(card.domain || card.domains?.[0] || "Any", locale)} 룬`;
   return cardKo(card)?.koName || card?.translations?.ko?.name || card?.name || "";
+}
+
+export function translateCardImage(card, locale = LOCALES.EN) {
+  if (!card || card.redacted) return "";
+  if (locale === LOCALES.KO && cardKo(card)?.koImageUrl) return cardKo(card).koImageUrl;
+  return card?.image || "";
 }
 
 export function translateCardText(cardOrText, locale = LOCALES.EN) {
@@ -723,6 +730,8 @@ export function translateCardText(cardOrText, locale = LOCALES.EN) {
   if (locale !== LOCALES.KO) return text;
   const translation = cardKo(card);
   if (translation?.printedTextEmpty) return "";
+  // Official wording and reviewed corrections must not pass through legacy rewrites.
+  if (translation?.translationStatus) return translation.koText;
   if (!text) return text;
   const translated = translation?.koText || `비공식 번역\n${text}`;
   return normalizeKoreanCardTerminology(translated);

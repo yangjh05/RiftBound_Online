@@ -1903,7 +1903,7 @@
   width: min(720px, calc(100vw - var(--tt-action-rail) - 24px));
 }
 
-.tabletop-layout .tutorial-panel { z-index: 130; }
+.tabletop-layout .tutorial-panel { z-index: 230; }
 .tabletop-layout .cinematic-impact { z-index: 120; }
 .tabletop-layout .tabletop-overlay-root > .floating-panels.has-modal { z-index: 240; }
 .tabletop-layout .tabletop-overlay-root > .modal-panel { z-index: 260; }
@@ -2026,6 +2026,51 @@
   .tabletop-layout .floating-panels .intel-panel {
     width: min(390px, 46vw);
   }
+}
+
+/* Mobile tutorial steps keep the current target above the compact coach
+   panel. Welcome and completion remain true modal dialogs. */
+@media (max-width: 760px) {
+  .tabletop-layout .tutorial-panel:not(.tutorial-step-welcome):not(.tutorial-step-complete) {
+    z-index: 190;
+    max-height: min(28dvh, 220px);
+  }
+
+  .tabletop-layout .tutorial-panel:is(
+    .tutorial-step-open-hand,
+    .tutorial-step-play-unit,
+    .tutorial-step-play-spell,
+    .tutorial-step-play-power-unit,
+    .tutorial-step-move-unit,
+    .tutorial-step-move-attacker,
+    .tutorial-step-pass-showdown,
+    .tutorial-step-choose-spell-target,
+    .tutorial-step-confirm-spell-target,
+    .tutorial-step-confirm-payment
+  ) {
+    top: auto;
+    bottom: 5px;
+  }
+
+  .tabletop-layout.tutorial-active :is(.location-band, .board-band, .table-command-layer):has(.tutorial-target) {
+    position: relative;
+    z-index: 235;
+  }
+
+  .tabletop-layout.tutorial-active .rune-card-chip.tutorial-target {
+    z-index: 236 !important;
+  }
+
+  .tabletop-layout.tutorial-active .table-seat.payment-seat .resource-row.rune-card-stack:has(.tutorial-target) {
+    z-index: 237;
+    overflow: visible !important;
+    pointer-events: auto !important;
+  }
+
+  .tabletop-layout.tutorial-active .table-seat.payment-seat :is(.rune-summary, .resource-zone > .zone-caption) {
+    pointer-events: none !important;
+  }
+
 }
 
 @media (max-width: 760px) {
@@ -3087,7 +3132,8 @@
     --tt-player-row: 196px;
     --tt-pile-dock-width: calc(var(--tt-shelf-card-width) * 3 + 8px);
     --tt-identity-track: clamp(220px, 18vw, 272px);
-    --tt-resource-track: clamp(220px, 18vw, 280px);
+    /* Share spare shelf width with the Base instead of capping Runes at 280px. */
+    --tt-resource-track: minmax(clamp(220px, 18vw, 280px), 0.9fr);
     --tt-opponent-hand-peek: 64px;
     --tt-opponent-shelf-card: 56px;
     --tt-opponent-rune-card: 54px;
@@ -8038,10 +8084,6 @@
   box-shadow: 0 0 0 2px rgba(3, 19, 30, 0.82), 0 0 18px rgba(62, 193, 245, 0.5);
 }
 
-.tabletop-layout .choice-card-selectable:not(.choice-card-staged) {
-  animation: tabletop-choice-pulse 1.6s ease-in-out infinite;
-}
-
 .tabletop-layout .choice-card-staged,
 .tabletop-layout .choice-card-committed {
   z-index: 74 !important;
@@ -8956,6 +8998,8 @@
 .tabletop-layout .hand-card-drag-ghost,
 body > .hand-card-drag-ghost {
   position: fixed;
+  top: 0;
+  left: 0;
   z-index: 320;
   width: var(--tt-hand-card-width);
   aspect-ratio: 5 / 7;
@@ -8964,7 +9008,7 @@ body > .hand-card-drag-ghost {
   border-radius: 8px;
   opacity: 0.9;
   box-shadow: 0 16px 34px rgba(0, 0, 0, 0.55), 0 0 20px rgba(71, 199, 244, 0.48);
-  transform: translate(-50%, -50%) rotate(2deg);
+  transform: translate3d(var(--drag-x, 0), var(--drag-y, 0), 0) translate(-50%, -50%) rotate(2deg);
   pointer-events: none;
 }
 
@@ -9647,6 +9691,8 @@ body > .hand-card-drag-ghost .card-art {
 
 body > .board-card-drag-ghost {
   position: fixed;
+  top: 0;
+  left: 0;
   z-index: 320;
   width: 82px !important;
   height: 115px !important;
@@ -9659,7 +9705,7 @@ body > .board-card-drag-ghost {
   opacity: 0.94;
   background: #071a2a;
   box-shadow: 0 16px 34px rgba(0, 0, 0, 0.55), 0 0 20px rgba(71, 199, 244, 0.48);
-  transform: translate(-50%, -50%) rotate(2deg) !important;
+  transform: translate3d(var(--drag-x, 0), var(--drag-y, 0), 0) translate(-50%, -50%) rotate(2deg) !important;
   pointer-events: none;
 }
 
@@ -9822,6 +9868,141 @@ body > .board-card-drag-ghost > :not(.card-exhaust-layer) {
   }
 }
 
+.tabletop-layout .floating-panels .choice-panel.top-deck-choice-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(720px, 100%) !important;
+  max-width: 720px !important;
+  overflow: hidden !important;
+  padding: 18px;
+}
+
+.top-deck-choice-panel > .section-head,
+.top-deck-choice-actions {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.top-deck-choice-panel > .section-head span {
+  color: #bacbd9;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  letter-spacing: normal;
+}
+
+.top-deck-choice-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+.top-deck-choice-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.top-deck-choice-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #397d99;
+  border-radius: 12px;
+  background: #0d2839;
+  text-align: center;
+}
+
+.top-deck-choice-card.is-recycled {
+  border-color: #e9ae64;
+  background: #34291e;
+}
+
+.top-deck-recycle-toggle {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px;
+  border: 0;
+  background: transparent;
+  color: #ecf6ff;
+}
+
+.top-deck-recycle-toggle .choice-card-art {
+  display: block;
+  width: min(100%, 130px);
+  aspect-ratio: 2 / 3;
+}
+
+.top-deck-recycle-toggle .choice-card-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 8px;
+}
+
+.top-deck-destination {
+  color: #98ddff;
+  font-weight: 800;
+}
+
+.is-recycled .top-deck-destination {
+  color: #ffcd8d;
+}
+
+.top-deck-toggle-label {
+  margin-top: auto;
+  font-size: 0.78rem;
+}
+
+.top-deck-choice-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.top-deck-choice-tools button {
+  flex: 1 1 auto;
+  min-height: 40px;
+}
+
+.top-deck-choice-result {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border-radius: 10px;
+  background: #071a29;
+  overflow-wrap: anywhere;
+}
+
+.top-deck-choice-result p {
+  margin: 0;
+}
+
+.top-deck-choice-result small,
+.top-deck-choice-card > small {
+  color: #a9c3d4;
+}
+
+.top-deck-choice-actions > button {
+  width: 100%;
+  min-height: 44px;
+}
+
+@media (max-height: 740px), (max-width: 600px) {
+  .top-deck-recycle-toggle .choice-card-art {
+    width: min(100%, 100px);
+  }
+}
+
 .tabletop-layout .binary-effect-choice-panel {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 92px;
@@ -9917,7 +10098,7 @@ body > .board-card-drag-ghost > :not(.card-exhaust-layer) {
 
   .tabletop-layout .table-seat.bottom.payment-seat {
     grid-template-columns:
-      clamp(320px, 25vw, 440px)
+      minmax(clamp(320px, 25vw, 440px), 0.9fr)
       minmax(220px, 1fr)
       var(--tt-pile-dock-width)
       var(--tt-identity-track) !important;
@@ -10421,6 +10602,8 @@ body > .board-card-drag-ghost > :not(.card-exhaust-layer) {
 
 body > .champion-card-drag-ghost {
   position: fixed;
+  top: 0;
+  left: 0;
   z-index: 320;
   width: 82px !important;
   height: 115px !important;
@@ -10431,7 +10614,7 @@ body > .champion-card-drag-ghost {
   opacity: 0.96;
   background: #071a2a;
   box-shadow: 0 16px 34px rgba(0, 0, 0, 0.55), 0 0 20px rgba(255, 205, 71, 0.5);
-  transform: translate(-50%, -50%) rotate(2deg) !important;
+  transform: translate3d(var(--drag-x, 0), var(--drag-y, 0), 0) translate(-50%, -50%) rotate(2deg) !important;
   pointer-events: none;
 }
 
@@ -10449,4 +10632,140 @@ body > .champion-card-drag-ghost img {
 
 body > .champion-card-drag-ghost > :not(.identity-orientation-layer) {
   display: none !important;
+}
+
+/* Trigger ordering is a complete decision workspace. The live Chain returns
+   as soon as ordering closes; keeping both visible only starves the options of
+   height and clips their fixed full-card controls. */
+.tabletop-layout:has(.floating-panels > .trigger-order-panel) .chain-pod {
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+.tabletop-layout .chain-zone-content {
+  display: grid !important;
+}
+
+.tabletop-layout .chain-context-panel {
+  min-height: 0 !important;
+  max-height: min(24dvh, 168px) !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  scrollbar-gutter: stable;
+}
+
+.tabletop-layout .chain-target-head {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  padding-bottom: 4px;
+  background: rgba(3, 17, 30, 0.96);
+}
+
+@media (min-width: 1200px) {
+  .tabletop-layout:has(.floating-panels > .trigger-order-panel) .floating-panels.has-blocking-decision,
+  .tabletop-layout:has(.chain-pod):has(.floating-panels > .trigger-order-panel) .floating-panels.has-blocking-decision {
+    top: 8px !important;
+    right: var(--tt-action-rail) !important;
+    bottom: 8px !important;
+    left: 0 !important;
+    place-items: stretch center !important;
+    padding: 10px 14px !important;
+    overflow: hidden !important;
+  }
+
+  .tabletop-layout .floating-panels.has-blocking-decision > .trigger-order-panel {
+    align-self: stretch;
+    width: min(1080px, 100%) !important;
+    max-width: min(1080px, 100%) !important;
+    height: 100% !important;
+    max-height: 100% !important;
+    overflow: hidden !important;
+  }
+
+  .tabletop-layout .trigger-order-panel .trigger-order-grid {
+    display: flex !important;
+    flex-flow: row nowrap !important;
+    align-items: stretch !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+  }
+
+  .tabletop-layout .trigger-order-panel .trigger-order-option-wrap {
+    flex: 0 0 clamp(280px, 29vw, 320px) !important;
+    width: clamp(280px, 29vw, 320px) !important;
+    min-width: 280px !important;
+    max-width: 320px !important;
+    height: 100% !important;
+  }
+
+  .tabletop-layout .trigger-order-panel .trigger-order-option {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    height: 100% !important;
+    min-height: 0 !important;
+  }
+}
+
+@media (max-width: 1199px) {
+  .tabletop-layout:has(.floating-panels > .trigger-order-panel) .floating-panels.has-blocking-decision {
+    position: absolute !important;
+    inset: 4px var(--tt-action-rail) 4px 0 !important;
+    display: grid !important;
+    place-items: stretch center !important;
+    width: auto !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: hidden !important;
+    padding: 6px 8px !important;
+  }
+
+  .tabletop-layout .floating-panels.has-blocking-decision > .trigger-order-panel {
+    position: relative !important;
+    inset: auto !important;
+    align-self: stretch;
+    width: min(980px, 100%) !important;
+    max-width: min(980px, 100%) !important;
+    height: 100% !important;
+    max-height: 100% !important;
+    margin: 0 !important;
+    overflow: hidden !important;
+    transform: none !important;
+  }
+
+  .tabletop-layout .trigger-order-panel .trigger-order-grid {
+    display: flex !important;
+    flex-flow: row nowrap !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+  }
+}
+
+/* The looked-at cards and their final order need a full-height decision area,
+   including while the source trigger remains on the processing queue. */
+.tabletop-layout:has(.floating-panels > .top-deck-choice-panel) .floating-panels.has-blocking-decision,
+.tabletop-layout:has(.chain-pod):has(.floating-panels > .top-deck-choice-panel) .floating-panels.has-blocking-decision {
+  position: absolute !important;
+  inset: 8px 0 !important;
+  display: grid !important;
+  place-items: center !important;
+  width: auto !important;
+  height: auto !important;
+  max-height: none !important;
+  padding: 8px !important;
+  overflow: hidden !important;
+}
+
+.tabletop-layout .floating-panels.has-blocking-decision > .choice-panel.top-deck-choice-panel {
+  position: relative !important;
+  inset: auto !important;
+  height: min(760px, 100%) !important;
+  max-height: 100% !important;
+  margin: 0 !important;
+  transform: none !important;
 }

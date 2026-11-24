@@ -868,7 +868,7 @@ function publishedCardRecord(cardNumber, snapshots = readOfficialCardSnapshots()
     for (const card of snapshot.cards || []) records.set(card.cardNumber, normalizedPublishedCardRecord(card));
   }
   if (records.has(cardNumber)) return records.get(cardNumber);
-  const variant = /^(OGN-\d+)[bs]\/298$/i.exec(cardNumber || "");
+  const variant = /^(OGN-\d+)[abs]\/298$/i.exec(cardNumber || "");
   return variant ? records.get(`${variant[1]}/298`) || null : null;
 }
 

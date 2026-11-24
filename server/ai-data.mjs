@@ -12,7 +12,10 @@ const applicationRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)
 const replayRoot = path.join(root, "replays");
 const spectatorReplayRoot = path.join(root, "selfplay-replays");
 const statusFile = path.join(root, "status.json");
-const MAX_REPLAY_BYTES = 8 * 1024 * 1024;
+export const MAX_AI_REPLAY_BYTES = 8 * 1024 * 1024;
+// The HTTP body wraps the replay in { replay: ... }; storage measures only
+// the replay itself. Keep the two limits aligned without relaxing other APIs.
+export const MAX_AI_REPLAY_REQUEST_BYTES = MAX_AI_REPLAY_BYTES + 1024;
 // Spectator replays contain a board frame per action and are stored gzip
 // compressed. The old 64 MiB limit was applied to the repetitive source JSON,
 // so otherwise healthy long games were rejected even when their archive was
@@ -22,6 +25,7 @@ const MAX_SPECTATOR_REPLAY_SOURCE_BYTES = 512 * 1024 * 1024;
 const MAX_SPECTATOR_REPLAY_ARCHIVE_BYTES = 64 * 1024 * 1024;
 const MAX_AI_CHECKPOINT_BYTES = 64 * 1024 * 1024;
 const MAX_SPECTATOR_REPLAYS = 24;
+const MAX_GENERATION_DISCOVERY_CACHE_ENTRIES = 16;
 export const AI_SPECTATOR_REPLAY_TOO_LARGE =
   "AI_SPECTATOR_REPLAY_TOO_LARGE";
 const gzipAsync = promisify(gzip);
@@ -30,14 +34,23 @@ const generationDiscoveryCache = new Map();
 
 export async function storeAiReplay(payload) {
   const serialized = JSON.stringify(payload || {});
-  if (Buffer.byteLength(serialized) > MAX_REPLAY_BYTES) throw new Error("AI replay is too large.");
+  if (Buffer.byteLength(serialized) > MAX_AI_REPLAY_BYTES) {
+    const error = new Error("AI replay is too large.");
+    error.status = 413;
+    error.code = "ai_replay_too_large";
+    throw error;
+  }
   const id = safeId(payload?.id || `replay-${Date.now()}`);
   if (!id) throw new Error("Invalid AI replay id.");
   await mkdir(replayRoot, { recursive: true });
   const destination = path.join(replayRoot, `${id}.json`);
   const temporary = `${destination}.tmp-${process.pid}-${Date.now()}`;
-  await writeFile(temporary, `${serialized}\n`, "utf8");
-  await renameWithRetry(temporary, destination);
+  try {
+    await writeFile(temporary, `${serialized}\n`, "utf8");
+    await renameWithRetry(temporary, destination);
+  } finally {
+    await unlink(temporary).catch(() => {});
+  }
   return { id };
 }
 
@@ -149,8 +162,12 @@ export async function writeAiStatus(status, targetRoot = root) {
   const targetStatusFile = targetRoot === root ? statusFile : path.join(path.resolve(targetRoot), "status.json");
   await mkdir(path.dirname(targetStatusFile), { recursive: true });
   const temporary = `${targetStatusFile}.tmp-${process.pid}-${Date.now()}`;
-  await writeFile(temporary, `${JSON.stringify({ ...status, updatedAt: new Date().toISOString() }, null, 2)}\n`, "utf8");
-  await renameWithRetry(temporary, targetStatusFile);
+  try {
+    await writeFile(temporary, `${JSON.stringify({ ...status, updatedAt: new Date().toISOString() }, null, 2)}\n`, "utf8");
+    await renameWithRetry(temporary, targetStatusFile);
+  } finally {
+    await unlink(temporary).catch(() => {});
+  }
 }
 
 function safeId(value) {
@@ -216,13 +233,16 @@ async function cachedAiGenerationFiles(options) {
     engineRoot: options.engineRoot ? path.resolve(options.engineRoot) : null
   });
   const cached = generationDiscoveryCache.get(key);
-  if (cached?.expiresAt > Date.now()) return cached.entries;
+  if (cached?.expiresAt > Date.now()) {
+    rememberGenerationDiscovery(key, cached);
+    return cached.entries;
+  }
   if (cached?.promise) return cached.promise;
   const promise = discoverAiGenerationFiles(options);
-  generationDiscoveryCache.set(key, { promise, expiresAt: 0, entries: [] });
+  rememberGenerationDiscovery(key, { promise, expiresAt: 0, entries: [] });
   try {
     const entries = await promise;
-    generationDiscoveryCache.set(key, { entries, expiresAt: Date.now() + 15_000, promise: null });
+    rememberGenerationDiscovery(key, { entries, expiresAt: Date.now() + 15_000, promise: null });
     return entries;
   } catch (error) {
     generationDiscoveryCache.delete(key);
@@ -271,8 +291,29 @@ async function safeReaddir(directory) {
 
 async function writeAtomic(filename, contents) {
   const temporary = `${filename}.tmp-${process.pid}-${Date.now()}`;
-  await writeFile(temporary, contents);
-  await renameWithRetry(temporary, filename);
+  try {
+    await writeFile(temporary, contents);
+    await renameWithRetry(temporary, filename);
+  } finally {
+    await unlink(temporary).catch(() => {});
+  }
+}
+
+function rememberGenerationDiscovery(key, entry) {
+  generationDiscoveryCache.delete(key);
+  generationDiscoveryCache.set(key, entry);
+  if (generationDiscoveryCache.size <= MAX_GENERATION_DISCOVERY_CACHE_ENTRIES) return;
+  const now = Date.now();
+  for (const [candidateKey, candidate] of generationDiscoveryCache) {
+    if (candidateKey === key || candidate.promise || candidate.expiresAt > now) continue;
+    generationDiscoveryCache.delete(candidateKey);
+    if (generationDiscoveryCache.size <= MAX_GENERATION_DISCOVERY_CACHE_ENTRIES) return;
+  }
+  for (const [candidateKey, candidate] of generationDiscoveryCache) {
+    if (candidateKey === key || candidate.promise) continue;
+    generationDiscoveryCache.delete(candidateKey);
+    if (generationDiscoveryCache.size <= MAX_GENERATION_DISCOVERY_CACHE_ENTRIES) return;
+  }
 }
 
 async function pruneSpectatorReplays(directory, limit) {

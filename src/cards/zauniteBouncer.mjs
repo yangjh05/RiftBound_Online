@@ -19,6 +19,7 @@ export default card({
   {
     "timing": "onPlay",
     "kind": "returnBattlefieldUnitToHand",
+    "another": true,
     "optional": false
   }
 ]

@@ -1,6 +1,6 @@
 import { isInherentReaction } from "../rules/keywords.mjs";
 import { currentMight } from "../engine.mjs";
-import { cardResourceAffordability, reactionReserveProfile } from "./resource-strategy.mjs";
+import { cardResourceAffordability, reactionReserveProfile, responseReserveCards } from "./resource-strategy.mjs";
 
 const RESERVATION_ACTIONS = new Set(["endTurn", "passShowdown"]);
 const MAX_RESERVATION_ACTIONS = 24;
@@ -219,12 +219,15 @@ export function compactResourceReservationOutcome(outcome) {
 
 function reservationCandidates(game, playerId, actionKind) {
   const player = game.players.find((candidate) => candidate.id === playerId);
-  const cards = [...(player.hand || []), player.champion?.zone === "played" ? null : player.champion].filter(Boolean);
+  const responses = responseReserveCards(game,playerId);
+  const responseIds = new Set(responses.map(c=>c.instanceId));
+  const cards = [...responses,...(player.hand||[]).filter(c=>!responseIds.has(c.instanceId)),
+    player.champion?.zone === "played" ? null : player.champion].filter(Boolean);
   const threat = reactionReserveProfile(game, playerId).threat;
   const history = game.aiResourceReservationContext?.[playerId]?.cards || {};
   return cards.map((card) => {
     const affordability = cardResourceAffordability(game, playerId, card);
-    const reaction = isInherentReaction(card);
+    const reaction = responseIds.has(card.instanceId);
     const shortfall = Math.max(0, affordability.energyCost - affordability.energyCapacity)
       + Math.max(0, affordability.powerCost - affordability.powerMatched);
     const cardKey = card.instanceId || card.cardNumber;

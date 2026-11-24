@@ -1,3 +1,4 @@
+import {recordablePaymentCommand} from './ai/replay-command.mjs';
 import {
   beginPlayCard,
   beginPlayCardFromTrash,
@@ -61,12 +62,28 @@ import {
   validateDeckRecord as validateDeckRecordByRule
 } from "./decks/rules.mjs";
 import { deckRecordFromText, formatDeckText } from "./decks/text-format.mjs";
-import { beginNextMatchGame, createMatchState, recordMatchGame, submitSideboardConfiguration } from "./match.mjs";
+import { AI_DECK_PRESETS, matchingAiPreset } from './decks/ai-presets.mjs';
+import { DECK_IMAGE_SORT_OPTIONS, deckImageChampionCandidates, deckImageFilename, deckImageModel, renderDeckImage } from "./decks/image-export.mjs";
+import {
+  DEFAULT_ROOM_POOL_ID, STANDARD_BAN_LIST, deckRoomRestrictions,
+  isCardBanned, normalizeRoomDeckOptions, validateRoomDeck
+} from "./decks/legality.mjs";
+import {
+  beginInitialSideboarding,
+  beginNextMatchGame,
+  createMatchState,
+  recordMatchGame,
+  submitSideboardConfiguration,
+  validateSideboardConfiguration
+} from "./match.mjs";
 import {
   configureOnlineServer,
+  configureBugReportServer,
+  configuredBugReportServer,
   configuredMultiplayerServer,
   createOnlineRoom,
   fetchAiGenerationCheckpoint,
+  fetchAiGenerationCheckpointBuffer,
   fetchAiGenerations,
   fetchAiSpectatorReplay,
   fetchAiSpectatorReplays,
@@ -82,6 +99,7 @@ import {
   sendOnlineCommand,
   setOnlineReady,
   signUpAccount,
+  submitBugReport,
   submitOnlineDeck
 } from "./net/client.mjs";
 import {
@@ -91,6 +109,7 @@ import {
   normalizeLocale,
   t,
   translateCardName,
+  translateCardImage,
   translateCardTags,
   translateCardText,
   translateCostDomain,
@@ -106,8 +125,16 @@ import {
   resetPresentationState,
   snapshotPresentationGame
 } from "./presentation.mjs";
-import { activeActorId as aiActiveActorId, applyAiAction, cloneGame, enumerateAiPolicyActions, enumerateLegalActions, resolveLegalAction } from "./ai/actions.mjs";
-import { resolvePlannedPayment } from "./ai/payment-planner.mjs";
+import {
+  actionKey,
+  activeActorId as aiActiveActorId,
+  applyAiAction,
+  canonicalizeActionCommand,
+  cloneGame,
+  enumerateUiLegalActions,
+  enumerateUiMoveUnitsActions,
+  isStrategicAction
+} from "./ai/actions.mjs";
 import { buildMatchReport } from "./ai/coach.mjs";
 import { recommendDeckForPool } from "./ai/deckbuilding.mjs";
 import {
@@ -116,13 +143,27 @@ import {
   normalizeAiGeneration,
   sameDeckConfiguration
 } from "./ai/generations.mjs";
-import { choosePolicyAction, createModel, DEFAULT_AI_MODEL } from "./ai/policy.mjs";
-import { createAiReplay, finalizeAiReplay, persistableAiReplay, recordReplayDecision, refineAiReplay } from "./ai/replay.mjs";
+import { createModel, DEFAULT_AI_MODEL } from "./ai/policy.mjs";
+import {
+  appendAnalyzedReplayDecision,
+  recordExecutedReplayAction,
+  createAiReplay,
+  createReplayAnalysisWorkerRequest,
+  finalizeAiReplay,
+  persistableAiReplay,
+  refineAiReplay,
+  REPLAY_ANALYSIS_WORKER_MESSAGE_TYPES
+} from "./ai/replay.mjs";
+import {
+  AI_TURN_WORKER_MESSAGE_TYPES,
+  createAiTurnNeuralConfigureRequest,
+  createAiTurnNeuralResetRequest,
+  createAiTurnWorkerRequest
+} from "./ai/turn-protocol.mjs";
 import { CARD_PACKS, CARD_POOL_FORMATS, cardAllowedInPool, packForCard } from "./card-pools.mjs";
 import { commandFailureFeedback } from "./ui/command-feedback.mjs";
 import { cardStatusItems } from "./ui/card-status.mjs";
 import { resolveBoardClickTarget } from "./ui/board-click.mjs";
-import { legalMoveDestinationIds, sharedLegalMoveDestinationIds } from "./ui/movement-options.mjs";
 import { detectEffectAnimations, EFFECT_ANIMATION_DURATION_MS } from "./ui/effect-animations.mjs";
 import { collectChainTargetIds } from "./ui/chain-targets.mjs";
 import { pendingDecisionVisibleToViewer } from "./ui/game-visibility.mjs";
@@ -143,6 +184,7 @@ import {
 import {
   advanceTutorialAfterCommand,
   createTutorialGame,
+  localizeTutorialStep,
   TUTORIAL_CATALOG,
   TUTORIAL_IDS,
   tutorialActionAllowed,
@@ -158,6 +200,20 @@ import {
   localizeKoreanRoomStatus,
   localizeKoreanUiText
 } from "./ui/korean-text.mjs";
+import {
+  GAME_REPRODUCTION_DESCRIPTION_PLACEHOLDER,
+  GAME_REPRODUCTION_END_REASONS,
+  createGameLogSubmissionPayload,
+  createGameReproductionLog,
+  restoreGameReproductionLogFromStorage,
+  saveGameReproductionLogToStorage,
+  validateGameReportDescription
+} from "./diagnostics/game-reproduction-log.mjs";
+import { validateBugReportSubmissionReceipt } from "./diagnostics/bug-report-receipt.mjs";
+import {
+  captureOnlineDiagnosticIdentity,
+  onlineDiagnosticIdentityMatchesDescriptor
+} from "./diagnostics/online-diagnostic-identity.mjs";
 
 const LOCAL_SERVER_HOSTNAMES = new Set(["127.0.0.1", "localhost"]);
 const DECK_STORAGE_KEY = "riftbound.deckStore.v1";
@@ -165,12 +221,70 @@ const AUTH_STORAGE_KEY = "riftbound.accountSession.v1";
 const ONLINE_STORAGE_KEY = "riftbound.onlineSeat.v1";
 const SETTINGS_STORAGE_KEY = "riftbound.settings.v1";
 const TUTORIAL_STORAGE_KEY = "riftbound.tutorial.v1";
+const GAME_DIAGNOSTIC_STORAGE_KEY = "riftbound.gameDiagnostic.v1";
+const GAME_DIAGNOSTIC_RELOAD_KEY = "riftbound.gameDiagnosticReload.v1";
+// Model construction and large policy searches can legitimately run slowly
+// beside local training. Worker error events still fail immediately; these
+// watchdogs cover only a genuinely silent/hung Worker.
+const AI_TURN_DECISION_TIMEOUT_MS = 120_000;
+const AI_TURN_NEURAL_CONFIGURATION_TIMEOUT_MS = 180_000;
 const ALL_CARDS = Object.values(cards).sort((a, b) => a.name.localeCompare(b.name));
 const CARD_BY_NUMBER = new Map(ALL_CARDS.map((card) => [card.cardNumber, card]));
-const RAW_DECK_BY_ID = new Map(Object.values(rawDecklists).map((deck) => [deck.id, deck]));
+const RAW_DECK_BY_ID = new Map([...Object.values(rawDecklists), ...AI_DECK_PRESETS].map((deck) => [deck.id, deck]));
 const LOCALIZED_CARD_NAMES = [...ALL_CARDS]
   .sort((left, right) => right.name.length - left.name.length)
-  .map((card) => [card.name, translateCardName(card, LOCALES.KO)]);
+  .map((card) => [card.name, translateCardName(card, LOCALES.KO)])
+  .filter(([englishName, koreanName]) => englishName !== koreanName);
+const LOCALIZED_CARD_NAME_BY_ENGLISH = new Map(LOCALIZED_CARD_NAMES);
+const LOCALIZED_CARD_NAME_PATTERN = LOCALIZED_CARD_NAMES.length
+  ? new RegExp(LOCALIZED_CARD_NAMES.map(([name]) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "gu")
+  : null;
+const LOCALIZED_DECK_NAMES = new Map([
+  ["Fury/Chaos Annie", "분노/혼돈 애니"],
+  ["Calm/Body Master Yi OGS", "평온/신체 마스터 이 OGS"],
+  ["Mind/Order Lux", "정신/질서 럭스"],
+  ["Body/Order Garen", "신체/질서 가렌"],
+  ["Best Origins Miss Fortune", "추천 오리진 미스 포츈"],
+  ["Best Origins Kai'Sa", "추천 오리진 카이사"],
+  ["Best Origins Sett", "추천 오리진 세트"],
+  ["Origins Leona Stun", "오리진 레오나 기절"],
+  ["Refined Origins Volibear", "개선형 오리진 볼리베어"],
+  ["Riftbound.gg Origins Yasuo", "Riftbound.gg 오리진 야스오"],
+  ["Riftbound.gg Origins Teemo", "Riftbound.gg 오리진 티모"],
+  ["Riftbound.gg Origins Darius", "Riftbound.gg 오리진 다리우스"],
+  ["SamaBR Origins Ahri", "SamaBR 오리진 아리"],
+  ["Void Origins Viktor", "Void 오리진 빅토르"]
+]);
+const LOCALIZED_DECK_NAME_REPLACEMENTS = [
+  ["Master Yi", "마스터 이"],
+  ["Miss Fortune", "미스 포츈"],
+  ["Kai'Sa", "카이사"],
+  ["Annie", "애니"],
+  ["Diana", "다이애나"],
+  ["Lux", "럭스"],
+  ["Garen", "가렌"],
+  ["Sett", "세트"],
+  ["Leona", "레오나"],
+  ["Volibear", "볼리베어"],
+  ["Yasuo", "야스오"],
+  ["Teemo", "티모"],
+  ["Darius", "다리우스"],
+  ["Ahri", "아리"],
+  ["Viktor", "빅토르"],
+  ["Origins", "오리진"],
+  ["Fury", "분노"],
+  ["Chaos", "혼돈"],
+  ["Calm", "평온"],
+  ["Body", "신체"],
+  ["Mind", "정신"],
+  ["Order", "질서"],
+  ["Stun", "기절"],
+  ["Best", "추천"],
+  ["Refined", "개선형"]
+];
+const LOCALIZED_TEXT_CACHE_LIMIT = 1200;
+const localizedDynamicTextCache = new Map();
+const localizedDeckNameCache = new Map();
 let settings = loadSettings();
 let tutorialRecord = loadTutorialRecord();
 let auth = loadAuthState();
@@ -181,6 +295,7 @@ online.rooms = [];
 online.room = null;
 online.events = null;
 online.error = "";
+online.leaveNotice = "";
 online.joinCode = "";
 online.loading = false;
 online.commandPending = null;
@@ -189,11 +304,26 @@ online.lastRefresh = 0;
 online.refreshTimer = null;
 let onlineSelectedCardId = null;
 let onlineSnapshotRevision = 0;
+let onlineEventGeneration = 0;
+let onlineSessionGeneration = 0;
+let onlineLeaveOperation = null;
+let onlineSeatRequestOperation = null;
+let onlineRoomMutationOperation = null;
+let onlineRefreshOperation = null;
+let onlineRequestOperationSequence = 0;
+let onlineLoadingOperation = null;
+let onlineDiagnosticGameKey = "";
+let recoveredOnlineStopRequested = false;
+let pendingOnlineDiagnosticStart = null;
 let deferredOnlineRenderTimer = null;
+let deferredOnlineRenderGeneration = 0;
 let deckEditor = {
   selectedDeckId: deckStore.activeDeckIds[0] || deckStore.decks[0]?.id,
   pendingDeleteDeckId: null,
   search: "",
+  listSearch: "",
+  listFilter: "all",
+  mobileToolsOpen: false,
   selectedCardNumber: null,
   poolId: "vendetta-era",
   packId: "all",
@@ -203,12 +333,30 @@ let deckEditor = {
   aiRecommendation: null,
   transferNotice: null,
   transferDialog: null,
+  imageSort: "type",
+  imageChampionFirst: false,
+  imageChampionSelections: new Map(),
   mobileView: "list",
   mobileTab: "deck"
 };
 let deckSyncTimer = null;
 let deckSyncQueue = Promise.resolve(true);
 let game = createGame({ interactive: true, randomFirstPlayer: true, manualActionChainPriority: true });
+let restoredGameDiagnosticCanResume = false;
+let gameDiagnostic = restoreSavedGameDiagnostic();
+let onlineDiagnosticRecoveryInProgress = Boolean(gameDiagnostic && restoredGameDiagnosticCanResume);
+let bugReportUi = createBugReportUiState(Boolean(gameDiagnostic) && !restoredGameDiagnosticCanResume);
+let emergencyReportActive = false;
+let emergencyReportContext = null;
+let emergencyStopState = "idle";
+let emergencyStopError = "";
+let emergencyStopOwner = null;
+let emergencyStopOperation = null;
+let emergencyStopOperationSequence = 0;
+let clientBuildInfo = {};
+let diagnosticServerReady = null;
+let lastDiagnosticRenderIssue = "";
+let diagnosticCommandAttemptSequence = 0;
 let logOpen = false;
 let handOpen = false;
 let chainZoneCollapsed = false;
@@ -230,12 +378,20 @@ let draggingCardSession = null;
 let pointerCardDrag = null;
 let cardDragRenderPending = false;
 let pointerRuneScroll = null;
+let pointerRunePowerHold = null;
 let suppressCardClickUntil = 0;
 let suppressRuneClickUntil = 0;
+let suppressRunePowerContextMenuUntil = 0;
 let pendingGameExit = null;
+let pendingPostReportAction = null;
+let postReportActionSequence = 0;
+let postReportActionRunning = false;
 let paymentRunesScrollLeft = 0;
 let handScrollLeft = 0;
 let shellScrollState = {};
+const SCROLL_STATE_SCOPE_LIMIT = 8;
+const SCROLL_STATE_ENTRY_LIMIT = 48;
+const shellScrollStateByScope = new Map();
 let previousUiSnapshot = null;
 let uiMotion = emptyMotion();
 let effectAnimations = emptyEffectAnimationState();
@@ -255,26 +411,52 @@ let lastInteractionPhase = null;
 let moveSelection = new Set();
 let localMatch = null;
 let sideboardDrafts = [];
+let sideboardBaselines = [];
 let sideboardPlayerId = "p1";
-let sideboardSelectedMain = null;
+let sideboardPreviewNumber = null;
+let sideboardValidationMessages = [];
+let onlineSideboardDraft = null;
+let onlineSideboardBaseline = null;
+let onlineSideboardDraftKey = "";
 let aiMode = false;
 let aiHumanPlayerId = null;
 let aiPlayerId = null;
 let aiModel = createModel(DEFAULT_AI_MODEL);
+let neuralAiCheckpointMetadata = null;
 let neuralAiModel = null;
-let neuralAiSession = null;
-let neuralValueEstimator = null;
+let neuralAiModelDescriptorKey = null;
 let neuralAiLoadedGeneration = null;
+let neuralAiLoadedDescriptorKey = null;
 let neuralAiLoadState = "idle";
 let neuralAiLoadError = "";
 let neuralAiLoadPromise = null;
+let neuralAiLoadGeneration = 0;
+let neuralAiModelDisposer = null;
+let neuralAiLoadController = null;
+let neuralAiReviewLoadPromise = null;
+let neuralAiReviewLoadController = null;
+let neuralAiReviewLoadDescriptorKey = "";
 let availableAiGenerations = [...AI_GENERATIONS];
 let aiGenerationCatalogState = "loading";
 let aiGenerationCatalogError = "";
 let aiReplay = null;
 let aiTurnTimer = null;
 let aiThinking = false;
+let aiTurnWorker = null;
+let aiTurnWorkerUnavailable = false;
+let aiTurnRequestSequence = 0;
+let pendingAiTurnRequest = null;
+let aiTurnWorkerBusyRequestId = "";
+let aiTurnWorkerBusyWatchdog = null;
+let aiTurnWorkerConfiguredNeuralKey = "";
+let aiTurnWorkerConfigurationSequence = 0;
+let pendingAiTurnWorkerConfiguration = null;
 let aiDeepReviewRunning = false;
+let replayAnalysisWorker = null;
+let replayAnalysisWorkerUnavailable = false;
+let replayAnalysisRequestSequence = 0;
+const pendingReplayAnalyses = new Map();
+const aiReplayPersistenceStates = new WeakMap();
 let replayMode = false;
 let replayBrowser = {
   loading: false,
@@ -292,6 +474,54 @@ let reportingUiException = false;
 const modalFocusOpeners = new Map();
 let tabletopBackSentinelActive = false;
 let suppressTabletopPopstate = false;
+let observedGame = game;
+let gameStateRevision = 0;
+let currentRenderPreviousGeometry = null;
+let cachedRenderIssueGame = null;
+let cachedRenderIssueRevision = -1;
+let cachedRenderIssue = "";
+let cachedUiLegalGame = null;
+let cachedUiLegalRevision = -1;
+let cachedUiLegalViewerId = "";
+let cachedUiLegalActions = [];
+let motionGame = null;
+let motionGameRevision = -1;
+let motionViewerId = "";
+let presentationGame = null;
+let presentationGameRevision = -1;
+let presentationViewerId = "";
+let visibleCardIndexGame = null;
+let visibleCardIndexRevision = -1;
+let visibleCardIndex = new Map();
+let selectedContextIndex = new Map();
+let currentMightCache = new WeakMap();
+let visibleCardStatusCache = new WeakMap();
+let visibleCardStatusCacheLocale = locale();
+let usableCardCache = new WeakMap();
+let usableCardCacheGame = null;
+let usableCardCacheRevision = -1;
+let usableCardCacheContext = "";
+let chainTreeCacheGame = null;
+let chainTreeCacheRevision = -1;
+let chainTreeCacheViewerId = "";
+let chainTreeCacheItems = null;
+let uiActionsByCardId = new Map();
+let uiActionByKey = new Map();
+let uiMoveDestinationsByUnitId = new Map();
+let uiChampionPlayActions = [];
+let lastAppMarkup = null;
+let currentRenderMarkupChanged = true;
+let scrollRestoreFrame = 0;
+let diagnosticPersistenceTimer = null;
+let diagnosticPersistenceIdleCallback = null;
+const DIAGNOSTIC_BOUNDARY_ONLY = Symbol("diagnostic-boundary-only");
+let diagnosticPersistenceDirty = false;
+let pendingDiagnosticStateCheckpoint = null;
+let roomRefreshController = null;
+let aiTurnGeneration = 0;
+let pointerCardDragFrame = 0;
+const activeTabletopFlightCleanups = new Set();
+const activeTabletopArrivalTimers = new Set();
 
 function syncVisualViewport() {
   const viewport = window.visualViewport;
@@ -350,14 +580,17 @@ function domainText(domain) {
 function localizedDynamicText(value, { fallback = "" } = {}) {
   const text = String(value ?? "");
   if (locale() !== LOCALES.KO || !text) return text;
-  let withLocalizedNames = text;
-  for (const [englishName, koreanName] of LOCALIZED_CARD_NAMES) {
-    if (englishName !== koreanName && withLocalizedNames.includes(englishName)) {
-      withLocalizedNames = withLocalizedNames.replaceAll(englishName, koreanName);
-    }
-  }
+  const cacheKey = `${text}\u0000${fallback}`;
+  const cached = localizedDynamicTextCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+  let withLocalizedNames = LOCALIZED_CARD_NAME_PATTERN
+    ? text.replace(LOCALIZED_CARD_NAME_PATTERN, (englishName) =>
+      LOCALIZED_CARD_NAME_BY_ENGLISH.get(englishName) || englishName)
+    : text;
   withLocalizedNames = localizedDeckName(withLocalizedNames);
-  return localizeKoreanUiText(withLocalizedNames, { fallback });
+  const localized = localizeKoreanUiText(withLocalizedNames, { fallback });
+  rememberBoundedCacheValue(localizedDynamicTextCache, cacheKey, localized);
+  return localized;
 }
 
 function localizedPackName(name) {
@@ -375,51 +608,23 @@ function localizedRarity(rarity) {
 function localizedDeckName(name) {
   const value = String(name || "");
   if (locale() !== LOCALES.KO) return value;
-  const exact = new Map([
-    ["Fury/Chaos Annie", "격노/혼돈 애니"],
-    ["Calm/Body Master Yi OGS", "평온/신체 마스터 이 OGS"],
-    ["Mind/Order Lux", "정신/질서 럭스"],
-    ["Body/Order Garen", "신체/질서 가렌"],
-    ["Best Origins Miss Fortune", "추천 오리진 미스 포츈"],
-    ["Best Origins Kai'Sa", "추천 오리진 카이사"],
-    ["Best Origins Sett", "추천 오리진 세트"],
-    ["Origins Leona Stun", "오리진 레오나 기절"],
-    ["Refined Origins Volibear", "개선형 오리진 볼리베어"],
-    ["Riftbound.gg Origins Yasuo", "Riftbound.gg 오리진 야스오"],
-    ["Riftbound.gg Origins Teemo", "Riftbound.gg 오리진 티모"],
-    ["Riftbound.gg Origins Darius", "Riftbound.gg 오리진 다리우스"],
-    ["SamaBR Origins Ahri", "SamaBR 오리진 아리"],
-    ["Void Origins Viktor", "Void 오리진 빅토르"]
-  ]);
-  if (exact.has(value)) return exact.get(value);
-  const replacements = [
-    ["Master Yi", "마스터 이"],
-    ["Miss Fortune", "미스 포츈"],
-    ["Kai'Sa", "카이사"],
-    ["Annie", "애니"],
-    ["Diana", "다이애나"],
-    ["Lux", "럭스"],
-    ["Garen", "가렌"],
-    ["Sett", "세트"],
-    ["Leona", "레오나"],
-    ["Volibear", "볼리베어"],
-    ["Yasuo", "야스오"],
-    ["Teemo", "티모"],
-    ["Darius", "다리우스"],
-    ["Ahri", "아리"],
-    ["Viktor", "빅토르"],
-    ["Origins", "오리진"],
-    ["Fury", "격노"],
-    ["Chaos", "혼돈"],
-    ["Calm", "평온"],
-    ["Body", "신체"],
-    ["Mind", "정신"],
-    ["Order", "질서"],
-    ["Stun", "기절"],
-    ["Best", "추천"],
-    ["Refined", "개선형"]
-  ];
-  return replacements.reduce((result, [english, korean]) => result.replaceAll(english, korean), value);
+  const cached = localizedDeckNameCache.get(value);
+  if (cached !== undefined) return cached;
+  const localized = AI_DECK_PRESETS.find(preset => preset.playerName === value)?.displayNameKo
+    || LOCALIZED_DECK_NAMES.get(value)
+    || LOCALIZED_DECK_NAME_REPLACEMENTS.reduce(
+      (result, [english, korean]) => result.replaceAll(english, korean),
+      value
+    );
+  rememberBoundedCacheValue(localizedDeckNameCache, value, localized);
+  return localized;
+}
+
+function rememberBoundedCacheValue(cache, key, value) {
+  if (cache.size >= LOCALIZED_TEXT_CACHE_LIMIT && !cache.has(key)) {
+    cache.delete(cache.keys().next().value);
+  }
+  cache.set(key, value);
 }
 
 function playerName(player) {
@@ -440,25 +645,147 @@ function localizedCommandFailure(message) {
   };
 }
 
+function resetDerivedGameCaches() {
+  cachedRenderIssueGame = null;
+  cachedRenderIssueRevision = -1;
+  cachedUiLegalGame = null;
+  cachedUiLegalRevision = -1;
+  cachedUiLegalViewerId = "";
+  cachedUiLegalActions = [];
+  visibleCardIndexGame = null;
+  visibleCardIndexRevision = -1;
+  visibleCardIndex = new Map();
+  selectedContextIndex = new Map();
+  currentMightCache = new WeakMap();
+  visibleCardStatusCache = new WeakMap();
+  visibleCardStatusCacheLocale = locale();
+  usableCardCache = new WeakMap();
+  usableCardCacheGame = null;
+  usableCardCacheRevision = -1;
+  usableCardCacheContext = "";
+  chainTreeCacheGame = null;
+  chainTreeCacheRevision = -1;
+  chainTreeCacheViewerId = "";
+  chainTreeCacheItems = null;
+}
+
+function observeCurrentGame() {
+  if (observedGame === game) return false;
+  observedGame = game;
+  gameStateRevision += 1;
+  resetDerivedGameCaches();
+  return true;
+}
+
+function markGameStateChanged() {
+  observeCurrentGame();
+  gameStateRevision += 1;
+  resetDerivedGameCaches();
+}
+
+function currentGameUiRenderIssue() {
+  observeCurrentGame();
+  if (cachedRenderIssueGame === game && cachedRenderIssueRevision === gameStateRevision) {
+    return cachedRenderIssue;
+  }
+  cachedRenderIssueGame = game;
+  cachedRenderIssueRevision = gameStateRevision;
+  cachedRenderIssue = gameUiRenderIssue(game);
+  return cachedRenderIssue;
+}
+
+function legalActionsForCurrentUi(viewerId) {
+  observeCurrentGame();
+  if (cachedUiLegalGame === game
+    && cachedUiLegalRevision === gameStateRevision
+    && cachedUiLegalViewerId === viewerId) return cachedUiLegalActions;
+  cachedUiLegalGame = game;
+  cachedUiLegalRevision = gameStateRevision;
+  cachedUiLegalViewerId = viewerId;
+  cachedUiLegalActions = enumerateUiLegalActions(game, viewerId);
+  return cachedUiLegalActions;
+}
+
+function indexUiLegalActions(actions) {
+  uiActionsByCardId = new Map();
+  uiActionByKey = new Map();
+  uiMoveDestinationsByUnitId = new Map();
+  uiChampionPlayActions = [];
+  for (const action of actions || []) {
+    uiActionByKey.set(actionKey(action), action);
+    if (action?.cardId) {
+      const cardActions = uiActionsByCardId.get(action.cardId) || [];
+      cardActions.push(action);
+      uiActionsByCardId.set(action.cardId, cardActions);
+    }
+    if (action?.kind === "moveUnit" && action.unitId && action.destinationId) {
+      const destinations = uiMoveDestinationsByUnitId.get(action.unitId) || [];
+      if (!destinations.includes(action.destinationId)) destinations.push(action.destinationId);
+      uiMoveDestinationsByUnitId.set(action.unitId, destinations);
+    }
+    if (action?.kind === "beginPlayChampion") uiChampionPlayActions.push(action);
+  }
+}
+
+function uiCardActions(cardId) {
+  return uiActionsByCardId.get(String(cardId || "")) || [];
+}
+
+function uiUnitMoveDestinationIds(unitId) {
+  return uiMoveDestinationsByUnitId.get(String(unitId || "")) || [];
+}
+
+function uiCurrentMight(card) {
+  if (!card || typeof card !== "object") return 0;
+  observeCurrentGame();
+  if (currentMightCache.has(card)) return currentMightCache.get(card);
+  const might = currentMight(game, card);
+  currentMightCache.set(card, might);
+  return might;
+}
+
+function replaceAppMarkup(markup) {
+  const nextMarkup = String(markup ?? "");
+  if (lastAppMarkup === nextMarkup && app.childNodes.length) {
+    currentRenderMarkupChanged = false;
+    return false;
+  }
+  app.innerHTML = nextMarkup;
+  lastAppMarkup = nextMarkup;
+  currentRenderMarkupChanged = true;
+  return true;
+}
+
 function render() {
   if (draggingCardSession || pointerCardDrag) {
     cardDragRenderPending = true;
     return;
   }
   cardDragRenderPending = false;
+  if (appView !== "game") cancelScheduledAiTurn();
+  if (appView !== "multiplayer") stopRoomRefresh();
+  observeCurrentGame();
   clearRuneScrollGesture();
-  const previousGeometry = captureTabletopGeometry();
+  clearRunePowerHold();
+  currentRenderPreviousGeometry = null;
   const previousFocus = captureFocusState();
   const previousModalKey = topUiModalKey();
   try {
     renderApp();
-    syncModalAccessibility();
-    restoreFocusAfterRender(previousFocus, previousModalKey);
+    if (currentRenderMarkupChanged) {
+      syncModalAccessibility();
+      restoreFocusAfterRender(previousFocus, previousModalKey);
+    }
     syncTabletopBackSentinel();
-    runTabletopTransferAnimations(uiMotion.transfers, previousGeometry);
+    if (currentRenderPreviousGeometry) {
+      runTabletopTransferAnimations(uiMotion.transfers, currentRenderPreviousGeometry);
+    }
   } catch (error) {
     reportUiException(error, "render");
     showUiExceptionOverlay(error, "render");
+    if (pendingRecoveredBugReport()) {
+      window.__riftboundEarlyCrashGuard?.show(error, true);
+    }
   }
 }
 
@@ -469,13 +796,15 @@ const FOCUS_DATA_KEYS = [
 
 function focusableElements(scope = app) {
   if (!scope?.querySelectorAll) return [];
-  return [...scope.querySelectorAll("button, input, select, textarea, a[href], [tabindex]")].filter((node) => {
-    if (!(node instanceof HTMLElement) || node.disabled || node.closest("[inert]")) return false;
-    if (node.tabIndex < 0 && !node.matches("[data-ui-modal]")) return false;
-    const style = window.getComputedStyle(node);
-    const rect = node.getBoundingClientRect();
-    return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
-  });
+  return [...scope.querySelectorAll("button, input, select, textarea, a[href], [tabindex]")]
+    .filter(elementCanReceiveFocus);
+}
+
+function elementCanReceiveFocus(node) {
+  if (!(node instanceof HTMLElement) || node.disabled || node.closest("[inert]")) return false;
+  if (node.tabIndex < 0 && !node.matches("[data-ui-modal]")) return false;
+  if (node.hidden || node.closest("[hidden], [aria-hidden='true']")) return false;
+  return node.getClientRects().length > 0;
 }
 
 function captureFocusState() {
@@ -516,9 +845,21 @@ function focusStateMatches(node, state) {
 }
 
 function restoreFocusState(state, scope = app) {
-  if (!state) return false;
-  const candidate = focusableElements(scope).find((node) => focusStateMatches(node, state));
-  if (!candidate) return false;
+  if (!state || !scope?.querySelectorAll) return false;
+  let candidates = [];
+  if (state.id) {
+    const byId = document.getElementById(state.id);
+    if (byId && scope.contains(byId)) candidates = [byId];
+  }
+  if (!candidates.length) {
+    try {
+      candidates = [...scope.querySelectorAll(String(state.tag || "button").toLowerCase())];
+    } catch {
+      candidates = [];
+    }
+  }
+  const candidate = candidates.find((node) => focusStateMatches(node, state));
+  if (!elementCanReceiveFocus(candidate)) return false;
   candidate.focus({ preventScroll: true });
   if (state.selectionStart != null && typeof candidate.setSelectionRange === "function") {
     try {
@@ -531,15 +872,8 @@ function restoreFocusState(state, scope = app) {
 }
 
 function topUiModal() {
-  const modals = [...(app?.querySelectorAll?.("[data-ui-modal]") || [])].filter((node) => tabletopRect(node));
-  return modals
-    .map((node, index) => ({
-      node,
-      index,
-      zIndex: Number.parseInt(window.getComputedStyle(node).zIndex, 10) || 0
-    }))
-    .sort((left, right) => left.zIndex - right.zIndex || left.index - right.index)
-    .at(-1)?.node || null;
+  const modals = app?.querySelectorAll?.("[data-ui-modal]:not([hidden]):not([aria-hidden='true'])");
+  return modals?.[modals.length - 1] || null;
 }
 
 function topUiModalKey() {
@@ -549,8 +883,9 @@ function topUiModalKey() {
 
 function focusModalInitial(modal) {
   if (!(modal instanceof HTMLElement)) return;
-  const preferred = focusableElements(modal).find((node) => node.hasAttribute("data-primary-focus"))
-    || focusableElements(modal)[0]
+  const items = focusableElements(modal);
+  const preferred = items.find((node) => node.hasAttribute("data-primary-focus"))
+    || items[0]
     || modal;
   preferred.focus({ preventScroll: true });
 }
@@ -558,6 +893,9 @@ function focusModalInitial(modal) {
 function restoreFocusAfterRender(previousFocus, previousModalKey) {
   const modal = topUiModal();
   const currentModalKey = modal?.dataset.modalKey || modal?.id || "";
+  for (const key of [...modalFocusOpeners.keys()]) {
+    if (key !== currentModalKey && key !== previousModalKey) modalFocusOpeners.delete(key);
+  }
   if (modal && currentModalKey !== previousModalKey && !modalFocusOpeners.has(currentModalKey)) {
     if (previousFocus) modalFocusOpeners.set(currentModalKey, previousFocus);
     focusModalInitial(modal);
@@ -603,7 +941,21 @@ function syncModalAccessibility() {
   const modal = topUiModal();
   if (!modal) return;
   const topbar = app.querySelector(".tabletop-topbar");
-  setUiInert(topbar, true);
+  const tutorialExit = String(modal.dataset.modalKey || "").startsWith("tutorial-")
+    ? topbar?.querySelector('[data-action="tutorial-exit"]')
+    : null;
+  if (tutorialExit) {
+    // The tutorial welcome/complete guide is modal to game actions, but its
+    // permanent escape hatch must remain clickable and keyboard reachable.
+    for (const child of topbar?.children || []) {
+      if (!child.contains(tutorialExit)) setUiInert(child, true);
+    }
+    for (const control of topbar?.querySelectorAll("button, input, select, textarea, a[href], [tabindex]") || []) {
+      if (control !== tutorialExit) setUiInert(control, true);
+    }
+  } else {
+    setUiInert(topbar, true);
+  }
   const layout = modal.closest(".tabletop-layout") || app.querySelector(".tabletop-layout");
   const overlay = layout?.querySelector(":scope > .tabletop-overlay-root");
   for (const child of layout?.children || []) {
@@ -643,7 +995,7 @@ function hasTabletopUiLayer() {
   if (appView !== "game") return false;
   if (replayMode) return true;
   if (app?.querySelector?.(".phase-unavailable")) return false;
-  return Boolean(topUiModal() || fullCardOpen || pendingGameExit || (resultRevealReady && game?.phase === "complete" && !resultDismissed)
+  return Boolean(topUiModal() || fullCardOpen || pendingGameExit || game?.phase === "complete" || matchIsBetweenGames()
     || graveyardOpenPlayerId || banishedOpenPlayerId || intelOpenPlayerId || logOpen || inspectorOpen
     || attachmentsOpenCardId || inspectedChainItemId || handOpen || moveSelection.size);
 }
@@ -691,9 +1043,9 @@ function motionLocationKey(location, { includeLocation = true } = {}) {
 
 function tabletopRect(node) {
   if (!(node instanceof Element)) return null;
+  if (node.hidden || node.closest("[hidden], [aria-hidden='true']")) return null;
   const rect = node.getBoundingClientRect();
-  const style = window.getComputedStyle(node);
-  if (rect.width < 2 || rect.height < 2 || style.display === "none" || style.visibility === "hidden") return null;
+  if (rect.width < 2 || rect.height < 2) return null;
   return {
     top: rect.top,
     right: rect.right,
@@ -766,7 +1118,14 @@ function tabletopCardSurfaceRect(rect) {
 }
 
 function captureTabletopGeometry() {
-  const geometry = { cardRects: new Map(), zoneRects: new Map(), anchorRects: new Map() };
+  const geometry = {
+    cardRects: new Map(),
+    zoneRects: new Map(),
+    anchorRects: new Map(),
+    cardNodes: new Map(),
+    zoneNodes: new Map(),
+    anchorNodes: new Map()
+  };
   const root = app?.querySelector?.(".tabletop-layout");
   if (!root) return geometry;
 
@@ -778,6 +1137,7 @@ function captureTabletopGeometry() {
     const previous = geometry.cardRects.get(id);
     if (!rect || (previous && previous.priority >= priority)) continue;
     geometry.cardRects.set(id, { rect, priority });
+    geometry.cardNodes.set(id, { node, priority });
   }
 
   for (const node of root.querySelectorAll("[data-zone]")) {
@@ -786,8 +1146,14 @@ function captureTabletopGeometry() {
     if (!rect) continue;
     const location = tabletopDomLocation(node);
     if (!location?.zone) continue;
-    geometry.zoneRects.set(motionLocationKey(location, { includeLocation: false }), rect);
-    if (location.locationId) geometry.zoneRects.set(motionLocationKey(location), rect);
+    const broadKey = motionLocationKey(location, { includeLocation: false });
+    geometry.zoneRects.set(broadKey, rect);
+    geometry.zoneNodes.set(broadKey, node);
+    if (location.locationId) {
+      const exactKey = motionLocationKey(location);
+      geometry.zoneRects.set(exactKey, rect);
+      geometry.zoneNodes.set(exactKey, node);
+    }
   }
 
   for (const node of root.querySelectorAll("[data-motion-anchor]")) {
@@ -795,15 +1161,42 @@ function captureTabletopGeometry() {
     const rect = tabletopRect(node);
     const location = tabletopDomLocation(node);
     if (!rect || !location?.zone) continue;
-    geometry.anchorRects.set(motionLocationKey(location, { includeLocation: false }), rect);
-    if (location.locationId) geometry.anchorRects.set(motionLocationKey(location), rect);
+    const broadKey = motionLocationKey(location, { includeLocation: false });
+    geometry.anchorRects.set(broadKey, rect);
+    geometry.anchorNodes.set(broadKey, node);
+    if (location.locationId) {
+      const exactKey = motionLocationKey(location);
+      geometry.anchorRects.set(exactKey, rect);
+      geometry.anchorNodes.set(exactKey, node);
+    }
     const cardId = String(node.dataset.motionCardId || "");
     if (!cardId) continue;
     const priority = 120;
     const previous = geometry.cardRects.get(cardId);
-    if (!previous || previous.priority < priority) geometry.cardRects.set(cardId, { rect, priority });
+    if (!previous || previous.priority < priority) {
+      geometry.cardRects.set(cardId, { rect, priority });
+      geometry.cardNodes.set(cardId, { node, priority });
+    }
   }
   return geometry;
+}
+
+function geometryNodeForTransfer(geometry, transfer, endpoint) {
+  const location = transfer?.[endpoint];
+  if (!location || !geometry) return null;
+  const zone = normalizedDomZone(location.zone);
+  const preferAnchor = ["chain", "trash", "banished", "mainDeck", "runeDeck"].includes(zone);
+  const endpointCardId = endpoint === "from" ? transfer.fromCardId || transfer.id : transfer.toCardId || transfer.id;
+  const cardNode = geometry.cardNodes?.get(String(endpointCardId || ""))?.node || null;
+  const nodeAt = (nodes) => nodes?.get(motionLocationKey(location))
+    || nodes?.get(motionLocationKey(location, { includeLocation: false }))
+    || nodes?.get(motionLocationKey({ ...location, playerId: "" }))
+    || nodes?.get(motionLocationKey({ ...location, playerId: "" }, { includeLocation: false }))
+    || null;
+  const anchorNode = nodeAt(geometry.anchorNodes);
+  const zoneNode = nodeAt(geometry.zoneNodes);
+  if (zone === "chain") return cardNode || anchorNode || zoneNode;
+  return preferAnchor ? anchorNode || cardNode || zoneNode : cardNode || anchorNode || zoneNode;
 }
 
 function geometryRectForTransfer(geometry, transfer, endpoint) {
@@ -890,32 +1283,18 @@ function runTabletopTransferAnimations(transfers, previousGeometry) {
     const dy = (end.top + end.height / 2) - (start.top + start.height / 2);
     const distance = Math.hypot(dx, dy);
     if (distance < 3 && Math.abs(end.width - start.width) < 2 && Math.abs(end.height - start.height) < 2) continue;
-    const destinationCardId = String(transfer?.toCardId || transfer?.id || "");
-    const destinationCardNode = destinationCardId ? [...app.querySelectorAll("[data-card-id]")]
-      .filter((node) => String(node.dataset.cardId || "") === destinationCardId
-        && tabletopCardNodePriority(node) >= 0
-        && tabletopRect(node))
-      .sort((left, right) => tabletopCardNodePriority(right) - tabletopCardNodePriority(left))[0] || null : null;
-    const destinationAnchors = [...app.querySelectorAll("[data-motion-anchor]")]
-      .filter((node) => !node.closest(".tabletop-overlay-root") && tabletopRect(node));
-    const destinationAnchorNode = (destinationCardId
-      ? destinationAnchors.find((node) => String(node.dataset.motionCardId || "") === destinationCardId)
-      : null)
-      || destinationAnchors.find((node) => tabletopNodeMatchesLocation(node, transfer?.to))
-      || null;
-    const destinationZoneNode = [...app.querySelectorAll("[data-zone]")]
-      .find((node) => !node.closest(".tabletop-overlay-root")
-        && tabletopRect(node)
-        && tabletopNodeMatchesLocation(node, transfer?.to))
-      || null;
-    const destinationVisualNode = destinationAnchorNode || destinationCardNode;
-    const destinationNode = destinationVisualNode || destinationZoneNode;
+    const destinationNode = geometryNodeForTransfer(currentGeometry, transfer, "to");
+    const destinationVisualNode = destinationNode?.matches?.("[data-zone]") ? null : destinationNode;
     const delay = transfer.kind === "draw" ? drawIndex++ * TABLETOP_DRAW_STAGGER_MS : 0;
     const revealDestination = () => {
       destinationVisualNode?.classList.remove("tabletop-transfer-pending");
       if (!destinationNode) return;
       destinationNode.classList.add("tabletop-transfer-arrival", `arrival-${transfer.kind}`);
-      window.setTimeout(() => destinationNode.classList.remove("tabletop-transfer-arrival", `arrival-${transfer.kind}`), 360);
+      const arrivalTimer = window.setTimeout(() => {
+        activeTabletopArrivalTimers.delete(arrivalTimer);
+        destinationNode.classList.remove("tabletop-transfer-arrival", `arrival-${transfer.kind}`);
+      }, 360);
+      activeTabletopArrivalTimers.add(arrivalTimer);
     };
     if (reduced) {
       revealDestination();
@@ -949,18 +1328,36 @@ function runTabletopTransferAnimations(transfers, previousGeometry) {
       fill: "forwards"
     });
     let cleaned = false;
+    let fallbackTimer = null;
+    let cancelActiveFlight = null;
     const cleanup = (arrive = true) => {
       if (cleaned) return;
       cleaned = true;
+      if (fallbackTimer) window.clearTimeout(fallbackTimer);
+      fallbackTimer = null;
+      if (cancelActiveFlight) activeTabletopFlightCleanups.delete(cancelActiveFlight);
       flight.remove();
       if (arrive) revealDestination();
       else destinationVisualNode?.classList.remove("tabletop-transfer-pending");
       if (layer && !layer.childElementCount) layer.remove();
     };
+    cancelActiveFlight = () => {
+      try { animation.cancel(); } catch {}
+      cleanup(false);
+    };
+    activeTabletopFlightCleanups.add(cancelActiveFlight);
     animation.addEventListener("finish", () => cleanup(true), { once: true });
     animation.addEventListener("cancel", () => cleanup(false), { once: true });
-    window.setTimeout(() => cleanup(true), delay + TABLETOP_TRANSFER_DURATION_MS + 180);
+    fallbackTimer = window.setTimeout(() => cleanup(true), delay + TABLETOP_TRANSFER_DURATION_MS + 180);
   }
+}
+
+function clearTabletopFlightAnimations() {
+  for (const cleanup of [...activeTabletopFlightCleanups]) cleanup();
+  activeTabletopFlightCleanups.clear();
+  for (const timer of activeTabletopArrivalTimers) window.clearTimeout(timer);
+  activeTabletopArrivalTimers.clear();
+  for (const layer of document.querySelectorAll(".tabletop-card-flight-layer")) layer.remove();
 }
 
 function renderPowerCostIssue(power, label) {
@@ -1904,6 +2301,18 @@ function gameUiRenderIssue(candidate) {
 
 function unavailableGameView(issue) {
   const korean = locale() === LOCALES.KO;
+  if (issue && issue !== lastDiagnosticRenderIssue) {
+    lastDiagnosticRenderIssue = issue;
+    try {
+      gameDiagnostic?.recordUiError(
+        new Error(issue),
+        diagnosticUiContext("game state validation"),
+        game
+      );
+      discardPendingDiagnosticStateCheckpoint();
+      persistGameDiagnostic({ immediate: true });
+    } catch {}
+  }
   return `
     <main class="layout tabletop-layout phase-unavailable">
       <section class="tabletop-state-unavailable" role="status" aria-live="polite">
@@ -1911,8 +2320,12 @@ function unavailableGameView(issue) {
         <h1>${korean ? "화면에 필요한 상태를 기다리고 있습니다" : "Waiting for a complete game state"}</h1>
         <p>${escapeHtml(issue)}</p>
         <div class="actions inline">
-          ${replayMode ? `<button data-action="replay-exit">${korean ? "리플레이 목록" : "Replay list"}</button>` : ""}
-          <button data-action="return-menu">${korean ? "메인 메뉴" : "Main menu"}</button>
+          ${replayMode
+            ? `<button data-action="replay-exit">${korean ? "리플레이 목록" : "Replay list"}</button>`
+            : `
+              <button class="danger" data-action="stop-after-ui-error">${korean ? "오류로 경기 중단" : "Stop game after error"}</button>
+              <button data-action="return-menu-after-ui-error">${korean ? "경기 중단 후 메인 메뉴" : "Stop game, then return to menu"}</button>
+            `}
         </div>
       </section>
     </main>
@@ -1921,46 +2334,47 @@ function unavailableGameView(issue) {
 
 function renderApp() {
   uiLegalActions = [];
+  indexUiLegalActions(uiLegalActions);
   const scrollState = captureScrollState();
   if (appView === "menu") {
-    app.innerHTML = menuView();
+    replaceAppMarkup(menuView());
     restoreScrollState(scrollState);
     return;
   }
   if (appView === "tutorials") {
-    app.innerHTML = tutorialMenuView();
+    replaceAppMarkup(tutorialMenuView());
     restoreScrollState(scrollState);
     return;
   }
   if (appView === "decks") {
-    app.innerHTML = deckEditorView();
+    replaceAppMarkup(deckEditorView());
     restoreScrollState(scrollState);
     return;
   }
   if (appView === "multiplayer") {
-    app.innerHTML = multiplayerView();
+    replaceAppMarkup(multiplayerView());
     restoreScrollState(scrollState);
     ensureRoomRefresh();
     return;
   }
   if (appView === "replays") {
-    app.innerHTML = replayBrowserView();
+    replaceAppMarkup(replayBrowserView());
     restoreScrollState(scrollState);
     return;
   }
   if (appView === "game" && matchIsBetweenGames()) {
-    app.innerHTML = sideboardingView();
+    replaceAppMarkup(sideboardingView());
     restoreScrollState(scrollState);
     return;
   }
   if (appView === "analysis") {
-    app.innerHTML = coachAnalysisView();
+    replaceAppMarkup(coachAnalysisView());
     restoreScrollState(scrollState);
     return;
   }
-  const renderIssue = gameUiRenderIssue(game);
+  const renderIssue = currentGameUiRenderIssue();
   if (renderIssue) {
-    app.innerHTML = unavailableGameView(renderIssue);
+    replaceAppMarkup(unavailableGameView(renderIssue));
     restoreScrollState(scrollState);
     return;
   }
@@ -2000,11 +2414,15 @@ function renderApp() {
   // the live Chain must still allow its source/target card to remain readable.
   if (pendingChoiceVisible && !chainDecisionVisible) closeTabletopSheets("inspector");
   const player = viewerPlayer();
-  if (viewerCanAct()) uiLegalActions = enumerateLegalActions(game, nextViewerPlayerId);
+  if (viewerCanAct()) uiLegalActions = legalActionsForCurrentUi(nextViewerPlayerId);
+  indexUiLegalActions(uiLegalActions);
   pruneMoveSelection();
-  uiMotion = prepareUiMotion();
+  uiMotion = prepareUiMotionForCurrentState();
   if (uiMotion.feedback) rememberRealtimeFeedback(uiMotion.feedback);
-  const presentationUpdate = updateGamePresentation();
+  if (uiMotion.transfers.some((transfer) => !["exhaust", "ready"].includes(transfer?.kind))) {
+    currentRenderPreviousGeometry = captureTabletopGeometry();
+  }
+  const presentationUpdate = updateGamePresentationForCurrentState();
   const interaction = interactionStatus();
   const utilitySheetOpen = Boolean(graveyardOpenPlayerId || banishedOpenPlayerId || intelOpenPlayerId || logOpen);
   const inspectorCard = inspectedCard();
@@ -2015,8 +2433,11 @@ function renderApp() {
     && !utilitySheetOpen
   );
   window.__riftboundGame = game;
-  window.__riftboundRender = render;
-  app.innerHTML = `
+  window.__riftboundRender = () => {
+    markGameStateChanged();
+    render();
+  };
+  replaceAppMarkup(`
     <header class="topbar tabletop-topbar">
       <div class="titlebox status-${interaction.tone}" aria-live="polite">
         <p class="status-kicker">${interaction.label}</p>
@@ -2031,7 +2452,9 @@ function renderApp() {
         ${!replayMode && aiReplay ? `<button class="secondary" data-action="coach-report">${locale() === LOCALES.KO ? "AI 분석" : "AI Review"}</button>` : ""}
         ${replayMode ? "" : isTutorialGame()
           ? `<button class="secondary" data-action="tutorial-exit">${locale() === LOCALES.KO ? "튜토리얼 나가기" : "Exit Tutorial"}</button>`
-          : `${game.phase !== "complete" ? `<button class="secondary danger" data-action="surrender" title="${t("surrender", locale())}">${t("surrender", locale())}</button>` : ""}
+          : `${game.phase !== "complete"
+            ? `<button class="secondary danger" data-action="surrender" title="${t("surrender", locale())}">${t("surrender", locale())}</button>`
+            : `<button class="secondary" data-action="exit-completed-game">${completedGameExitLabel()}</button>`}
              <button class="secondary" data-action="new-game" title="${t("newGame", locale())}">${t("newGame", locale())}</button>`}
       </div>
     </header>
@@ -2049,7 +2472,7 @@ function renderApp() {
         ${replayMode ? replayPlaybackControls() : ""}
       </div>
     </main>
-  `;
+  `);
   applyTutorialTargets();
   restorePaymentScroll();
   restoreScrollState(scrollState);
@@ -2063,14 +2486,18 @@ function isTutorialGame() {
 
 function tutorialPanel() {
   if (!isTutorialGame()) return "";
-  const step = tutorialStep(game, { handOpen });
+  const step = localizeTutorialStep(tutorialStep(game, tutorialUiState()), game.tutorial.id, locale());
   if (!step) return "";
   const progress = tutorialProgress(step);
   const lesson = TUTORIAL_CATALOG.find((entry) => entry.id === game.tutorial.id);
   const complete = step.id === "complete";
   const welcome = step.id === "welcome";
+  const location = tutorialStepLocation(step.id);
+  const modalAttributes = welcome || complete
+    ? `role="dialog" aria-modal="true" data-ui-modal data-modal-key="tutorial-${escapeHtml(step.id)}" tabindex="-1"`
+    : `role="status" aria-live="polite"`;
   return `
-    <aside class="tutorial-panel tutorial-step-${step.id}" role="status" aria-live="polite">
+    <aside class="tutorial-panel tutorial-step-${step.id}" ${modalAttributes} data-tutorial-step="${escapeHtml(step.id)}" aria-labelledby="tutorial-step-title">
       <div class="tutorial-panel-head">
         <span>${escapeHtml(locale() === LOCALES.KO ? (lesson?.title || "초보자 튜토리얼") : (lesson?.englishTitle || "Beginner Tutorial"))}</span>
         <b>${progress.current}/${progress.total}</b>
@@ -2078,34 +2505,651 @@ function tutorialPanel() {
       <div class="tutorial-progress" role="progressbar" aria-valuemin="1" aria-valuemax="${progress.total}" aria-valuenow="${progress.current}">
         <i style="width:${progress.percent}%"></i>
       </div>
-      <h2>${escapeHtml(step.title)}</h2>
+      <div class="tutorial-step-location"><span>${locale() === LOCALES.KO ? "찾을 위치" : "Find it"}</span><strong>${escapeHtml(location)}</strong></div>
+      <h2 id="tutorial-step-title">${escapeHtml(step.title)}</h2>
       <p>${escapeHtml(step.body)}</p>
-      <small>${escapeHtml(step.hint)}</small>
-      ${welcome ? `<button class="primary tutorial-panel-action" data-action="tutorial-next">${escapeHtml(step.actionLabel)}</button>` : ""}
+      <small id="tutorial-step-hint">${escapeHtml(step.hint)}</small>
+      ${welcome ? `<button class="primary tutorial-panel-action" data-action="tutorial-next" data-primary-focus>${escapeHtml(step.actionLabel)}</button>` : ""}
       ${complete ? `
         <div class="tutorial-complete-actions">
           <button class="secondary" data-action="tutorial-restart">${locale() === LOCALES.KO ? "다시 연습" : "Replay"}</button>
-          <button class="primary" data-action="tutorial-exit">${locale() === LOCALES.KO ? "튜토리얼 목록" : "Tutorial List"}</button>
+          <button class="primary" data-action="tutorial-exit" data-primary-focus>${locale() === LOCALES.KO ? "튜토리얼 목록" : "Tutorial List"}</button>
         </div>
       ` : ""}
     </aside>
   `;
 }
 
+function tutorialUiState() {
+  return { handOpen, stagedChoiceId: stagedChoiceOptionId || null };
+}
+
+function tutorialStepLocation(stepId) {
+  const korean = locale() === LOCALES.KO;
+  const locations = korean
+    ? {
+        welcome: "안내 패널",
+        "open-hand": "화면 아래 손패",
+        "play-unit": "손패 위 명령 바",
+        "play-spell": "손패 위 명령 바",
+        "play-power-unit": "손패 위 명령 바",
+        "select-runes": "내 룬 영역",
+        "select-power-energy": "내 룬 영역",
+        "select-domain-power": "내 룬 영역",
+        "confirm-payment": "비용 지불 바",
+        "select-mover": "내 기지",
+        "select-attacker": "내 기지",
+        "move-unit": "손패 위 명령 바",
+        "move-attacker": "손패 위 명령 바",
+        "pass-showdown": "손패 위 결전 명령 바",
+        "choose-spell-target": "중앙 보드",
+        "confirm-spell-target": "대상 선택 바",
+        "assign-combat-damage": "전투 피해 배정 화면",
+        "end-turn": "오른쪽 세로 보조 메뉴",
+        complete: "완료 안내"
+      }
+    : {
+        welcome: "Guide panel",
+        "open-hand": "Hand at the bottom",
+        "play-unit": "Command bar above the hand",
+        "play-spell": "Command bar above the hand",
+        "play-power-unit": "Command bar above the hand",
+        "select-runes": "Your Rune row",
+        "select-power-energy": "Your Rune row",
+        "select-domain-power": "Your Rune row",
+        "confirm-payment": "Payment bar",
+        "select-mover": "Your Base",
+        "select-attacker": "Your Base",
+        "move-unit": "Command bar above the hand",
+        "move-attacker": "Command bar above the hand",
+        "pass-showdown": "Showdown command bar",
+        "choose-spell-target": "Center board",
+        "confirm-spell-target": "Target confirmation bar",
+        "assign-combat-damage": "Combat damage drawer",
+        "end-turn": "Right utility rail",
+        complete: "Lesson complete"
+      };
+  return locations[stepId] || (korean ? "게임 화면" : "Game board");
+}
+
+function tutorialChoiceInteraction(cardId, ui) {
+  if (!cardId || !game.pendingChoice || !["hand", "board"].includes(choiceCardSurface(game.pendingChoice))) return null;
+  const option = choiceOptionsForCard(cardId).find((candidate) =>
+    !candidate.disabled && tutorialActionAllowed(game, "choose-effect", {
+      choice: String(candidate.id || ""),
+      card: choiceOptionCardId(candidate)
+    }, ui)
+  );
+  return option
+    ? { allowed: true, action: "choose-effect", data: { choice: String(option.id || ""), card: choiceOptionCardId(option) } }
+    : { allowed: false, action: "choose-effect", data: { choice: "", card: cardId } };
+}
+
+function tutorialNodeInteraction(node, ui) {
+  const domAction = node.dataset.action || node.dataset.zoneAction || "";
+  const data = { ...node.dataset };
+
+  if (domAction === "confirm-staged-choice") {
+    const selected = stagedChoiceOption();
+    const choice = String(selected?.id || "");
+    const choiceData = { choice, card: selected ? choiceOptionCardId(selected) : "" };
+    return {
+      allowed: Boolean(selected) && tutorialActionAllowed(game, "choose-effect", choiceData, ui),
+      action: "choose-effect",
+      data: choiceData,
+      domAction
+    };
+  }
+
+  if (["stage-choice-card", "stage-choice-option"].includes(domAction)) {
+    const option = domAction === "stage-choice-option"
+      ? validChoiceOptions(game.pendingChoice).find((candidate) => candidate.id === data.choice)
+      : data.choice
+        ? validChoiceOptions(game.pendingChoice).find((candidate) => candidate.id === data.choice)
+        : choiceOptionsForCard(data.cardId).find((candidate) => !candidate.disabled);
+    const choiceData = { choice: String(option?.id || ""), card: option ? choiceOptionCardId(option) : data.cardId };
+    return {
+      allowed: Boolean(option && !option.disabled) && tutorialActionAllowed(game, "choose-effect", choiceData, ui),
+      action: "choose-effect",
+      data: choiceData,
+      domAction
+    };
+  }
+
+  if (domAction === "pay-rune") {
+    const modes = [...new Set([
+      data.mode,
+      data.paymentEnergy === "true" ? "energy" : "",
+      data.paymentPower === "true" ? "power" : ""
+    ].filter(Boolean))];
+    const mode = modes.find((candidate) => tutorialActionAllowed(game, "pay-rune", { ...data, mode: candidate }, ui));
+    return { allowed: Boolean(mode), action: "pay-rune", data: { ...data, mode: mode || data.mode }, domAction };
+  }
+
+  if (domAction) {
+    return {
+      allowed: tutorialActionAllowed(game, domAction, data, ui),
+      action: domAction,
+      data,
+      domAction
+    };
+  }
+
+  const cardId = String(node.dataset.cardId || "");
+  const choiceInteraction = tutorialChoiceInteraction(cardId, ui);
+  if (choiceInteraction) return { ...choiceInteraction, domAction: "stage-choice-card" };
+  return {
+    allowed: tutorialActionAllowed(game, "select-card", { card: cardId }, ui),
+    action: "select-card",
+    data: { card: cardId },
+    domAction: "select-card"
+  };
+}
+
+function tutorialNodeIsPrimary(step, interaction) {
+  if (!interaction?.allowed) return false;
+  if (step.id === "confirm-payment") return interaction.domAction === "confirm-payment";
+  if (step.id === "confirm-spell-target") return interaction.domAction === "confirm-staged-choice";
+  return true;
+}
+
 function applyTutorialTargets() {
   if (!isTutorialGame()) return;
-  for (const node of app.querySelectorAll("[data-action]")) {
-    const action = node.dataset.action;
+  const ui = tutorialUiState();
+  const step = tutorialStep(game, ui);
+  if (!step) return;
+  const selector = "[data-action], [data-zone-action], [data-card-id][role='button']";
+  for (const node of app.querySelectorAll(selector)) {
+    const action = node.dataset.action || node.dataset.zoneAction;
     if (node.closest(".tutorial-panel") || action === "tutorial-exit") continue;
-    const allowed = tutorialActionAllowed(game, action, { ...node.dataset }, { handOpen });
-    node.classList.toggle("tutorial-target", allowed);
+    const interaction = tutorialNodeInteraction(node, ui);
+    const allowed = Boolean(interaction?.allowed);
+    const primary = tutorialNodeIsPrimary(step, interaction);
+    node.classList.toggle("tutorial-target", primary);
+    node.classList.toggle("tutorial-allowed", allowed && !primary);
     node.classList.toggle("tutorial-locked", !allowed);
-    if (!allowed) node.setAttribute("aria-disabled", "true");
+    if (!allowed) {
+      node.setAttribute("aria-disabled", "true");
+      if (node instanceof HTMLButtonElement) node.disabled = true;
+      else if (node.matches("[role='button']")) node.tabIndex = -1;
+    } else if (!node.matches(":disabled")) {
+      node.removeAttribute("aria-disabled");
+    }
+    if (primary) {
+      const describedBy = new Set(String(node.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean));
+      describedBy.add("tutorial-step-hint");
+      node.setAttribute("aria-describedby", [...describedBy].join(" "));
+    }
   }
 }
 
 function tutorialAllowsUiAction(action, data = {}) {
-  return !isTutorialGame() || tutorialActionAllowed(game, action, data, { handOpen });
+  return !isTutorialGame() || tutorialActionAllowed(game, action, data, tutorialUiState());
+}
+
+function createBugReportUiState(recovered = false) {
+  return {
+    choice: "prompt",
+    description: "",
+    status: "idle",
+    error: "",
+    reportId: "",
+    submittedAt: "",
+    recovered,
+    followUpAfterUiError: false,
+    previousDecisions: []
+  };
+}
+
+function bugReportDecisionResolved() {
+  return !gameDiagnostic || ["submitted", "declined"].includes(bugReportUi.choice);
+}
+
+function pendingRecoveredBugReport() {
+  return Boolean(gameDiagnostic && bugReportUi.recovered && !bugReportDecisionResolved());
+}
+
+function diagnosticNavigationBlocked() {
+  return onlineDiagnosticRecoveryInProgress
+    || pendingRecoveredBugReport()
+    || Boolean(currentDiagnosticSnapshot()?.finalization && !bugReportDecisionResolved());
+}
+
+function guardedOnlineSurrenderCommand(command, identity) {
+  const expectedDiagnosticGameId = String(identity?.diagnosticGameId || "");
+  const expectedGameNumber = Number(identity?.gameNumber);
+  if (identity?.diagnosticIdentityCaptured !== true
+    || !expectedDiagnosticGameId
+    || !Number.isSafeInteger(expectedGameNumber)
+    || expectedGameNumber < 1) return null;
+  return {
+    ...command,
+    expectedDiagnosticGameId,
+    expectedGameNumber
+  };
+}
+
+function failRestoredOnlineDiagnosticRecovery(details = {}) {
+  if (!onlineDiagnosticRecoveryInProgress) return false;
+  const recorder = gameDiagnostic;
+  const snapshot = currentDiagnosticSnapshot();
+  try {
+    if (recorder && !snapshot?.finalization) {
+      recorder.recordEvent("online-diagnostic-recovery-failed", {
+        recoveredAfterAppRestart: true,
+        ...details
+      });
+      recorder.finalize(GAME_REPRODUCTION_END_REASONS.UI_ERROR, undefined, {
+        recoveredAfterAppRestart: true,
+        stopRequestAccepted: false,
+        serverStopConfirmed: false,
+        ...details
+      });
+    }
+  } catch {}
+  restoredGameDiagnosticCanResume = false;
+  onlineDiagnosticRecoveryInProgress = false;
+  bugReportUi = createBugReportUiState(true);
+  pendingOnlineDiagnosticStart = null;
+  persistGameDiagnostic({ immediate: true });
+  appView = "menu";
+  return true;
+}
+
+function abandonRestoredOnlineDiagnosticRecovery() {
+  if (!onlineDiagnosticRecoveryInProgress) return;
+  failRestoredOnlineDiagnosticRecovery({
+    recoveryFailure: "connection-unavailable",
+    recoveryAbandonedByUser: true
+  });
+  invalidateOnlineSession();
+  closeOnlineEvents();
+  bugReportUi.recovered = true;
+  appView = "menu";
+  render();
+}
+
+function restoreSavedGameDiagnostic() {
+  try {
+    const restored = restoreGameReproductionLogFromStorage(
+      window.localStorage,
+      GAME_DIAGNOSTIC_STORAGE_KEY,
+      { maxFrames: 20 }
+    );
+    if (!restored) return null;
+    const snapshot = restored.snapshot();
+    const reloadMarker = consumeGameDiagnosticReloadMarker();
+    restoredGameDiagnosticCanResume = Boolean(
+      !snapshot.finalization
+      && reloadMarker
+      && reloadMarker.logId === snapshot.logId
+      && Date.now() - reloadMarker.at < 60_000
+    );
+    if (!snapshot.finalization && !restoredGameDiagnosticCanResume) {
+      restored.finalize(GAME_REPRODUCTION_END_REASONS.UI_ERROR, undefined, {
+        recoveredAfterAppRestart: true
+      });
+    }
+    return restored;
+  } catch {
+    try { window.localStorage.removeItem(GAME_DIAGNOSTIC_STORAGE_KEY); } catch {}
+    return null;
+  }
+}
+
+function consumeGameDiagnosticReloadMarker() {
+  try {
+    const marker = JSON.parse(window.sessionStorage.getItem(GAME_DIAGNOSTIC_RELOAD_KEY) || "null");
+    window.sessionStorage.removeItem(GAME_DIAGNOSTIC_RELOAD_KEY);
+    return marker && typeof marker === "object"
+      ? { logId: String(marker.logId || ""), at: Number(marker.at) || 0 }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function markResumableOnlineReload() {
+  if (onlineDiagnosticRecoveryInProgress
+    || emergencyReportActive
+    || ["stopping", "failed"].includes(emergencyStopState)) {
+    clearGameDiagnosticReloadMarker();
+    return;
+  }
+  if (!gameDiagnostic || !isOnlineGame()) return;
+  try {
+    const snapshot = gameDiagnostic.summary?.() || gameDiagnostic.snapshot();
+    if (snapshot.finalization) {
+      clearGameDiagnosticReloadMarker();
+      return;
+    }
+    window.sessionStorage.setItem(GAME_DIAGNOSTIC_RELOAD_KEY, JSON.stringify({
+      logId: snapshot.logId,
+      at: Date.now()
+    }));
+  } catch {}
+}
+
+function clearGameDiagnosticReloadMarker() {
+  try { window.sessionStorage.removeItem(GAME_DIAGNOSTIC_RELOAD_KEY); } catch {}
+}
+
+function beginGameDiagnostic(mode, metadata = {}) {
+  pendingPostReportAction = null;
+  restoredGameDiagnosticCanResume = false;
+  onlineDiagnosticRecoveryInProgress = false;
+  try {
+    gameDiagnostic = createGameReproductionLog(game, {
+      maxEvents: 800,
+      maxFrames: 20,
+      metadata: {
+        mode,
+        locale: locale(),
+        build: clientBuildInfo,
+        playerId: isOnlineGame() ? online.playerId : viewerPlayerId(),
+        viewport: diagnosticViewport(),
+        ...(mode==='ai'?{modelGeneration:neuralAiCheckpointMetadata?.generation ?? activeCoachModel()?.generation ?? null}:{}),
+        ...metadata
+      }
+    });
+    bugReportUi = createBugReportUiState(false);
+    emergencyReportActive = false;
+    emergencyReportContext = null;
+    emergencyStopState = "idle";
+    emergencyStopError = "";
+    emergencyStopOwner = null;
+    emergencyStopOperation = null;
+    recoveredOnlineStopRequested = false;
+    lastDiagnosticRenderIssue = "";
+    diagnosticCommandAttemptSequence = 0;
+    persistGameDiagnostic({ immediate: true });
+  } catch (error) {
+    console?.error?.("Game diagnostics could not be started.", error);
+    gameDiagnostic = null;
+  }
+}
+
+function cancelScheduledDiagnosticPersistence() {
+  if (diagnosticPersistenceTimer) window.clearTimeout(diagnosticPersistenceTimer);
+  diagnosticPersistenceTimer = null;
+  if (diagnosticPersistenceIdleCallback != null
+    && diagnosticPersistenceIdleCallback !== DIAGNOSTIC_BOUNDARY_ONLY
+    && typeof window.cancelIdleCallback === "function") {
+    window.cancelIdleCallback(diagnosticPersistenceIdleCallback);
+  }
+  diagnosticPersistenceIdleCallback = null;
+}
+
+function scheduleDiagnosticStateCheckpoint(state, label = "command") {
+  if (!gameDiagnostic || gameDiagnostic.isFinalized?.() || !state || typeof state !== "object") return false;
+  // Keep only the newest state reference. Online snapshots replace `game`, while
+  // local commands mutate the same object; in both cases the idle flush captures
+  // the newest recoverable boundary without sanitizing every intermediate state.
+  pendingDiagnosticStateCheckpoint = {
+    recorder: gameDiagnostic,
+    state,
+    label
+  };
+  return true;
+}
+
+function discardPendingDiagnosticStateCheckpoint(recorder = gameDiagnostic) {
+  if (!pendingDiagnosticStateCheckpoint
+    || (recorder && pendingDiagnosticStateCheckpoint.recorder !== recorder)) return false;
+  pendingDiagnosticStateCheckpoint = null;
+  return true;
+}
+
+function flushPendingDiagnosticStateCheckpoint() {
+  const pending = pendingDiagnosticStateCheckpoint;
+  if (!pending) return true;
+  if (pending.recorder !== gameDiagnostic || pending.recorder.isFinalized?.()) {
+    pendingDiagnosticStateCheckpoint = null;
+    return true;
+  }
+  try {
+    // Persistence serializes the recorder immediately afterwards, so cloning
+    // the full sanitized checkpoint as an unused return value only adds work.
+    pending.recorder.checkpoint(pending.state, pending.label, { cloneResult: false });
+    if (pendingDiagnosticStateCheckpoint === pending) pendingDiagnosticStateCheckpoint = null;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function flushGameDiagnosticPersistence() {
+  cancelScheduledDiagnosticPersistence();
+  if (!gameDiagnostic) {
+    pendingDiagnosticStateCheckpoint = null;
+    return false;
+  }
+  if (["submitted", "declined"].includes(bugReportUi.choice)) {
+    forgetPersistedGameDiagnostic();
+    return true;
+  }
+  if (!diagnosticPersistenceDirty) return true;
+  if (!flushPendingDiagnosticStateCheckpoint()) return false;
+  try {
+    saveGameReproductionLogToStorage(window.localStorage, GAME_DIAGNOSTIC_STORAGE_KEY, gameDiagnostic);
+    diagnosticPersistenceDirty = false;
+    return true;
+  } catch {
+    // Keep a smaller recovery copy when a long game exceeds localStorage.
+    try {
+      const compact = gameDiagnostic.snapshot();
+      const frameCount = (compact.frames || []).length;
+      compact.frames = (compact.frames || []).slice(-3);
+      compact.droppedFrames = Number(compact.droppedFrames || 0)
+        + Math.max(0, frameCount - compact.frames.length);
+      window.localStorage.setItem(GAME_DIAGNOSTIC_STORAGE_KEY, JSON.stringify(compact));
+      diagnosticPersistenceDirty = false;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+function persistGameDiagnostic({ immediate = false } = {}) {
+  if (!gameDiagnostic) return false;
+  if (["submitted", "declined"].includes(bugReportUi.choice)) {
+    forgetPersistedGameDiagnostic();
+    return true;
+  }
+  diagnosticPersistenceDirty = true;
+  if (immediate) return flushGameDiagnosticPersistence();
+  if (diagnosticPersistenceTimer || diagnosticPersistenceIdleCallback != null) return true;
+  if (typeof window.requestIdleCallback !== "function") {
+    // There is no safe routine main-thread slot on older WebViews/Safari.
+    // Keep the newest checkpoint pending until final/error/hidden/pagehide,
+    // all of which already perform an exact synchronous boundary flush.
+    diagnosticPersistenceIdleCallback = DIAGNOSTIC_BOUNDARY_ONLY;
+    return true;
+  }
+  diagnosticPersistenceTimer = window.setTimeout(() => {
+    diagnosticPersistenceTimer = null;
+    diagnosticPersistenceIdleCallback = window.requestIdleCallback(() => {
+      diagnosticPersistenceIdleCallback = null;
+      flushGameDiagnosticPersistence();
+    });
+  }, 180);
+  return true;
+}
+
+function forgetPersistedGameDiagnostic() {
+  cancelScheduledDiagnosticPersistence();
+  diagnosticPersistenceDirty = false;
+  discardPendingDiagnosticStateCheckpoint();
+  try { window.localStorage.removeItem(GAME_DIAGNOSTIC_STORAGE_KEY); } catch {}
+}
+
+function retireTutorialDiagnosticForTransition() {
+  const snapshot = currentDiagnosticSnapshot();
+  const finalReason = snapshot?.finalization?.reason || null;
+  if (snapshot?.metadata?.mode !== "tutorial"
+    || (finalReason && finalReason !== GAME_REPRODUCTION_END_REASONS.NORMAL)) return false;
+  clearGameDiagnosticReloadMarker();
+  forgetPersistedGameDiagnostic();
+  gameDiagnostic = null;
+  bugReportUi = createBugReportUiState(false);
+  return true;
+}
+
+function diagnosticViewport() {
+  return {
+    width: Number(window.innerWidth) || 0,
+    height: Number(window.innerHeight) || 0,
+    devicePixelRatio: Number(window.devicePixelRatio) || 1,
+    orientation: window.screen?.orientation?.type || "",
+    userAgent: navigator.userAgent || "",
+    platform: navigator.userAgentData?.platform || navigator.platform || ""
+  };
+}
+
+function diagnosticUiContext(context = "UI") {
+  let modal = "";
+  try { modal = topUiModalKey() || ""; } catch {}
+  return {
+    context,
+    appView,
+    phase: game?.phase || "",
+    modal,
+    handOpen,
+    logOpen,
+    inspectorOpen,
+    pendingGameExit,
+    selectedCardId: game?.selectedCardId || onlineSelectedCardId || null,
+    viewport: diagnosticViewport()
+  };
+}
+
+function recordDiagnosticCommand(command, outcome = {}) {
+  if (!gameDiagnostic) return false;
+  try {
+    const diagnosticOutcome = { ...outcome };
+    delete diagnosticOutcome.state;
+    const requestedFinalization = diagnosticOutcome.finalization;
+    delete diagnosticOutcome.finalization;
+    const recordsFinalState = game?.phase === "complete" && diagnosticOutcome.status !== "rejected";
+    gameDiagnostic.recordCommand(command, {
+      ...diagnosticOutcome,
+      ...(recordsFinalState ? { state: game } : {})
+    });
+    if (recordsFinalState) discardPendingDiagnosticStateCheckpoint();
+    if (ensureGameDiagnosticFinalized(
+      requestedFinalization?.reason || null,
+      requestedFinalization?.details || {},
+      { stateAlreadyRecorded: recordsFinalState }
+    )) return true;
+    if (diagnosticOutcome.status !== "rejected") scheduleDiagnosticStateCheckpoint(game, "command");
+    persistGameDiagnostic();
+  } catch {}
+  return false;
+}
+
+function recordDiagnosticCommandAttempt(command, context = {}) {
+  if (!gameDiagnostic) return "";
+  const attemptId = `${Date.now()}-${++diagnosticCommandAttemptSequence}`;
+  try {
+    gameDiagnostic.recordEvent("command-attempt", {
+      attemptId,
+      command,
+      context,
+      ...(['togglePaymentPoolPower','togglePaymentPoolEnergy'].includes(command?.kind)
+        ? {resourceIdentity:recordablePaymentCommand(game,context.actorId||activePlayerId(),command).resourceIdentity}:{}),
+      ...(game.pendingChoice?.effect==='triggerOrder' && command?.kind==='chooseEffectOption'
+        ? {choiceOption:((option)=>option?{cardId:option.cardId,effectKind:option.effectKind}:null)
+          (game.pendingChoice.options?.find(option=>option.id===command.optionId))}: {})
+    });
+    persistGameDiagnostic();
+    return attemptId;
+  } catch {
+    return "";
+  }
+}
+
+function recordDiagnosticUiBreadcrumb(target, eventType = "click") {
+  if (!gameDiagnostic || appView !== "game") return;
+  try {
+    const control = target?.closest?.("[data-action], [data-zone-action], [data-card-id]");
+    const safeDataset = {};
+    const allowedKeys = [
+      "action", "zoneAction", "cardId", "card", "unit", "destination", "player",
+      "battlefield", "rune", "mode", "choice", "ability", "chainItemId", "target"
+    ];
+    for (const key of allowedKeys) {
+      if (control?.dataset?.[key] != null) safeDataset[key] = String(control.dataset[key]).slice(0, 180);
+    }
+    gameDiagnostic.recordUiBreadcrumb({
+      eventType,
+      tag: control?.tagName || target?.tagName || "",
+      dataset: safeDataset,
+      view: appView,
+      phase: game?.phase || "",
+      modal: topUiModalKey() || ""
+    });
+    persistGameDiagnostic();
+  } catch {}
+}
+
+function recordDiagnosticOnlineSnapshot(snapshot, { deferFinalization = false } = {}) {
+  if (!gameDiagnostic) return false;
+  try {
+    const recordsFinalState = game?.phase === "complete";
+    gameDiagnostic.markOnlineSnapshot({
+      revision: onlineSnapshotRevision,
+      roomId: snapshot?.room?.roomId || online.roomId,
+      gameNumber: snapshot?.match?.gameNumber || 1,
+      diagnosticGameId: snapshot?.room?.diagnosticGameId || null,
+      roomStatus: snapshot?.room?.status || ""
+    }, ...(recordsFinalState ? [game] : []));
+    if (recordsFinalState) discardPendingDiagnosticStateCheckpoint();
+    if (recordsFinalState && deferFinalization) return true;
+    if (ensureGameDiagnosticFinalized(null, {}, { stateAlreadyRecorded: recordsFinalState })) {
+      return recordsFinalState;
+    }
+    scheduleDiagnosticStateCheckpoint(game, "online-snapshot");
+    persistGameDiagnostic();
+    return recordsFinalState;
+  } catch {
+    return false;
+  }
+}
+
+function ensureGameDiagnosticFinalized(reason = null, details = {}, { stateAlreadyRecorded = false } = {}) {
+  if (!gameDiagnostic || game?.phase !== "complete") return false;
+  const alreadyFinalized = typeof gameDiagnostic.isFinalized === "function"
+    ? gameDiagnostic.isFinalized()
+    : Boolean(gameDiagnostic.summary?.().finalization);
+  if (alreadyFinalized) return false;
+  const endReason = reason || (game.surrenderedPlayerId
+    ? GAME_REPRODUCTION_END_REASONS.SURRENDER
+    : GAME_REPRODUCTION_END_REASONS.NORMAL);
+  gameDiagnostic.finalize(endReason, stateAlreadyRecorded ? undefined : game, {
+    winnerId: game.winnerId || null,
+    surrenderedPlayerId: game.surrenderedPlayerId || null,
+    ...details
+  });
+  discardPendingDiagnosticStateCheckpoint();
+  persistGameDiagnostic({ immediate: true });
+  return true;
+}
+
+function reproductionRandomSeeds() {
+  const values = new Uint32Array(3);
+  try {
+    globalThis.crypto.getRandomValues(values);
+  } catch {
+    for (let index = 0; index < values.length; index += 1) {
+      values[index] = Math.floor(Math.random() * 0x100000000) >>> 0;
+    }
+  }
+  const seed = (index) => values[index] || index + 1;
+  return {
+    randomSeed: seed(0),
+    playerRandomSeeds: { p1: seed(1), p2: seed(2) }
+  };
 }
 
 function reportUiException(error, context = "UI") {
@@ -2116,6 +3160,13 @@ function reportUiException(error, context = "UI") {
     const stackLine = firstStackLine(error);
     const entry = `[UI Exception] ${context}: ${message}${stackLine ? ` (${stackLine})` : ""}`;
     if (game?.log) game.log = [entry, ...game.log].slice(0, 18);
+    if (gameDiagnostic) {
+      try {
+        gameDiagnostic.recordUiError(error, diagnosticUiContext(context), game);
+        discardPendingDiagnosticStateCheckpoint();
+        persistGameDiagnostic({ immediate: true });
+      } catch {}
+    }
     if (console?.error) console.error(entry, error);
   } finally {
     reportingUiException = false;
@@ -2123,29 +3174,603 @@ function reportUiException(error, context = "UI") {
 }
 
 function errorMessage(error) {
-  if (error instanceof Error) return error.message || error.name;
-  return String(error ?? (locale() === LOCALES.KO ? "알 수 없는 오류" : "Unknown error"));
+  const fallback = locale() === LOCALES.KO ? "알 수 없는 오류" : "Unknown error";
+  let value = fallback;
+  try {
+    value = error instanceof Error ? (error.message || error.name || fallback) : (error ?? fallback);
+  } catch {}
+  return boundedUiErrorText(value, 4096, fallback);
 }
 
 function firstStackLine(error) {
-  if (!(error instanceof Error) || !error.stack) return "";
-  return error.stack
-    .split("\n")
-    .map((line) => line.trim())
-    .find((line) => line && !line.startsWith(error.name) && !line.includes("reportUiException")) || "";
+  try {
+    if (!(error instanceof Error) || !error.stack) return "";
+    const line = String(error.stack)
+      .split("\n", 12)
+      .map((entry) => entry.trim())
+      .find((entry) => entry && !entry.startsWith(error.name) && !entry.includes("reportUiException")) || "";
+    return boundedUiErrorText(line, 1024, "");
+  } catch {
+    return "";
+  }
+}
+
+function boundedUiErrorText(value, maxLength, fallback = "") {
+  let text = fallback;
+  try { text = String(value ?? fallback); } catch {}
+  return text.length <= maxLength ? text : `${text.slice(0, maxLength)}…[truncated]`;
 }
 
 function showUiExceptionOverlay(error, context = "UI") {
-  const existing = app.querySelector(".ui-exception-banner");
-  if (existing) existing.remove();
-  const banner = document.createElement("div");
-  banner.className = "ui-exception-banner";
-  banner.setAttribute("role", "alert");
-  banner.innerHTML = `
-    <strong>${locale() === LOCALES.KO ? "화면 처리 오류" : "UI Exception"}</strong>
-    <span>${escapeHtml(locale() === LOCALES.KO ? localizedUiExceptionContext(context) : context)}: ${escapeHtml(localizedDynamicText(errorMessage(error)))}</span>
+  try {
+    const existing = app.querySelector(".ui-exception-banner");
+    if (existing) existing.remove();
+    const banner = document.createElement("div");
+    banner.className = "ui-exception-banner";
+    banner.setAttribute("role", "alert");
+    banner.innerHTML = `
+      <strong>${locale() === LOCALES.KO ? "화면 처리 오류" : "UI Exception"}</strong>
+      <span>${escapeHtml(locale() === LOCALES.KO ? localizedUiExceptionContext(context) : context)}: ${escapeHtml(localizedDynamicText(errorMessage(error)))}</span>
+      ${appView === "game" && !replayMode ? `
+        <div class="ui-exception-actions">
+          <button type="button" class="secondary" data-ui-exception-continue>${locale() === LOCALES.KO ? "계속 시도" : "Keep trying"}</button>
+          <button type="button" class="danger" data-ui-exception-stop>${locale() === LOCALES.KO ? "오류로 경기 중단" : "Stop game after error"}</button>
+        </div>
+      ` : ""}
+    `;
+    banner.querySelector("[data-ui-exception-continue]")?.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      banner.remove();
+    });
+    banner.querySelector("[data-ui-exception-stop]")?.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void stopGameAfterUiError(error, context);
+    });
+    app.appendChild(banner);
+  } catch (overlayError) {
+    window.__riftboundEarlyCrashGuard?.show(overlayError, true);
+  }
+}
+
+async function stopGameAfterUiError(error, context = "UI") {
+  if (emergencyStopState === "stopping"
+    && emergencyStopOperationIsCurrent(emergencyStopOperation)) {
+    return emergencyStopOperation.promise;
+  }
+  const reopenedResolvedReport = reopenResolvedBugReportAfterUiError();
+  const firstAttempt = !emergencyReportActive || reopenedResolvedReport;
+  if (!gameDiagnostic) beginGameDiagnostic(isOnlineGame() ? "online" : aiMode ? "ai" : "local", {
+    recoveredFromUiError: true
+  });
+  emergencyReportActive = true;
+  clearGameDiagnosticReloadMarker();
+  emergencyReportContext = { error, context };
+  emergencyStopError = "";
+  if (firstAttempt) reportUiException(error, context);
+  let stopResult = { ok: false, message: "The game was stopped only on this device." };
+  let diagnosticFinalizedByCommand = false;
+  if (isOnlineGame()) {
+    const owner = emergencyStopState === "failed" && emergencyStopOwnerIsCurrent(emergencyStopOwner)
+      ? emergencyStopOwner
+      : {
+          generation: onlineSessionGeneration,
+          roomId: online.roomId,
+          playerToken: online.playerToken,
+          playerId: online.playerId,
+          diagnosticRecorder: gameDiagnostic,
+          ...captureOnlineDiagnosticIdentity({
+            roomId: online.roomId,
+            diagnosticKey: onlineDiagnosticGameKey,
+            metadata: currentDiagnosticSnapshot()?.metadata
+          }),
+          context
+        };
+    emergencyStopOwner = owner;
+    const operation = {
+      id: ++emergencyStopOperationSequence,
+      ...owner,
+      owner,
+      command: guardedOnlineSurrenderCommand(
+        { kind: "surrender", source: "ui-error-stop" },
+        owner
+      ),
+      promise: null
+    };
+    emergencyStopOperation = operation;
+    emergencyStopState = "stopping";
+    showEmergencyReportView();
+    const attemptId = recordDiagnosticCommandAttempt(
+      operation.command || { kind: "surrender", source: "ui-error-stop" },
+      { actorId: operation.playerId, online: true, uiErrorStop: true, stopOperationId: operation.id }
+    );
+    operation.promise = completeEmergencyOnlineStop(operation, attemptId);
+    return operation.promise;
+  } else {
+    let playerId = "p1";
+    try { playerId = viewerPlayerId() || playerId; } catch {}
+    const attemptId = recordDiagnosticCommandAttempt(
+      { kind: "surrender", source: "ui-error-stop" },
+      { actorId: playerId, uiErrorStop: true }
+    );
+    try {
+      stopResult = surrender(game, playerId);
+      if (stopResult?.ok !== false) markGameStateChanged();
+      diagnosticFinalizedByCommand = recordDiagnosticCommand({ kind: "surrender", source: "ui-error-stop" }, {
+        status: stopResult?.ok === false ? "rejected" : "success",
+        result: stopResult,
+        reason: stopResult?.message,
+        context: { actorId: playerId, uiErrorStop: true, attemptId },
+        finalization: {
+          reason: GAME_REPRODUCTION_END_REASONS.UI_ERROR,
+          details: {
+            context,
+            stopRequestAccepted: stopResult?.ok === true,
+            serverStopConfirmed: null
+          }
+        }
+      });
+      recordLocalGameIfComplete();
+      if (game.phase === "complete") completeAiReplay();
+    } catch (stopError) {
+      diagnosticFinalizedByCommand = recordDiagnosticCommand({ kind: "surrender", source: "ui-error-stop" }, {
+        status: "exception",
+        error: stopError,
+        context: { actorId: playerId, uiErrorStop: true, attemptId },
+        finalization: {
+          reason: GAME_REPRODUCTION_END_REASONS.UI_ERROR,
+          details: {
+            context,
+            stopRequestAccepted: false,
+            serverStopConfirmed: null
+          }
+        }
+      });
+    }
+    emergencyStopState = "stopped";
+  }
+  if (!diagnosticFinalizedByCommand) {
+    try {
+      gameDiagnostic?.finalize(GAME_REPRODUCTION_END_REASONS.UI_ERROR, game, {
+        context,
+        stopRequestAccepted: stopResult?.ok === true,
+        serverStopConfirmed: null
+      });
+    } catch {}
+    persistGameDiagnostic({ immediate: true });
+  }
+  pendingGameExit = null;
+  resultRevealReady = true;
+  resultDismissed = false;
+  showEmergencyReportView();
+}
+
+async function completeEmergencyOnlineStop(operation, attemptId) {
+  let stopResult = { ok: false, message: "The server did not confirm the surrender." };
+  let finalStateRecorded = false;
+  try {
+    if (!operation.command) {
+      throw new Error("The current online game identity is unavailable; no surrender was sent.");
+    }
+    const response = await diagnosticStopRequest(
+      sendOnlineCommand(operation.roomId, operation.playerToken, operation.command)
+    );
+    if (!emergencyStopOperationIsCurrent(operation)) return;
+    if (response?.ok !== true) throw new Error(response?.message || stopResult.message);
+    stopResult = response;
+    try {
+      operation.diagnosticRecorder?.recordCommand(operation.command, {
+        status: "success",
+        state: game,
+        result: response,
+        context: {
+          actorId: operation.playerId,
+          online: true,
+          uiErrorStop: true,
+          attemptId,
+          stopOperationId: operation.id
+        }
+      });
+      finalStateRecorded = true;
+      operation.diagnosticRecorder?.recordEvent("online-ui-error-stop", {
+        ok: true,
+        serverConfirmed: true,
+        stopOperationId: operation.id
+      });
+    } catch {}
+    emergencyStopState = "stopped";
+    closeOnlineEvents();
+  } catch (stopError) {
+    if (!emergencyStopOperationIsCurrent(operation)) return;
+    emergencyStopState = "failed";
+    emergencyStopError = errorMessage(stopError);
+    try {
+      operation.diagnosticRecorder?.recordEvent("online-ui-error-stop", {
+        ok: false,
+        serverConfirmed: false,
+        stopOperationId: operation.id,
+        error: { name: stopError?.name, message: stopError?.message, stack: stopError?.stack }
+      }, game);
+    } catch {}
+    persistGameDiagnostic({ immediate: true });
+    showEmergencyReportView();
+    if (emergencyStopOperation === operation) emergencyStopOperation = null;
+    return;
+  }
+  if (!emergencyStopOperationIsCurrent(operation)) return;
+  try {
+    operation.diagnosticRecorder?.finalize(
+      GAME_REPRODUCTION_END_REASONS.UI_ERROR,
+      finalStateRecorded ? undefined : game,
+      {
+        context: emergencyReportContext?.context || "UI",
+        stopRequestAccepted: stopResult?.ok === true,
+        serverStopConfirmed: stopResult?.ok === true,
+        stopOperationId: operation.id
+      }
+    );
+  } catch {}
+  persistGameDiagnostic({ immediate: true });
+  pendingGameExit = null;
+  resultRevealReady = true;
+  resultDismissed = false;
+  showEmergencyReportView();
+  if (emergencyStopOperation === operation) emergencyStopOperation = null;
+  if (emergencyStopOwner === operation.owner) emergencyStopOwner = null;
+}
+
+function emergencyStopOperationIsCurrent(operation) {
+  return Boolean(operation)
+    && emergencyStopOperation === operation
+    && emergencyStopOwnerIsCurrent(operation.owner)
+    && operation.generation === operation.owner.generation
+    && operation.roomId === operation.owner.roomId
+    && operation.playerToken === operation.owner.playerToken
+    && operation.diagnosticRecorder === operation.owner.diagnosticRecorder;
+}
+
+function emergencyStopOwnerIsCurrent(owner) {
+  return Boolean(owner)
+    && emergencyStopOwner === owner
+    && onlineCommandSessionIsCurrent(owner)
+    && gameDiagnostic === owner.diagnosticRecorder;
+}
+
+function reopenResolvedBugReportAfterUiError() {
+  if (!gameDiagnostic || !["submitted", "declined"].includes(bugReportUi.choice)) return false;
+  const previousLog = currentDiagnosticSnapshot();
+  const previousDecision = {
+    choice: bugReportUi.choice,
+    reportId: bugReportUi.reportId || "",
+    submittedAt: bugReportUi.submittedAt || "",
+    endReason: previousLog?.finalization?.reason || ""
+  };
+  const previousDecisions = [
+    ...(Array.isArray(bugReportUi.previousDecisions) ? bugReportUi.previousDecisions : []),
+    previousDecision
+  ];
+  try {
+    gameDiagnostic.recordEvent("bug-report-follow-up-after-ui-error", {
+      previousChoice: previousDecision.choice,
+      previousReportId: previousDecision.reportId || null,
+      previousSubmittedAt: previousDecision.submittedAt || null,
+      previousEndReason: previousDecision.endReason || null
+    }, game);
+  } catch {}
+  bugReportUi = createBugReportUiState(false);
+  bugReportUi.followUpAfterUiError = true;
+  bugReportUi.previousDecisions = previousDecisions;
+  return true;
+}
+
+function retryOnlineStopAfterUiError() {
+  if (!emergencyReportContext
+    || emergencyStopState !== "failed"
+    || !emergencyStopOwnerIsCurrent(emergencyStopOwner)) return;
+  void stopGameAfterUiError(emergencyReportContext.error, emergencyReportContext.context);
+}
+
+function confirmEmergencyOnlineStopFromSnapshot(owner, descriptor, stateAlreadyRecorded) {
+  if (!emergencyStopOwnerIsCurrent(owner)
+    || !onlineDiagnosticIdentityMatchesDescriptor(owner, descriptor)) return false;
+  if (!emergencyReportActive
+    || !isOnlineGame()
+    || game?.phase !== "complete"
+    || !["stopping", "failed", "stopped"].includes(emergencyStopState)) return false;
+  emergencyStopState = "stopped";
+  emergencyStopError = "";
+  try {
+    owner.diagnosticRecorder?.recordEvent("online-ui-error-stop-confirmed-by-snapshot", {
+      serverConfirmed: true,
+      winnerId: game.winnerId || null,
+      surrenderedPlayerId: game.surrenderedPlayerId || null
+    });
+  } catch {}
+  const finalized = ensureGameDiagnosticFinalized(
+    GAME_REPRODUCTION_END_REASONS.UI_ERROR,
+    {
+      context: owner.context || emergencyReportContext?.context || "UI",
+      stopRequestAccepted: game.surrenderedPlayerId ? true : null,
+      serverStopConfirmed: true,
+      confirmedByAuthoritativeSnapshot: true
+    },
+    { stateAlreadyRecorded }
+  );
+  if (!finalized) persistGameDiagnostic({ immediate: true });
+  closeOnlineEvents();
+  pendingGameExit = null;
+  resultRevealReady = true;
+  resultDismissed = false;
+  showEmergencyReportView();
+  if (emergencyStopOperation?.owner === owner) emergencyStopOperation = null;
+  if (emergencyStopOwner === owner) emergencyStopOwner = null;
+  return true;
+}
+
+function preserveUiErrorLogWithoutServerStop() {
+  if (!gameDiagnostic || !isOnlineGame() || emergencyStopState !== "failed") return;
+  emergencyStopState = "preserved-local";
+  try {
+    gameDiagnostic.recordEvent("online-ui-error-stop-local-preservation", {
+      serverConfirmed: false,
+      userAcceptedUnconfirmedServerState: true,
+      lastError: emergencyStopError
+    });
+    gameDiagnostic.finalize(GAME_REPRODUCTION_END_REASONS.UI_ERROR, game, {
+      context: emergencyReportContext?.context || "UI",
+      stopRequestAccepted: false,
+      serverStopConfirmed: false,
+      locallyPreservedOnly: true
+    });
+  } catch {}
+  persistGameDiagnostic({ immediate: true });
+  emergencyStopOperation = null;
+  emergencyStopOwner = null;
+  closeOnlineEvents();
+  pendingGameExit = null;
+  resultRevealReady = true;
+  resultDismissed = false;
+  showEmergencyReportView();
+}
+
+function diagnosticStopRequest(request, timeoutMs = 8_000) {
+  let timeoutId = null;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = window.setTimeout(() => reject(new Error("Game stop request timed out.")), timeoutMs);
+  });
+  return Promise.race([request, timeout]).finally(() => window.clearTimeout(timeoutId));
+}
+
+function showEmergencyReportView() {
+  const korean = locale() === LOCALES.KO;
+  const waitingForOnlineStop = isOnlineGame() && emergencyStopState === "stopping";
+  const onlineStopFailed = isOnlineGame() && emergencyStopState === "failed";
+  const locallyPreservedOnly = isOnlineGame() && emergencyStopState === "preserved-local";
+  const reportReady = !waitingForOnlineStop && !onlineStopFailed;
+  const title = waitingForOnlineStop
+    ? (korean ? "서버에 경기 중단을 요청하고 있습니다" : "Requesting a server-side game stop")
+    : onlineStopFailed
+      ? (korean ? "서버 경기 중단을 확인하지 못했습니다" : "The server-side game stop was not confirmed")
+      : locallyPreservedOnly
+        ? (korean ? "서버 경기 중단 없이 로그만 보존했습니다" : "The log was preserved without a confirmed server-side stop")
+        : (korean ? "화면 오류로 경기를 중단했습니다" : "The game was stopped after a UI error");
+  const detail = waitingForOnlineStop
+    ? (korean ? "응답을 확인할 때까지 이 화면을 유지해 주세요." : "Keep this screen open until the server responds.")
+    : onlineStopFailed
+      ? (korean
+        ? `서버가 항복을 수락했는지 확인할 수 없습니다. ${emergencyStopError ? `(${localizedDynamicText(emergencyStopError)})` : ""}`
+        : `The surrender could not be confirmed. ${emergencyStopError ? `(${emergencyStopError})` : ""}`)
+      : locallyPreservedOnly
+        ? (korean
+          ? "이 기기의 재현 로그만 종료 상태로 보존했습니다. 서버의 경기는 계속 진행 중일 수 있습니다."
+          : "Only this device's reproduction log was finalized. The server game may still be running.")
+        : (korean
+          ? `${localizedUiExceptionContext(emergencyReportContext?.context)} 오류와 경기 재현 정보를 보존했습니다.`
+          : `The ${emergencyReportContext?.context || "UI"} error and reproduction data were preserved.`);
+  try {
+    replaceAppMarkup(`
+      <main class="shell-screen emergency-game-stop-screen">
+        <section class="emergency-game-stop" role="dialog" aria-modal="true" aria-labelledby="emergency-stop-title">
+          <span>${reportReady ? (korean ? "재현 로그 보존" : "Reproduction log preserved") : (korean ? "중단 확인 필요" : "Stop confirmation required")}</span>
+          <h1 id="emergency-stop-title">${escapeHtml(title)}</h1>
+          <p>${escapeHtml(detail)}</p>
+          ${onlineStopFailed ? `
+            <div class="game-bug-report-actions emergency-stop-recovery-actions">
+              <button type="button" class="primary" data-action="bug-report-retry-online-stop">${korean ? "서버 중단 다시 시도" : "Retry server stop"}</button>
+              <button type="button" class="secondary" data-action="bug-report-preserve-local">${korean ? "서버 확인 없이 로그만 보존" : "Preserve log without confirmation"}</button>
+            </div>
+          ` : ""}
+          ${waitingForOnlineStop ? `<p class="online-status" role="status">${korean ? "서버 응답을 기다리는 중…" : "Waiting for the server…"}</p>` : ""}
+          ${reportReady ? gameBugReportPanel({ emergency: true }) : ""}
+          ${reportReady ? `<button type="button" class="secondary emergency-menu-button" data-action="bug-report-return-menu">${korean ? "메인 메뉴로" : "Main menu"}</button>` : ""}
+        </section>
+      </main>
+    `);
+  } catch (viewError) {
+    lastAppMarkup = null;
+    app.textContent = reportReady
+      ? (korean
+        ? "경기 로그를 보존했습니다. 앱을 다시 실행하면 로그 전송 여부를 선택할 수 있습니다."
+        : "The game log was preserved. Restart the app to choose whether to send it.")
+      : (korean
+        ? "서버 경기 중단 상태를 확인하지 못했습니다. 비상 복구 화면을 여는 중입니다."
+        : "The server-side stop could not be confirmed. Opening emergency recovery.");
+    console?.error?.("Emergency report view failed.", viewError);
+    window.__riftboundEarlyCrashGuard?.show(viewError, true);
+  }
+}
+
+function gameBugReportPanel(options = {}) {
+  if (!gameDiagnostic) return "";
+  ensureGameDiagnosticFinalized();
+  const korean = locale() === LOCALES.KO;
+  const validation = validateGameReportDescription(bugReportUi.description);
+  const choice = bugReportUi.choice;
+  const descriptionPlaceholder = korean
+    ? GAME_REPRODUCTION_DESCRIPTION_PLACEHOLDER
+    : "Describe the bug and the action immediately before it in at least 10 characters.";
+  const title = bugReportUi.followUpAfterUiError
+    ? (korean ? "새 화면 오류가 기록되었습니다. 추가 로그를 전송할까요?" : "A new UI error was captured. Send an additional report?")
+    : options.recovered
+      ? (korean ? "중단된 경기 로그가 남아 있습니다" : "An interrupted game log is available")
+      : (korean ? "이 경기의 재현 로그를 서버에 전송할까요?" : "Send this game's reproduction log?");
+  const followUpNotice = bugReportUi.followUpAfterUiError
+    ? `<p>${korean
+      ? "이전 전송 또는 전송하지 않음 결정은 그대로 유지됩니다. 새로 기록된 화면 오류는 별도 보고로 처리됩니다."
+      : "Your earlier submission or decision is unchanged. The newly captured UI error will be handled as a separate report."}</p>`
+    : "";
+  if (choice === "submitted") {
+    return `
+      <section class="game-bug-report status-submitted" aria-label="${korean ? "버그 로그 전송 완료" : "Bug log submitted"}">
+        <strong>${korean ? "로그를 전송했습니다" : "Log submitted"}</strong>
+        <p>${korean ? "접수 ID" : "Report ID"}: <code>${escapeHtml(bugReportUi.reportId)}</code></p>
+      </section>
+    `;
+  }
+  if (choice === "declined") {
+    return `
+      <section class="game-bug-report status-declined" aria-label="${korean ? "버그 로그 전송 안 함" : "Bug log not submitted"}">
+        <strong>${korean ? "이 경기의 로그를 전송하지 않습니다" : "This game's log will not be sent"}</strong>
+      </section>
+    `;
+  }
+  if (choice !== "form") {
+    return `
+      <section class="game-bug-report" aria-labelledby="game-bug-report-title">
+        <div class="game-bug-report-copy">
+          <strong id="game-bug-report-title">${title}</strong>
+          <p>${korean
+            ? "전송할 때 경기 상태, 행동 기록, 최근 화면 조작과 오류 정보가 포함됩니다. 온라인 경기는 서버의 양쪽 플레이어 숨겨진 카드 정보가 포함될 수 있으며 서버 관리자만 조회할 수 있습니다. 로그인하지 않아도 전송할 수 있습니다."
+            : "The report includes game states, actions, recent UI interactions, and errors. Online reports may include both players' hidden card information from the server, visible only to server administrators. Sign-in is not required."}</p>
+          ${followUpNotice}
+        </div>
+        <div class="game-bug-report-actions">
+          <button type="button" class="secondary" data-action="bug-report-decline">${korean ? "전송하지 않음" : "Do not send"}</button>
+          <button type="button" class="primary" data-action="bug-report-open">${korean ? "로그 전송" : "Send log"}</button>
+        </div>
+      </section>
+    `;
+  }
+  return `
+    <section class="game-bug-report report-form" aria-labelledby="game-bug-report-title">
+      <div class="game-bug-report-copy">
+        <strong id="game-bug-report-title">${title}</strong>
+          <p>${korean
+            ? "어떤 상황에서 무엇이 잘못되었고, 원래 어떤 동작을 기대했는지 직접 작성해 주세요."
+            : "Describe what went wrong, when it happened, and what you expected."}</p>
+          ${followUpNotice}
+      </div>
+      <label for="game-bug-report-description">${korean ? "버그 설명 (필수)" : "Bug description (required)"}</label>
+      <textarea id="game-bug-report-description" data-action="bug-report-description" required minlength="10" maxlength="2000" placeholder="${escapeHtml(descriptionPlaceholder)}" aria-describedby="game-bug-report-help">${escapeHtml(bugReportUi.description)}</textarea>
+      <div class="game-bug-report-help" id="game-bug-report-help">
+        <small>${korean ? "앞뒤 공백을 제외하고 최소 10자 이상 작성해야 전송할 수 있습니다." : "Enter at least 10 characters after trimming leading and trailing whitespace."}</small>
+        <output data-bug-report-count>${validation.codePointLength}/10</output>
+      </div>
+      ${bugReportUi.error ? `<p class="game-bug-report-error" role="alert">${escapeHtml(bugReportUi.error)}</p>` : ""}
+      <div class="game-bug-report-actions">
+        <button type="button" class="secondary" data-action="bug-report-decline" ${bugReportUi.status === "submitting" ? "disabled" : ""}>${korean ? "전송하지 않음" : "Do not send"}</button>
+        <button type="button" class="secondary" data-action="bug-report-cancel" ${bugReportUi.status === "submitting" ? "disabled" : ""}>${korean ? "뒤로" : "Back"}</button>
+        <button type="button" class="primary" data-action="bug-report-submit" ${!validation.valid || bugReportUi.status === "submitting" ? "disabled" : ""}>${bugReportUi.status === "submitting" ? (korean ? "전송 중…" : "Sending…") : (korean ? "설명과 로그 전송" : "Send description and log")}</button>
+      </div>
+    </section>
   `;
-  app.appendChild(banner);
+}
+
+function handleBugReportAction(action) {
+  if (!action?.startsWith("bug-report-")) return false;
+  if (action === "bug-report-retry-online-stop") {
+    retryOnlineStopAfterUiError();
+    return true;
+  }
+  if (action === "bug-report-preserve-local") {
+    preserveUiErrorLogWithoutServerStop();
+    return true;
+  }
+  if (action === "bug-report-open") {
+    bugReportUi.choice = "form";
+    bugReportUi.error = "";
+  }
+  if (action === "bug-report-cancel") {
+    bugReportUi.choice = "prompt";
+    bugReportUi.error = "";
+  }
+  if (action === "bug-report-decline") {
+    bugReportUi.choice = "declined";
+    bugReportUi.status = "idle";
+    bugReportUi.error = "";
+    forgetPersistedGameDiagnostic();
+    startPendingOnlineDiagnosticIfReady();
+    continuePendingPostReportActionIfReady();
+  }
+  if (action === "bug-report-submit") void submitCurrentGameBugReport();
+  if (action === "bug-report-return-menu") {
+    emergencyReportActive = false;
+    emergencyReportContext = null;
+    emergencyStopOwner = null;
+    emergencyStopOperation = null;
+    bugReportUi.recovered = Boolean(gameDiagnostic)
+      && !["submitted", "declined"].includes(bugReportUi.choice);
+    appView = "menu";
+    resetGameUiState();
+  }
+  if (action !== "bug-report-submit") refreshBugReportSurface();
+  return true;
+}
+
+async function submitCurrentGameBugReport() {
+  if (!gameDiagnostic || bugReportUi.status === "submitting") return;
+  const validation = validateGameReportDescription(bugReportUi.description);
+  if (!validation.valid) {
+    bugReportUi.error = validation.message;
+    refreshBugReportSurface();
+    return;
+  }
+  try {
+    ensureGameDiagnosticFinalized();
+    bugReportUi.status = "submitting";
+    bugReportUi.error = "";
+    refreshBugReportSurface();
+    await (diagnosticServerReady ||= configureDiagnosticServer());
+    const payload = createGameLogSubmissionPayload(gameDiagnostic, validation.value, {
+      app: clientBuildInfo,
+      locale: locale(),
+      client: diagnosticViewport(),
+      accountId: auth.user?.accountId || null
+    });
+    const diagnosticMetadata = currentDiagnosticSnapshot()?.metadata || {};
+    if (isOnlineGame() && diagnosticMetadata.mode === "online") {
+      payload.onlineContext = {
+        roomId: diagnosticMetadata.roomId || online.roomId,
+        playerToken: online.playerToken,
+        gameNumber: Number(diagnosticMetadata.gameNumber) || 1,
+        ...(diagnosticMetadata.diagnosticGameId
+          ? { diagnosticGameId: String(diagnosticMetadata.diagnosticGameId) }
+          : {})
+      };
+    }
+    const result = await submitBugReport(payload, { accountToken: auth.token });
+    const receipt = validateBugReportSubmissionReceipt(result);
+    bugReportUi.choice = "submitted";
+    bugReportUi.status = "idle";
+    bugReportUi.reportId = receipt.reportId;
+    bugReportUi.submittedAt = receipt.submittedAt;
+    forgetPersistedGameDiagnostic();
+    startPendingOnlineDiagnosticIfReady();
+    continuePendingPostReportActionIfReady();
+  } catch (error) {
+    bugReportUi.status = "failed";
+    bugReportUi.error = locale() === LOCALES.KO
+      ? `로그를 전송하지 못했습니다. 내용을 유지했으니 다시 시도해 주세요. (${localizedDynamicText(errorMessage(error))})`
+      : `The log could not be sent. Your description is preserved; please retry. (${errorMessage(error)})`;
+    persistGameDiagnostic();
+  }
+  refreshBugReportSurface();
+}
+
+function refreshBugReportSurface() {
+  if (emergencyReportActive) showEmergencyReportView();
+  else render();
 }
 
 function localizedUiExceptionContext(context) {
@@ -2171,37 +3796,52 @@ function captureScrollState() {
     state[selector] = { top: node.scrollTop, left: node.scrollLeft };
   }
   const scope = scrollStateScope();
-  for (const node of app.querySelectorAll("*")) {
-    if (node.hasAttribute("data-scroll-key")) continue;
-    const style = window.getComputedStyle(node);
-    const scrollsHorizontally = /^(auto|scroll|overlay)$/.test(style.overflowX) && node.scrollWidth > node.clientWidth + 1;
-    const scrollsVertically = /^(auto|scroll|overlay)$/.test(style.overflowY) && node.scrollHeight > node.clientHeight + 1;
-    if (!scrollsHorizontally && !scrollsVertically) continue;
-    const path = scrollNodePath(node);
-    if (!path) continue;
-    state[`@auto:${scope}:${path.join(".")}`] = {
-      top: node.scrollTop,
-      left: node.scrollLeft,
-      path,
-      scope,
-      signature: scrollNodeSignature(node)
-    };
-  }
   const scrollingElement = document.scrollingElement;
   if (scrollingElement) {
     state[`@page:${scope}`] = { top: scrollingElement.scrollTop, left: scrollingElement.scrollLeft, scope };
   }
   if (state[".hand-panel .cards"]) handScrollLeft = state[".hand-panel .cards"].left || 0;
-  return { ...shellScrollState, ...state };
+  const ownerScope = scrollStateOwnerScope(scope);
+  return {
+    ownerScope,
+    state: rememberBoundedScrollState(ownerScope, state)
+  };
 }
 
-function restoreScrollState(state = shellScrollState) {
-  shellScrollState = state || {};
+function restoreScrollState(captured = null) {
+  const ownerScope = scrollStateOwnerScope();
+  shellScrollState = captured?.ownerScope === ownerScope
+    ? captured.state
+    : shellScrollStateByScope.get(ownerScope) || {};
+  if (!currentRenderMarkupChanged) return;
   applyScrollState(shellScrollState);
   const scheduledState = shellScrollState;
-  window.requestAnimationFrame(() => {
+  if (scrollRestoreFrame) window.cancelAnimationFrame(scrollRestoreFrame);
+  scrollRestoreFrame = window.requestAnimationFrame(() => {
+    scrollRestoreFrame = 0;
     if (shellScrollState === scheduledState) applyScrollState(scheduledState);
   });
+}
+
+function rememberBoundedScrollState(ownerScope, currentState) {
+  const entries = new Map(Object.entries(shellScrollStateByScope.get(ownerScope) || {}));
+  // Refresh current nodes to the newest end of the bounded map. Transient
+  // choice/action/field ids otherwise accumulated forever and made every
+  // later render query the DOM once for every interaction in the match.
+  for (const [key, value] of Object.entries(currentState || {})) {
+    entries.delete(key);
+    entries.set(key, value);
+  }
+  while (entries.size > SCROLL_STATE_ENTRY_LIMIT) {
+    entries.delete(entries.keys().next().value);
+  }
+  const bounded = Object.fromEntries(entries);
+  shellScrollStateByScope.delete(ownerScope);
+  shellScrollStateByScope.set(ownerScope, bounded);
+  while (shellScrollStateByScope.size > SCROLL_STATE_SCOPE_LIMIT) {
+    shellScrollStateByScope.delete(shellScrollStateByScope.keys().next().value);
+  }
+  return bounded;
 }
 
 function applyScrollState(state) {
@@ -2213,9 +3853,8 @@ function applyScrollState(state) {
       document.scrollingElement.scrollLeft = value.left || 0;
       continue;
     }
-    const node = selector.startsWith("@auto:")
-      ? (value.scope === scope ? resolveScrollNodePath(value.path) : null)
-      : app.querySelector(selector);
+    if (selector.startsWith("@auto:")) continue;
+    const node = app.querySelector(selector);
     if (!node || (value.signature && scrollNodeSignature(node) !== value.signature)) continue;
     node.scrollTop = value.top || 0;
     node.scrollLeft = value.left || 0;
@@ -2234,27 +3873,10 @@ function scrollStateScope() {
   return [...main.classList].sort().join(".") || main.tagName.toLowerCase();
 }
 
-function scrollNodePath(node) {
-  const path = [];
-  let current = node;
-  while (current && current !== app) {
-    const parent = current.parentElement;
-    if (!parent) return null;
-    const index = [...parent.children].indexOf(current);
-    if (index < 0) return null;
-    path.unshift(index);
-    current = parent;
-  }
-  return current === app ? path : null;
-}
-
-function resolveScrollNodePath(path = []) {
-  let node = app;
-  for (const index of path) {
-    node = node?.children?.[index] || null;
-    if (!node) return null;
-  }
-  return node;
+function scrollStateOwnerScope(pageScope = scrollStateScope()) {
+  // Game phases share board/hand scroll positions, while page scroll remains
+  // keyed by the more specific phase through its @page entry.
+  return String(pageScope || "empty").startsWith("layout.phase-") ? "layout" : String(pageScope || "empty");
 }
 
 function scrollNodeSignature(node) {
@@ -2266,6 +3888,7 @@ function scrollNodeSignature(node) {
 }
 
 function restorePaymentScroll() {
+  if (!currentRenderMarkupChanged) return;
   const payRunes = app.querySelector(".pay-runes");
   if (payRunes) payRunes.scrollLeft = paymentRunesScrollLeft;
 }
@@ -2276,13 +3899,29 @@ function menuView() {
   const playableDecks = deckStore.decks.filter((deck) => validateDeckRecord(deck).playable);
   const generation = selectedAiGenerationDescriptor();
   const aiDeckTrainingId = trainingDeckIdForGeneration(activeDecks[1], generation);
-  const aiMatchReady = validPair && Boolean(aiDeckTrainingId);
+  const aiTrialPreset = matchingAiPreset(activeDecks[1], cardByNumber);
+  const aiMatchReady = validPair && Boolean(aiDeckTrainingId || aiTrialPreset);
+  const reportPending = diagnosticNavigationBlocked();
   return `
     <main class="shell-screen main-menu">
       <section class="menu-hero">
         <p class="eyebrow visible">Riftbound Online</p>
         <h1>Riftbound</h1>
         ${accountMenuPanel()}
+        ${gameDiagnostic && bugReportUi.recovered && !["submitted", "declined"].includes(bugReportUi.choice)
+          ? gameBugReportPanel({ recovered: true })
+          : ""}
+        ${onlineDiagnosticRecoveryInProgress ? `
+          <section class="game-bug-report diagnostic-recovery-wait" role="status">
+            <h2>${locale() === LOCALES.KO ? "온라인 경기 복구 중" : "Recovering online game"}</h2>
+            <p>${locale() === LOCALES.KO
+              ? "저장된 경기와 서버의 현재 경기가 일치하는지 확인하고 있습니다. 확인 전에는 새 경기를 시작할 수 없습니다."
+              : "Checking that the saved game matches the server's current game. A new game cannot start until this is verified."}</p>
+            <button type="button" class="secondary" data-action="diagnostic-recovery-abandon">${locale() === LOCALES.KO
+              ? "복구 중단하고 로그 보존"
+              : "Stop recovery and preserve log"}</button>
+          </section>
+        ` : ""}
         <div class="settings-row" aria-label="${t("settings", locale())}">
           <label>
             <span>${t("language", locale())}</span>
@@ -2323,25 +3962,29 @@ function menuView() {
         </div>
         <label class="sideboard-toggle">
           <input type="checkbox" data-action="settings-sideboarding" ${settings.sideboardingEnabled ? "checked" : ""} />
-          <span>${locale() === LOCALES.KO ? "사이드전 사용 (3판 2선승)" : "Use sideboarding (best of three)"}</span>
+          <span>${locale() === LOCALES.KO ? "3판 2선승 매치 (해제 시 단판 대회 변경 절차)" : "Best of three (off uses the single-game tournament procedure)"}</span>
         </label>
         <div class="menu-actions">
-          <button class="primary menu-button tutorial-start" data-action="menu-tutorial">
+          <button class="primary menu-button tutorial-start" data-action="menu-tutorial" ${reportPending ? "disabled" : ""}>
             ${locale() === LOCALES.KO
               ? `튜토리얼 ${tutorialRecord.completedIds.length}/${TUTORIAL_CATALOG.length}`
               : `Tutorials ${tutorialRecord.completedIds.length}/${TUTORIAL_CATALOG.length}`}
           </button>
-          <button class="primary menu-button" data-action="menu-start" ${validPair ? "" : "disabled"}>${t("startGame", locale())}</button>
-          <button class="primary menu-button coach-start" data-action="menu-ai" ${aiMatchReady && neuralAiLoadState !== "loading" ? "" : "disabled"}>${neuralAiLoadState === "loading" ? (locale() === LOCALES.KO ? "선택한 세대 로딩 중…" : "Loading selected generation…") : (locale() === LOCALES.KO ? "학습 AI와 대전" : "Play Learning AI")}</button>
+          <button class="primary menu-button" data-action="menu-start" ${validPair && !reportPending ? "" : "disabled"}>${t("startGame", locale())}</button>
+          <button class="primary menu-button coach-start" data-action="menu-ai" ${aiMatchReady && neuralAiLoadState !== "loading" && !reportPending ? "" : "disabled"}>${neuralAiLoadState === "loading" ? (locale() === LOCALES.KO ? "선택한 세대 로딩 중…" : "Loading selected generation…") : (locale() === LOCALES.KO ? "학습 AI와 대전" : "Play Learning AI")}</button>
           <button class="secondary menu-button replay-menu-button" data-action="menu-replays">${locale() === LOCALES.KO ? "AI 경기 리플레이" : "AI Match Replays"}</button>
-          <button class="secondary menu-button" data-action="menu-multiplayer">${t("multiplayer", locale())}</button>
+          <button class="secondary menu-button" data-action="menu-multiplayer" ${reportPending ? "disabled" : ""}>${t("multiplayer", locale())}</button>
           <button class="secondary menu-button" data-action="menu-decks">${t("deckEdit", locale())}</button>
         </div>
         <p class="ai-model-status">${escapeHtml(neuralAiStatusText())}</p>
         ${aiGenerationCatalogError ? `<p class="online-error" role="alert">${escapeHtml(aiGenerationCatalogError)}</p>` : ""}
-        ${validPair && !aiDeckTrainingId ? `<p class="deck-warning ai-deck-warning">${escapeHtml(locale() === LOCALES.KO
-          ? `${generation.generation}세대 AI는 학습한 5개 덱만 사용할 수 있습니다. 플레이어 2 덱을 위 학습 덱 중 하나로 선택해 주세요.`
-          : `Generation ${generation.generation} AI can only use its five trained decks. Select one of the trained decks for Player 2.`)}</p>` : ""}
+        ${validPair && !aiDeckTrainingId ? `<p class="deck-warning ai-deck-warning">${escapeHtml(aiTrialPreset
+          ? (locale() === LOCALES.KO
+            ? '추가 덱으로 시험 대전합니다. 선택한 세대의 기록만으로는 이 덱의 학습 여부나 실력을 보장할 수 없습니다.'
+            : 'Trial match with an additional deck. This generation’s records do not establish its training or strength with this list.')
+          : (locale() === LOCALES.KO
+            ? '플레이어 2 덱을 위 학습 덱 또는 추가 시험 덱(비오로라 마스터 이·빅토르 컨트롤)으로 선택해 주세요.'
+            : 'Select a trained deck or an additional trial deck (No Aurora Master Yi or Viktor Control) for Player 2.'))}</p>` : ""}
         ${online.loading ? `<p class="online-status">${locale() === LOCALES.KO ? "멀티플레이 서버에 연결 중입니다." : "Connecting to the multiplayer server."}</p>` : ""}
         ${online.error ? `<p class="online-error" role="alert">${escapeHtml(localizedOnlineError(online.error))}</p>` : ""}
         <div class="active-decks-summary">
@@ -2768,14 +4411,19 @@ function tutorialMenuView() {
             <p class="eyebrow visible">${isKorean ? "오리진 덱으로 배우는" : "Learn With Origins Decks"}</p>
             <h1>${isKorean ? "초보자 튜토리얼" : "Beginner Tutorials"}</h1>
             <p>${isKorean
-              ? "오리진 출시 환경의 카드와 덱으로 기본 규칙부터 전투와 비용 지불까지 차례대로 연습합니다."
-              : "Practice the core rules, combat, and costs with cards and decks from the Origins environment."}</p>
+              ? "실제 대전과 같은 화면에서 중앙 전장, 하단 손패·명령 바, 오른쪽 보조 기능을 따라 기본 규칙부터 전투와 비용 지불까지 연습합니다."
+              : "Use the live match layout—center battlefields, bottom hand and command bar, and the right utility rail—to practice the core rules, combat, and costs."}</p>
           </div>
           <div class="tutorial-menu-progress" aria-label="${isKorean ? "튜토리얼 완료 현황" : "Tutorial completion"}">
             <strong>${completed.size}/${TUTORIAL_CATALOG.length}</strong>
             <span>${isKorean ? "완료" : "complete"}</span>
           </div>
         </header>
+        <div class="tutorial-ui-map" aria-label="${isKorean ? "대전 화면 빠른 안내" : "Match screen quick guide"}">
+          <div><b>${isKorean ? "중앙 보드" : "Center board"}</b><span>${isKorean ? "상대 영역은 위, 내 룬과 기지는 아래에 있습니다." : "The opponent is above; your Runes and Base are below."}</span></div>
+          <div><b>${isKorean ? "하단 명령 바" : "Bottom command bar"}</b><span>${isKorean ? "카드를 선택하면 손패 바로 위에 가능한 행동이 표시됩니다." : "Select a card to see its available commands above your hand."}</span></div>
+          <div><b>${isKorean ? "오른쪽 보조 기능" : "Right utility rail"}</b><span>${isKorean ? "카드 정보와 턴 종료는 화면 오른쪽에서 사용합니다." : "Card details and End Turn stay on the right edge."}</span></div>
+        </div>
         <div class="tutorial-course-grid">
           ${TUTORIAL_CATALOG.map((lesson) => {
             const done = completed.has(lesson.id);
@@ -2791,7 +4439,7 @@ function tutorialMenuView() {
                   <small>${escapeHtml(isKorean ? lesson.focus : lesson.englishFocus)}</small>
                 </div>
                 <div class="tutorial-course-action">
-                  <span>${escapeHtml(lesson.duration)}</span>
+                  <span>${escapeHtml(isKorean ? lesson.duration : lesson.englishDuration)}</span>
                   <button class="${lesson.order === 1 ? "primary" : "secondary"}" data-action="tutorial-select" data-tutorial="${lesson.id}">
                     ${done ? (isKorean ? "다시 하기" : "Replay") : (isKorean ? "시작하기" : "Start")}
                   </button>
@@ -2819,9 +4467,26 @@ function selectedAiGenerationDescriptor() {
     || AI_GENERATIONS.at(-1);
 }
 
+function neuralAiDescriptorKey(descriptor) {
+  return JSON.stringify({
+    generation: Number(descriptor?.generation),
+    source: descriptor?.source || "bundled",
+    checkpointBaseUrl: descriptor?.checkpointBaseUrl ?? null,
+    checkpoint: descriptor?.checkpoint || "",
+    filename: descriptor?.filename || "",
+    kind: descriptor?.kind || "",
+    modifiedAt: Number(descriptor?.modifiedAt) || 0,
+    engineFingerprint: descriptor?.engineFingerprint || ""
+  });
+}
+
 function aiGenerationOptionLabel(entry) {
   const korean = locale() === LOCALES.KO;
-  const state = entry.kind === "learner"
+  const state = entry.activeChampion
+    ? (korean ? "최근 승급 챔피언" : "current promoted champion")
+    : entry.activeLearner
+      ? (korean ? "최신 학습 모델 · 시험 대전" : "latest learner · trial")
+      : entry.kind === "learner"
     ? (korean ? "현재 learner" : "current learner")
     : entry.promoted
       ? (korean ? "승격" : "promoted")
@@ -2842,7 +4507,9 @@ function aiGenerationDetailText(entry) {
   const compatibility = entry.engineCompatible === false
     ? (korean ? "과거 엔진 체크포인트" : "historical-engine checkpoint")
     : (korean ? "현재 엔진 호환" : "current-engine compatible");
-  return `${games} · ${compatibility}`;
+  const trial = entry.activeLearner && !entry.activeChampion
+    ? (korean ? " · 챔피언 대비 우위 미확정" : " · superiority over the champion is unproven") : "";
+  return `${games} · ${compatibility}${trial}`;
 }
 
 function trainingDeckNames(generation = selectedAiGenerationDescriptor()) {
@@ -2868,12 +4535,14 @@ function loadSettings() {
     return {
       locale: normalizeLocale(parsed?.locale || LOCALES.EN),
       sideboardingEnabled: parsed?.sideboardingEnabled === true,
+      onlinePoolId: normalizeRoomDeckOptions({ poolId: parsed?.onlinePoolId }).poolId,
+      onlineBanlistEnabled: parsed?.onlineBanlistEnabled === true,
       aiGeneration: Number.isInteger(Number(parsed?.aiGeneration)) && Number(parsed.aiGeneration) >= 0
         ? Number(parsed.aiGeneration)
         : normalizeAiGeneration()
     };
   } catch {
-    return { locale: LOCALES.EN, sideboardingEnabled: false, aiGeneration: normalizeAiGeneration() };
+    return { locale: LOCALES.EN, sideboardingEnabled: false, onlinePoolId: DEFAULT_ROOM_POOL_ID, onlineBanlistEnabled: false, aiGeneration: normalizeAiGeneration() };
   }
 }
 
@@ -2904,8 +4573,9 @@ function saveSettings() {
 
 function multiplayerView() {
   const activeDeck = activeDeckRecords()[0];
-  const deckReady = activeDeck && validateDeckRecord(activeDeck).playable;
   const room = online.room;
+  const deckValidation = validateRoomDeck(activeDeck, cardByNumber, room || {});
+  const deckReady = deckValidation.playable;
   const mySeat = room?.seats?.[online.playerId];
   const codeValue = escapeHtml(online.joinCode || "");
   return `
@@ -2931,10 +4601,22 @@ function multiplayerView() {
               ${online.rooms.map(roomListItem).join("") || `<p class="empty">열린 방이 없습니다.</p>`}
             </div>
             <div class="room-code-row">
-              <input data-action="online-code-input" value="${codeValue}" maxlength="8" placeholder="${t("roomCode", locale())}" />
-              <button data-action="online-join-code">${t("join", locale())}</button>
+              <input data-action="online-code-input" value="${codeValue}" maxlength="8" placeholder="${t("roomCode", locale())}" ${online.loading ? "disabled" : ""} />
+              <button data-action="online-join-code" ${online.loading ? "disabled" : ""}>${t("join", locale())}</button>
             </div>
-            <button class="primary wide-action" data-action="online-create">${t("createRoom", locale())}</button>
+            <div class="room-create-options">
+              <label>${locale() === LOCALES.KO ? "새 방 환경" : "New room card pool"}
+                <select data-action="online-pool" ${online.loading ? "disabled" : ""}>${CARD_POOL_FORMATS.map((pool) => `<option value="${pool.id}" ${pool.id === settings.onlinePoolId ? "selected" : ""}>${escapeHtml(roomPoolName(pool.id))}</option>`).join("")}</select>
+              </label>
+              <label>${locale() === LOCALES.KO ? "금제" : "Ban list"}
+                <select data-action="online-banlist" ${online.loading ? "disabled" : ""}>
+                  <option value="off" ${settings.onlineBanlistEnabled ? "" : "selected"}>${locale() === LOCALES.KO ? "미적용" : "Disabled"}</option>
+                  <option value="on" ${settings.onlineBanlistEnabled ? "selected" : ""}>${locale() === LOCALES.KO ? "적용" : "Enabled"}</option>
+                </select>
+              </label>
+            </div>
+            <p class="deck-note room-banlist-note">${locale() === LOCALES.KO ? `금제: ${STANDARD_BAN_LIST.effectiveDate} 공식 1대1 목록. 기본덱은 금제 예외이며, 선택 환경의 카드팩 범위는 적용됩니다. AI 대전에는 영향을 주지 않습니다.` : `Ban list: Standard, ${STANDARD_BAN_LIST.effectiveDate}. Default decks are exempt from bans; card pool limits still apply. AI games are unaffected.`}</p>
+            <button class="primary wide-action" data-action="online-create" ${online.loading ? "disabled" : ""}>${t("createRoom", locale())}</button>
             <p class="deck-note">${settings.sideboardingEnabled ? (locale() === LOCALES.KO ? "새 방: 사이드전 사용" : "New room: sideboarding enabled") : (locale() === LOCALES.KO ? "새 방: 단판" : "New room: single game")}</p>
           </article>
           <article class="multiplayer-panel">
@@ -2943,18 +4625,21 @@ function multiplayerView() {
                 <h2>${room ? `${t("rooms", locale())} ${room.roomId}` : t("noRoom", locale())}</h2>
                 <span>${room ? `${room.playerCount}/2 ${t("players", locale())} / ${localizedRoomStatus(room.status)}` : t("createOrJoinRoom", locale())}</span>
                 ${room ? `<small>${room.sideboardingEnabled ? (locale() === LOCALES.KO ? "사이드전 · 3판 2선승" : "Sideboarding · best of three") : (locale() === LOCALES.KO ? "단판" : "Single game")}</small>` : ""}
+                ${room ? `<small class="room-rules-summary">${escapeHtml(roomRulesSummary(room))}</small>` : ""}
               </div>
               ${room ? `<button data-action="online-leave">${t("leave", locale())}</button>` : ""}
             </div>
             ${online.error ? `<p class="online-error">${escapeHtml(localizedOnlineError(online.error))}</p>` : ""}
+            ${online.leaveNotice ? `<p class="online-error online-leave-notice" role="alert">${escapeHtml(localizedOnlineError(online.leaveNotice))}</p>` : ""}
             <div class="seat-list">
               ${room ? Object.values(room.seats).map(seatBadge).join("") : `<p class="empty">아직 참가한 방이 없습니다.</p>`}
             </div>
             <div class="online-deck-submit">
               <strong>${t("selectedDeck", locale())}</strong>
-              ${activeDeck ? deckSummaryBadge(activeDeck, online.playerId ? `${locale() === LOCALES.KO ? "내 좌석" : "Your seat"}: ${playerSlotLabel(online.playerId)}` : (locale() === LOCALES.KO ? "로컬 덱" : "Local deck")) : `<p class="empty">선택된 덱이 없습니다.</p>`}
-              <button data-action="online-submit-deck" ${room && deckReady ? "" : "disabled"}>${t("submitDeck", locale())}</button>
-              <button class="primary" data-action="online-ready" ${room && mySeat?.deckName ? "" : "disabled"}>
+              ${activeDeck ? deckSummaryBadge(activeDeck, online.playerId ? `${locale() === LOCALES.KO ? "내 좌석" : "Your seat"}: ${playerSlotLabel(online.playerId)}` : (locale() === LOCALES.KO ? "로컬 덱" : "Local deck"), deckValidation) : `<p class="empty">선택된 덱이 없습니다.</p>`}
+              ${room && activeDeck ? roomDeckStatus(activeDeck, room) : ""}
+              <button data-action="online-submit-deck" ${room && deckReady && !online.loading ? "" : "disabled"}>${t("submitDeck", locale())}</button>
+              <button class="primary" data-action="online-ready" ${room && mySeat?.deckName && !online.loading ? "" : "disabled"}>
                 ${mySeat?.ready ? t("ready", locale()) : t("readyUp", locale())}
               </button>
             </div>
@@ -2965,12 +4650,42 @@ function multiplayerView() {
   `;
 }
 
+function roomPoolName(poolId) {
+  const pool = CARD_POOL_FORMATS.find((candidate) => candidate.id === poolId)
+    || CARD_POOL_FORMATS.find((candidate) => candidate.id === DEFAULT_ROOM_POOL_ID);
+  return locale() === LOCALES.KO ? localizedPackName(pool.name) : pool.name.replace(" 출시 환경", " era");
+}
+
+function roomRulesSummary(room) {
+  const options = normalizeRoomDeckOptions(room);
+  return `${roomPoolName(options.poolId)} · ${locale() === LOCALES.KO
+    ? (options.banlistEnabled ? "금제 적용" : "금제 미적용")
+    : (options.banlistEnabled ? "Bans enabled" : "Bans disabled")}`;
+}
+
+function roomDeckStatus(deck, room) {
+  const restrictions = deckRoomRestrictions(deck, cardByNumber, room);
+  const messages = [];
+  const names = (list) => list.map(cardName).join(", ");
+  if (restrictions.outOfPoolCards.length) messages.push(locale() === LOCALES.KO
+    ? `선택 환경에 포함되지 않은 카드: ${names(restrictions.outOfPoolCards)}`
+    : `Cards outside this room's card pool: ${names(restrictions.outOfPoolCards)}`);
+  if (restrictions.banlistEnabled && !restrictions.banExempt && restrictions.bannedCards.length) messages.push(locale() === LOCALES.KO
+    ? `금제 적용 방에서 사용할 수 없는 카드: ${names(restrictions.bannedCards)}`
+    : `Banned cards cannot be used in this room: ${names(restrictions.bannedCards)}`);
+  if (restrictions.banlistEnabled && restrictions.banExempt) messages.push(locale() === LOCALES.KO
+    ? "기본덱 원본 구성: 금제 예외가 적용됩니다."
+    : "Original default deck: exempt from the ban list.");
+  return messages.length ? `<div class="room-deck-status ${restrictions.playable ? "deck-note" : "online-error"}" role="status">${messages.map((message) => `<p>${escapeHtml(message)}</p>`).join("")}</div>` : "";
+}
+
 function roomListItem(room) {
   return `
-    <button class="room-list-item" data-action="online-join-room" data-room="${room.roomId}" ${room.playerCount >= 2 || room.status !== "lobby" ? "disabled" : ""}>
+    <button class="room-list-item" data-action="online-join-room" data-room="${room.roomId}" ${online.loading || room.playerCount >= 2 || room.status !== "lobby" ? "disabled" : ""}>
       <strong>${room.roomId}</strong>
       <span>${room.playerCount}/2</span>
       <em>${localizedRoomStatus(room.status)}</em>
+      <small class="room-rules-summary">${escapeHtml(roomRulesSummary(room))}</small>
     </button>
   `;
 }
@@ -2996,30 +4711,14 @@ function deckEditorView() {
   const selectedCard = selectedDeckLibraryCard();
   return `
     <main class="shell-screen deck-builder-screen mobile-view-${deckEditor.mobileView} mobile-tab-${deckEditor.mobileTab}">
-      <section class="deck-select-panel">
-        <div class="deck-builder-head">
-          <button class="round-back" data-action="menu-home">${t("back", locale())}</button>
-          <div>
-            <h1>${t("deckSelect", locale())}</h1>
-            <p>편집할 덱을 선택하세요.</p>
-            ${deckEditor.transferNotice?.tone === "error" ? `<p class="deck-transfer-notice error" role="alert">${escapeHtml(deckEditor.transferNotice.message)}</p>` : ""}
-          </div>
-        </div>
-        <div class="deck-slot-grid">
-          ${deckStore.decks.map(deckSelectCard).join("")}
-          <button class="deck-slot new-deck-slot" data-action="deck-new">
-            <span class="big-plus">+</span>
-            <strong>새 덱 만들기</strong>
-          </button>
-          <button class="deck-slot import-deck-slot" data-action="deck-import-open">
-            <span class="deck-import-icon" aria-hidden="true">TEXT</span>
-            <strong>${locale() === LOCALES.KO ? "덱 텍스트 가져오기" : "Import Deck Text"}</strong>
-            <span>${locale() === LOCALES.KO ? "복사한 덱 리스트를 붙여넣으세요." : "Paste a copied deck list."}</span>
-            <span class="deck-import-cta">${locale() === LOCALES.KO ? "붙여넣기 창 열기" : "Open paste field"}</span>
-          </button>
+      <section class="deck-select-panel" ${deckEditor.transferDialog?.mode === "image" ? "inert" : ""}>
+        ${deckLibraryHeader()}
+        ${deckLibraryFilters()}
+        <div class="deck-slot-grid" aria-label="${locale() === LOCALES.KO ? "덱 목록" : "Deck list"}">
+          ${deckLibraryCards()}
         </div>
       </section>
-      <section class="deck-editor-panel">
+      <section class="deck-editor-panel" ${deckEditor.transferDialog?.mode === "image" ? "inert" : ""}>
         ${selectedDeck ? deckEditorContent(selectedDeck, selectedCard) : `<div class="empty-editor"><h2>덱을 선택하세요</h2></div>`}
       </section>
       ${deckDeleteConfirmationView()}
@@ -3032,7 +4731,10 @@ function deckEditorContent(deck, selectedCard) {
   const validation = validateDeckRecord(deck);
   return `
     <div class="deck-editor-top">
-      <button class="deck-mobile-back" data-action="deck-mobile-list">← ${locale() === LOCALES.KO ? "덱 목록" : "Decks"}</button>
+      <div class="deck-mobile-navigation">
+        <button class="deck-mobile-back" data-action="deck-mobile-list">← ${locale() === LOCALES.KO ? "덱 목록" : "Decks"}</button>
+        <button data-action="deck-toggle-tools" aria-expanded="${deckEditor.mobileToolsOpen}" aria-controls="deck-editor-actions">${locale() === LOCALES.KO ? (deckEditor.mobileToolsOpen ? "접기 −" : "더 보기 +") : (deckEditor.mobileToolsOpen ? "Less −" : "More +")}</button>
+      </div>
       <div class="deck-name-row">
         <input class="deck-name-input" data-action="deck-name" value="${escapeHtml(localizedDeckName(deck.name))}" maxlength="48" />
         <span class="deck-owner-badge ${deck.isDefault ? "default" : "personal"}">${deck.isDefault
@@ -3040,11 +4742,12 @@ function deckEditorContent(deck, selectedCard) {
           : (auth.user ? (locale() === LOCALES.KO ? "내 계정 덱" : "My account deck") : (locale() === LOCALES.KO ? "이 기기에 저장된 내 덱" : "My deck on this device"))}</span>
         <span class="${validation.playable ? "valid-pill" : "invalid-pill"}">${validation.playable ? t("playable", locale()) : t("notPlayable", locale())}</span>
       </div>
-      <div class="deck-editor-actions">
+      <div class="deck-editor-actions ${deckEditor.mobileToolsOpen ? "mobile-tools-open" : ""}" id="deck-editor-actions">
         <button data-action="deck-ai-recommend">선택 카드풀 AI 추천</button>
         <button data-action="deck-set-active" data-slot="0" ${validation.playable ? "" : "disabled"}>플레이어 1 덱으로 사용</button>
         <button data-action="deck-set-active" data-slot="1" ${validation.playable ? "" : "disabled"}>플레이어 2 덱으로 사용</button>
         <button data-action="deck-export-open">${locale() === LOCALES.KO ? "덱 텍스트 복사" : "Copy Deck Text"}</button>
+        <button class="deck-image-export-button" data-action="deck-image-open">${locale() === LOCALES.KO ? "덱 이미지 내보내기" : "Export Deck Image"}</button>
         ${deck.isDefault ? "" : `<button class="danger" data-action="deck-delete-request">${locale() === LOCALES.KO ? "덱 삭제" : "Delete deck"}</button>`}
         <button class="primary" data-action="deck-save">저장</button>
       </div>
@@ -3056,8 +4759,8 @@ function deckEditorContent(deck, selectedCard) {
       <button class="${deckEditor.mobileTab === "cards" ? "active" : ""}" data-action="deck-mobile-tab" data-tab="cards">${locale() === LOCALES.KO ? "카드 추가" : "Cards"}</button>
       <button class="${deckEditor.mobileTab === "detail" ? "active" : ""}" data-action="deck-mobile-tab" data-tab="detail">${locale() === LOCALES.KO ? "상세" : "Detail"}</button>
     </nav>
-    <div class="deck-editor-grid">
-      <aside class="deck-card-detail">
+    <div class="deck-editor-grid" data-scroll-key="deck-editor-grid">
+      <aside class="deck-card-detail" data-scroll-key="deck-card-detail">
         ${selectedCard ? deckDetailCard(selectedCard, deck) : deckDetailEmpty(deck)}
       </aside>
       <section class="deck-list-panel">
@@ -3097,6 +4800,7 @@ function deckDeleteConfirmationView() {
 function deckTextTransferView() {
   const dialog = deckEditor.transferDialog;
   if (!dialog) return "";
+  if (dialog.mode === "image") return deckImageTransferView(dialog);
   const importing = dialog.mode === "import";
   const korean = locale() === LOCALES.KO;
   return `
@@ -3120,10 +4824,12 @@ function deckTextTransferView() {
           aria-label="${importing ? (korean ? "가져올 덱 텍스트" : "Deck text to import") : (korean ? "내보낼 덱 텍스트" : "Exported deck text")}"
           spellcheck="false"
           ${importing ? "" : "readonly"}
-          placeholder="Legend:\n1 Master Yi, Wuju Bladesman\n\nChampion:\n1 Master Yi, Tempered\n\nMainDeck:\n3 First Mate"
+          placeholder="Legend:\n1 Master Yi, Wuju Bladesman\n\nChampion:\n1 Master Yi, Tempered\n\nMainDeck:\n3 First Mate\n2 Pit Rookie\n\nBattlefields:\n1 Aspirant's Climb\n1 Obelisk of Power\n1 Sigil of the Storm\n\nRune Pool:\n7 Body Rune\n5 Calm Rune\n\nSideboard:\n2 Alpha Strike\n1 Sabotage"
         >${escapeHtml(dialog.text || "")}</textarea>
-        ${dialog.error ? `<p class="deck-transfer-message error" role="alert">${escapeHtml(dialog.error)}</p>` : ""}
-        ${dialog.notice ? `<p class="deck-transfer-message success" role="status">${escapeHtml(dialog.notice)}</p>` : ""}
+        <div class="deck-transfer-feedback">
+          ${dialog.error ? `<p class="deck-transfer-message error" role="alert">${escapeHtml(dialog.error)}</p>` : ""}
+          ${dialog.notice ? `<p class="deck-transfer-message success" role="status">${escapeHtml(dialog.notice)}</p>` : ""}
+        </div>
         <div class="actions">
           <button data-action="deck-transfer-close">${korean ? "닫기" : "Close"}</button>
           ${importing
@@ -3135,29 +4841,102 @@ function deckTextTransferView() {
   `;
 }
 
+function deckLibraryHeader() {
+  const korean = locale() === LOCALES.KO;
+  return `
+    <div class="deck-library-header">
+      <div class="deck-library-heading">
+        <button class="round-back" data-action="menu-home" aria-label="${t("back", locale())}">←</button>
+        <div><span class="deck-library-eyebrow">RIFTBOUND</span><h1>${t("deckSelect", locale())}</h1></div>
+        <span class="deck-library-total">${deckStore.decks.length}${korean ? "개" : " decks"}</span>
+      </div>
+      <p>${korean ? "나만의 덱을 준비하고 전장으로 향하세요." : "Build your collection. Find your next battle."}</p>
+      <div class="deck-library-create">
+        <button class="primary" data-action="deck-new"><span aria-hidden="true">＋</span> ${korean ? "새 덱 만들기" : "New Deck"}</button>
+        <button data-action="deck-import-open">${korean ? "텍스트 가져오기" : "Import Text"}</button>
+      </div>
+      ${deckEditor.transferNotice?.tone === "error" ? `<p class="deck-transfer-notice error" role="alert">${escapeHtml(deckEditor.transferNotice.message)}</p>` : ""}
+    </div>`;
+}
+
+function deckLibraryFilters() {
+  const korean = locale() === LOCALES.KO;
+  const personal = deckStore.decks.filter((deck) => !deck.isDefault).length;
+  const filters = [["all", korean ? "전체" : "All", deckStore.decks.length], ["personal", korean ? "내 덱" : "My Decks", personal], ["default", korean ? "기본 덱" : "Defaults", deckStore.decks.length - personal]];
+  return `
+    <div class="deck-library-filters">
+      <label class="deck-library-search"><span aria-hidden="true">⌕</span><input type="search" data-action="deck-list-search" value="${escapeHtml(deckEditor.listSearch)}" placeholder="${korean ? "덱 이름 · 챔피언 검색" : "Search decks or champions"}" aria-label="${korean ? "덱 검색" : "Search decks"}" autocomplete="off" /></label>
+      <div class="deck-library-tabs" role="group" aria-label="${korean ? "덱 종류" : "Deck collection"}">
+        ${filters.map(([id, name, count]) => `<button id="deck-list-filter-${id}" data-action="deck-list-filter" data-filter="${id}" aria-pressed="${deckEditor.listFilter === id}">${name}<span>${count}</span></button>`).join("")}
+      </div>
+      <span class="deck-library-result-count" role="status" aria-live="polite">${deckLibraryResultLabel()}</span>
+    </div>`;
+}
+
+function filteredDeckRecords() {
+  const query = deckEditor.listSearch.trim().toLocaleLowerCase();
+  return deckStore.decks.filter((deck) => {
+    if (deckEditor.listFilter === "personal" && deck.isDefault) return false;
+    if (deckEditor.listFilter === "default" && !deck.isDefault) return false;
+    const hero = deckHeroCard(deck);
+    const legend = cardByNumber(deck.legend);
+    const names = [deck.name, localizedDeckName(deck.name), hero?.name, cardName(hero), legend?.name, cardName(legend), ...(legend?.domains || []).map(domainText)];
+    return !query || names.join(" ").toLocaleLowerCase().includes(query);
+  });
+}
+
+function deckLibraryResultLabel() {
+  const count = filteredDeckRecords().length;
+  return locale() === LOCALES.KO ? `${count}개의 덱 · 선택하여 편집` : `${count} decks · select to edit`;
+}
+
+function deckLibraryCards() {
+  const decks = filteredDeckRecords();
+  if (decks.length) return decks.map(deckSelectCard).join("");
+  const korean = locale() === LOCALES.KO;
+  const searching = Boolean(deckEditor.listSearch.trim());
+  return `<div class="deck-library-empty">
+    <span aria-hidden="true">◇</span>
+    <strong>${searching ? (korean ? "검색 결과가 없습니다" : "No matching decks") : (korean ? "첫 번째 덱을 만들어 보세요" : "Create your first deck")}</strong>
+    <p>${searching ? (korean ? "다른 덱 이름이나 챔피언으로 검색해 주세요." : "Try a different deck or champion name.") : (korean ? "새 덱을 만들거나 덱 텍스트를 가져올 수 있습니다." : "Build a new deck or import a deck list.")}</p>
+    <button data-action="${searching ? "deck-list-clear" : "deck-new"}">${searching ? (korean ? "검색 지우기" : "Clear Search") : (korean ? "새 덱 만들기" : "New Deck")}</button>
+  </div>`;
+}
+
+function refreshDeckLibraryResults() {
+  // The search field stays mounted so mobile keyboards and Korean IME keep focus.
+  lastAppMarkup = null;
+  const list = app.querySelector(".deck-slot-grid");
+  if (list) { list.innerHTML = deckLibraryCards(); list.scrollTop = 0; }
+  const count = app.querySelector(".deck-library-result-count");
+  if (count) count.textContent = deckLibraryResultLabel();
+}
+
 function deckSelectCard(deck) {
   const validation = validateDeckRecord(deck);
   const hero = deckHeroCard(deck);
+  const korean = locale() === LOCALES.KO;
+  const domains = cardByNumber(deck.legend)?.domains || [];
   const activeLabels = deckStore.activeDeckIds
     .map((id, index) => id === deck.id ? (locale() === LOCALES.KO ? `플레이어 ${index + 1}` : `P${index + 1}`) : null)
     .filter(Boolean)
     .join(" / ");
   return `
-    <button class="deck-slot ${deck.id === deckEditor.selectedDeckId ? "selected" : ""}" data-action="deck-select" data-deck="${escapeHtml(deck.id)}">
-      ${hero?.image ? `<img src="${hero.image}" alt="${cardName(hero)}" loading="lazy" />` : `<span class="deck-card-back"></span>`}
-      ${activeLabels ? `<em>${activeLabels}</em>` : ""}
-      <strong>${escapeHtml(localizedDeckName(deck.name))}</strong>
-      <span class="deck-owner-label ${deck.isDefault ? "default" : "personal"}">${deck.isDefault
-        ? (locale() === LOCALES.KO ? "기본 덱" : "Default")
-        : (locale() === LOCALES.KO ? "내 덱" : "My Deck")}</span>
-      <span>${mainDeckCount(deck)}/${DECK_RULES.tournamentMainExact} ${t("main", locale())} · ${sideboardCount(deck)}/${DECK_RULES.sideboardMax} ${locale() === LOCALES.KO ? "사이드보드" : "SB"}</span>
-      <small class="${validation.playable ? "valid-text" : "invalid-text"}">${validation.playable ? t("playable", locale()) : t("cannotPlayDeck", locale())}</small>
+    <button class="deck-slot ${deck.id === deckEditor.selectedDeckId ? "selected" : ""}" data-action="deck-select" data-deck="${escapeHtml(deck.id)}" style="--deck-accent: ${RUNE_COLORS[domains[0]] || "#bfa878"}">
+      <span class="deck-slot-art">${cardArtUrl(hero) ? `<img src="${escapeHtml(cardArtUrl(hero))}" alt="" loading="lazy" />` : `<span class="deck-slot-placeholder" aria-hidden="true">◇</span>`}</span>
+      <span class="deck-slot-copy">
+        <span class="deck-slot-meta"><span class="deck-owner-label ${deck.isDefault ? "default" : "personal"}">${deck.isDefault ? (korean ? "기본 덱" : "Default") : (korean ? "내 덱" : "My Deck")}</span>${activeLabels ? `<span class="deck-slot-active">${activeLabels}</span>` : ""}</span>
+        <strong class="deck-slot-title">${escapeHtml(localizedDeckName(deck.name))}</strong>
+        <span class="deck-slot-domains">${domains.map((domain) => `<span><i aria-hidden="true" style="background: ${RUNE_COLORS[domain] || "#bfa878"}"></i>${escapeHtml(domainText(domain))}</span>`).join("") || (korean ? "레전드를 선택해 주세요" : "Choose a Legend")}</span>
+        <span class="deck-slot-counts"><span>${korean ? "메인" : "Main"} ${mainDeckCount(deck)}</span><span>${korean ? "룬" : "Runes"} ${runeDeckCount(deck)}</span><span>${korean ? "사이드" : "Side"} ${sideboardCount(deck)}</span></span>
+        <small class="${validation.playable ? "valid-text" : "invalid-text"}">${validation.playable ? (korean ? "플레이 준비 완료" : "Ready to play") : (korean ? "구성 중" : "In progress")}</small>
+      </span>
+      <span class="deck-slot-chevron" aria-hidden="true">›</span>
     </button>
   `;
 }
 
-function deckSummaryBadge(deck, label) {
-  const validation = validateDeckRecord(deck);
+function deckSummaryBadge(deck, label, validation = validateDeckRecord(deck)) {
   return `
     <div class="active-deck-badge ${validation.playable ? "" : "invalid"}">
       <span>${label}</span>
@@ -3180,9 +4959,11 @@ function deckDetailEmpty(deck) {
 function deckDetailCard(card, deck) {
   return `
     <div class="deck-preview-card">
-      ${card.image ? `<img src="${card.image}" alt="${cardName(card)}" />` : `<span class="deck-card-back large"></span>`}
+      ${cardArtUrl(card) ? `<img src="${cardArtUrl(card)}" alt="${cardName(card)}" />` : `<span class="deck-card-back large"></span>`}
       <h2>${cardName(card)}</h2>
       <span>${cardTags(card).join(" / ")}</span>
+      <div class="card-ban-status ${isCardBanned(card) ? "is-banned" : "is-allowed"}">${locale() === LOCALES.KO ? (isCardBanned(card) ? "금지 카드" : "금지 아님") : (isCardBanned(card) ? "Banned" : "Not banned")}</div>
+      <div class="card-ban-context">${locale() === LOCALES.KO ? `공식 1대1 금제 · ${STANDARD_BAN_LIST.effectiveDate}` : `Standard ban list · ${STANDARD_BAN_LIST.effectiveDate}`}${isCardBanned(card) ? `<br>${locale() === LOCALES.KO ? "금제 적용 방의 개인 덱에서 사용 불가. 기본덱 원본 구성과 AI 대전은 예외입니다." : "Unavailable in personal decks in rooms with bans enabled. Original default decks and AI games are exempt."}` : ""}</div>
       <p>${cardText(card)}</p>
       <div class="deck-detail-actions">
         ${deckActionButtonsForCard(card, deck)}
@@ -3207,8 +4988,14 @@ function deckActionButtonsForCard(card, deck) {
     const sideCountValue = cardCount(deck.sideboard, card.cardNumber);
     const unlimited = cardAllowsUnlimitedCopies(card);
     const maximumLabel = unlimited ? "∞" : DECK_RULES.maxCopies;
-    buttons.push(`<button data-action="deck-add-main" data-card-number="${card.cardNumber}" ${(!unlimited && registeredNameCount(deck, card.name) >= DECK_RULES.maxCopies) || mainDeckCount(deck) >= DECK_RULES.tournamentMainExact ? "disabled" : ""}>주 덱 추가 ${count}/${maximumLabel}</button>`);
-    buttons.push(`<button data-action="deck-add-sideboard" data-card-number="${card.cardNumber}" ${(!unlimited && registeredNameCount(deck, card.name) >= DECK_RULES.maxCopies) || sideboardCount(deck) >= DECK_RULES.sideboardMax ? "disabled" : ""}>${locale() === LOCALES.KO ? "사이드보드 추가" : "Add to Sideboard"} ${sideCountValue}/${maximumLabel}</button>`);
+    buttons.push(`<div class="deck-zone-actions">
+      <button data-action="deck-add-main" data-card-number="${card.cardNumber}" ${(!unlimited && registeredNameCount(deck, card.name) >= DECK_RULES.maxCopies) || mainDeckCount(deck) >= DECK_RULES.tournamentMainExact ? "disabled" : ""}>${locale() === LOCALES.KO ? "주 덱 추가" : "Add to Main"} ${count}/${maximumLabel}</button>
+      <button class="deck-subtract" data-action="deck-remove-main" data-card-number="${card.cardNumber}" ${count <= 0 ? "disabled" : ""}>${locale() === LOCALES.KO ? "− 주 덱 빼기" : "− Remove Main"}</button>
+    </div>`);
+    buttons.push(`<div class="deck-zone-actions">
+      <button data-action="deck-add-sideboard" data-card-number="${card.cardNumber}" ${(!unlimited && registeredNameCount(deck, card.name) >= DECK_RULES.maxCopies) || sideboardCount(deck) >= DECK_RULES.sideboardMax ? "disabled" : ""}>${locale() === LOCALES.KO ? "사이드보드 추가" : "Add to Sideboard"} ${sideCountValue}/${maximumLabel}</button>
+      <button class="deck-subtract" data-action="deck-remove-sideboard" data-card-number="${card.cardNumber}" ${sideCountValue <= 0 ? "disabled" : ""}>${locale() === LOCALES.KO ? "− 사이드 빼기" : "− Remove Side"}</button>
+    </div>`);
   }
   return buttons.join("") || `<button disabled>추가할 수 없음</button>`;
 }
@@ -3259,7 +5046,7 @@ function compactDeckRow(card, count, zone) {
   const removeAction = zone === "main" ? "deck-remove-main" : zone === "sideboard" ? "deck-remove-sideboard" : zone === "battlefield" ? "deck-remove-battlefield" : "";
   return `
     <div class="deck-row" data-card-number="${card.cardNumber}">
-      ${card.image ? `<img src="${card.image}" alt="${cardName(card)}" />` : ""}
+      ${cardArtUrl(card) ? `<img src="${cardArtUrl(card)}" alt="${cardName(card)}" />` : ""}
       <button class="deck-row-main" data-action="deck-card-focus" data-card-number="${card.cardNumber}">
         <strong>${cardName(card)}</strong>
         <span>${cardType(card)}${card.energy !== undefined ? ` / ${card.energy} ${t("energy", locale())}` : ""}</span>
@@ -3275,7 +5062,7 @@ function runeDeckRow(deck, runeKey, count) {
   const domain = card.domains?.[0] || card.domain;
   return `
     <div class="rune-deck-row">
-      ${card.image ? `<img class="rune-row-art" src="${card.image}" alt="${cardName(card)}" loading="lazy" />` : `<span class="rune-swatch" style="--rune:${RUNE_COLORS[domain]}"></span>`}
+      ${cardArtUrl(card) ? `<img class="rune-row-art" src="${cardArtUrl(card)}" alt="${cardName(card)}" loading="lazy" />` : `<span class="rune-swatch" style="--rune:${RUNE_COLORS[domain]}"></span>`}
       <button class="deck-row-main" data-action="deck-card-focus" data-card-number="${card.cardNumber}">
         <strong>${cardName(card)}</strong>
         <span>${domainText(domain)} · ${card.rarity ? localizedRarity(card.rarity) : card.cardNumber}</span>
@@ -3299,7 +5086,7 @@ function runeCardPicker(deck) {
         return `
           <article class="rune-variant ${count ? "selected" : ""}">
             <button class="rune-variant-preview" data-action="deck-card-focus" data-card-number="${card.cardNumber}" title="${cardName(card)}">
-              <img src="${card.image}" alt="${cardName(card)}" loading="lazy" />
+              <img src="${cardArtUrl(card)}" alt="${cardName(card)}" loading="lazy" />
               ${count ? `<em>x${count}</em>` : ""}
             </button>
             <button class="small-icon" data-action="deck-rune-add" data-card-number="${card.cardNumber}" ${runeDeckCount(deck) >= DECK_RULES.runeExact ? "disabled" : ""}>+</button>
@@ -3358,9 +5145,10 @@ function libraryCard(card, deck) {
     && !cardAllowsUnlimitedCopies(card) && mainCount >= DECK_RULES.maxCopies;
   return `
     <button class="library-card ${deckEditor.selectedCardNumber === card.cardNumber ? "selected" : ""}" data-action="deck-card-focus" data-card-number="${card.cardNumber}">
-      ${card.image ? `<img src="${card.image}" alt="${cardName(card)}" loading="lazy" />` : `<span class="deck-card-back"></span>`}
+      ${cardArtUrl(card) ? `<img src="${cardArtUrl(card)}" alt="${cardName(card)}" loading="lazy" />` : `<span class="deck-card-back"></span>`}
       <strong>${cardName(card)}</strong>
       <span>${cardType(card)}${card.energy !== undefined ? ` / ${card.energy}` : ""}</span>
+      ${isCardBanned(card) ? `<b class="card-ban-badge">${locale() === LOCALES.KO ? "금지" : "Banned"}</b>` : ""}
       ${displayedCount ? `<em>x${displayedCount}</em>` : ""}
       ${disabled ? `<small>${t("max", locale())}</small>` : ""}
     </button>
@@ -3411,7 +5199,8 @@ function defaultDeckStore() {
   const orderedEntries = [
     ["keenanXiong", rawDecklists.keenanXiong],
     ["drowsy", rawDecklists.drowsy],
-    ...Object.entries(rawDecklists).filter(([key]) => !["keenanXiong", "drowsy"].includes(key))
+    ...Object.entries(rawDecklists).filter(([key]) => !["keenanXiong", "drowsy"].includes(key)),
+    ...AI_DECK_PRESETS.map(preset => [preset.id, preset])
   ];
   const decks = orderedEntries.map(([key, rawDeck]) => deckRecordFromRaw(
     `default-${rawDeck.id || key}`,
@@ -3722,10 +5511,21 @@ function loadOnlineSeat() {
       mode: parsed?.mode || "offline",
       roomId: parsed?.roomId || "",
       playerId: parsed?.playerId || "",
-      playerToken: parsed?.playerToken || ""
+      playerToken: parsed?.playerToken || "",
+      diagnosticGameId: String(parsed?.diagnosticGameId || ""),
+      gameNumber: Number.isInteger(Number(parsed?.gameNumber)) && Number(parsed.gameNumber) > 0
+        ? Number(parsed.gameNumber)
+        : null
     };
   } catch {
-    return { mode: "offline", roomId: "", playerId: "", playerToken: "" };
+    return {
+      mode: "offline",
+      roomId: "",
+      playerId: "",
+      playerToken: "",
+      diagnosticGameId: "",
+      gameNumber: null
+    };
   }
 }
 
@@ -3734,81 +5534,237 @@ function saveOnlineSeat() {
     mode: online.mode,
     roomId: online.roomId,
     playerId: online.playerId,
-    playerToken: online.playerToken
+    playerToken: online.playerToken,
+    diagnosticGameId: online.diagnosticGameId || null,
+    gameNumber: online.gameNumber || null
   }));
 }
 
-function clearOnlineSeat() {
-  closeOnlineEvents();
+function beginOnlineOperationLoading(operation) {
+  if (onlineRefreshOperation && onlineRefreshOperation !== operation) {
+    const refreshOperation = onlineRefreshOperation;
+    onlineRefreshOperation = null;
+    roomRefreshController?.abort();
+    roomRefreshController = null;
+    finishOnlineOperationLoading(refreshOperation);
+  }
+  onlineLoadingOperation = operation;
+  online.loading = true;
+}
+
+function finishOnlineOperationLoading(operation) {
+  if (onlineLoadingOperation !== operation) return false;
+  onlineLoadingOperation = null;
+  online.loading = false;
+  return true;
+}
+
+function cancelOnlineSeatRequestOperation() {
+  const operation = onlineSeatRequestOperation;
+  onlineSeatRequestOperation = null;
+  if (operation) finishOnlineOperationLoading(operation);
+}
+
+function cancelOnlineRoomMutationOperation() {
+  const operation = onlineRoomMutationOperation;
+  onlineRoomMutationOperation = null;
+  if (operation) finishOnlineOperationLoading(operation);
+}
+
+function retireEmergencyOnlineStopOwner(reason) {
+  const owner = emergencyStopOwner;
+  emergencyStopOwner = null;
+  emergencyStopOperation = null;
+  const retiresActiveEmergency = Boolean(owner)
+    && emergencyReportActive
+    && ["stopping", "failed"].includes(emergencyStopState);
+  if (!retiresActiveEmergency) return;
+  const preservesCurrentRecorder = gameDiagnostic === owner.diagnosticRecorder;
+  if (preservesCurrentRecorder) {
+    try {
+      owner.diagnosticRecorder?.recordEvent(`online-ui-error-stop-${reason}`, {
+        serverConfirmed: false,
+        roomId: owner.roomId,
+        sessionInvalidated: reason === "session-invalidated",
+        diagnosticChanged: reason === "diagnostic-changed"
+      });
+      owner.diagnosticRecorder?.finalize(GAME_REPRODUCTION_END_REASONS.UI_ERROR, game, {
+        context: owner.context || emergencyReportContext?.context || "UI",
+        stopRequestAccepted: false,
+        serverStopConfirmed: false,
+        locallyPreservedOnly: true,
+        sessionInvalidatedBeforeConfirmation: reason === "session-invalidated",
+        diagnosticChangedBeforeConfirmation: reason === "diagnostic-changed"
+      });
+    } catch {}
+    persistGameDiagnostic();
+  }
+  emergencyReportActive = false;
+  emergencyReportContext = null;
+  emergencyStopState = "idle";
+  emergencyStopError = "";
+  bugReportUi.recovered = preservesCurrentRecorder && !bugReportDecisionResolved();
+  if (bugReportUi.recovered) appView = "menu";
+}
+
+function invalidateEmergencyOnlineStopSession() {
+  retireEmergencyOnlineStopOwner("session-invalidated");
+}
+
+function invalidateOnlineSession() {
+  invalidateEmergencyOnlineStopSession();
+  onlineSessionGeneration += 1;
+  online.commandPending = null;
+  cancelOnlineRoomMutationOperation();
   if (deferredOnlineRenderTimer) clearTimeout(deferredOnlineRenderTimer);
   deferredOnlineRenderTimer = null;
+  deferredOnlineRenderGeneration += 1;
+  return onlineSessionGeneration;
+}
+
+function clearOnlineSeat() {
+  cancelOnlineSeatRequestOperation();
+  invalidateOnlineSession();
+  closeOnlineEvents();
   onlineSelectedCardId = null;
+  onlineDiagnosticGameKey = "";
+  pendingOnlineDiagnosticStart = null;
+  recoveredOnlineStopRequested = false;
   online.mode = "offline";
   online.roomId = "";
   online.playerId = "";
   online.playerToken = "";
+  online.diagnosticGameId = "";
+  online.gameNumber = null;
   online.room = null;
   online.match = null;
+  onlineSideboardDraft = null;
+  onlineSideboardBaseline = null;
+  onlineSideboardDraftKey = "";
   online.error = "";
+  online.leaveNotice = "";
   localStorage.removeItem(ONLINE_STORAGE_KEY);
 }
 
 function ensureRoomRefresh() {
-  if (online.refreshTimer) return;
-  refreshRooms();
-  online.refreshTimer = setInterval(() => {
-    if (appView === "multiplayer") refreshRooms(false);
-    else stopRoomRefresh();
+  if (online.loading || online.refreshTimer || roomRefreshController || appView !== "multiplayer") return;
+  void refreshRooms();
+}
+
+function scheduleNextRoomRefresh() {
+  if (appView !== "multiplayer" || online.loading || online.refreshTimer || roomRefreshController) return;
+  online.refreshTimer = window.setTimeout(() => {
+    online.refreshTimer = null;
+    if (appView === "multiplayer") void refreshRooms(false);
   }, 3000);
 }
 
 function stopRoomRefresh() {
-  if (!online.refreshTimer) return;
-  clearInterval(online.refreshTimer);
+  if (online.refreshTimer) window.clearTimeout(online.refreshTimer);
   online.refreshTimer = null;
+  roomRefreshController?.abort();
+  roomRefreshController = null;
 }
 
 async function refreshRooms(showLoading = true) {
-  if (online.loading) return;
-  online.loading = showLoading;
+  if (online.loading || roomRefreshController) return false;
+  if (online.refreshTimer) window.clearTimeout(online.refreshTimer);
+  online.refreshTimer = null;
+  const controller = new AbortController();
+  roomRefreshController = controller;
+  const operation = {
+    id: ++onlineRequestOperationSequence,
+    kind: "refresh-rooms",
+    promise: null
+  };
+  onlineRefreshOperation = operation;
+  if (showLoading) beginOnlineOperationLoading(operation);
   try {
-    const result = await fetchRooms();
+    const result = await fetchRooms({ signal: controller.signal });
+    if (onlineRefreshOperation !== operation) return;
     online.rooms = result.rooms || [];
     online.lastRefresh = Date.now();
     online.error = "";
   } catch (error) {
-    online.error = error.message;
+    if (onlineRefreshOperation !== operation) return;
+    if (error?.name !== "AbortError") online.error = error.message;
   } finally {
-    online.loading = false;
-    if (appView === "multiplayer") render();
+    if (roomRefreshController === controller) roomRefreshController = null;
+    const ownsOperation = onlineRefreshOperation === operation;
+    if (ownsOperation) {
+      onlineRefreshOperation = null;
+      if (showLoading) finishOnlineOperationLoading(operation);
+    }
+    // Release the loading guard before reserving the next poll, then render.
+    // renderApp must see the timer or it immediately starts another request.
+    scheduleNextRoomRefresh();
+    if (ownsOperation && appView === "multiplayer" && !controller.signal.aborted) render();
   }
+  return true;
 }
 
 async function connectDefaultMultiplayer() {
-  if (online.loading) return;
-  online.loading = true;
+  if (diagnosticNavigationBlocked() || !bugReportDecisionResolved() || online.loading) return;
+  const operation = {
+    id: ++onlineRequestOperationSequence,
+    kind: "connect-default",
+    generation: onlineSessionGeneration,
+    diagnosticRecorder: gameDiagnostic,
+    startView: appView,
+    ownedView: appView
+  };
+  beginOnlineOperationLoading(operation);
+  onlineRefreshOperation = operation;
   online.error = "";
-  configureOnlineServer(await defaultMultiplayerServer());
-  render();
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
+  let timeout = null;
   try {
+    const server = await defaultMultiplayerServer();
+    if (!connectDefaultMultiplayerOperationOwnsState(operation)
+      || !connectDefaultMultiplayerMayNavigate(operation)) return;
+    configureOnlineServer(server);
+    render();
+    const controller = new AbortController();
+    timeout = setTimeout(() => controller.abort(), 8000);
     const result = await fetchRooms({ signal: controller.signal });
+    if (!connectDefaultMultiplayerOperationOwnsState(operation)
+      || !connectDefaultMultiplayerMayNavigate(operation)) return;
     online.rooms = result.rooms || [];
     online.lastRefresh = Date.now();
+    operation.ownedView = "multiplayer";
     appView = "multiplayer";
-    ensureRoomRefresh();
   } catch (error) {
+    if (!connectDefaultMultiplayerOperationOwnsState(operation)
+      || !connectDefaultMultiplayerMayNavigate(operation)) return;
     configureOnlineServer("");
     online.error = error?.name === "AbortError"
       ? (locale() === LOCALES.KO ? "멀티플레이 서버 연결 시간이 초과되었습니다." : "Multiplayer server connection timed out.")
       : (locale() === LOCALES.KO ? `멀티플레이 서버에 연결하지 못했습니다: ${error.message}` : `Could not connect to the multiplayer server: ${error.message}`);
+    operation.ownedView = "menu";
     appView = "menu";
   } finally {
-    clearTimeout(timeout);
-    online.loading = false;
-    render();
+    if (timeout !== null) clearTimeout(timeout);
+    const mayRenderOwnedView = connectDefaultMultiplayerOperationOwnsState(operation)
+      && appView === operation.ownedView;
+    if (onlineRefreshOperation === operation) onlineRefreshOperation = null;
+    const releasedLoading = finishOnlineOperationLoading(operation);
+    if (mayRenderOwnedView && releasedLoading) {
+      if (appView === "multiplayer") scheduleNextRoomRefresh();
+      render();
+    }
   }
+}
+
+function connectDefaultMultiplayerOperationOwnsState(operation) {
+  return onlineRefreshOperation === operation
+    && operation?.generation === onlineSessionGeneration
+    && operation.diagnosticRecorder === gameDiagnostic;
+}
+
+function connectDefaultMultiplayerMayNavigate(operation) {
+  return connectDefaultMultiplayerOperationOwnsState(operation)
+    && appView === operation.ownedView
+    && bugReportDecisionResolved()
+    && !diagnosticNavigationBlocked();
 }
 
 async function defaultMultiplayerServer() {
@@ -3824,50 +5780,264 @@ async function defaultMultiplayerServer() {
 }
 
 function closeOnlineEvents() {
-  if (!online.events) return;
-  online.events.close();
+  // EventSource can already have a callback queued when close() runs. Invalidate
+  // that callback before closing the transport so it cannot restore a seat or
+  // diagnostic that the user has just discarded while leaving a finished game.
+  onlineEventGeneration += 1;
+  const events = online.events;
   online.events = null;
+  events?.close();
 }
 
 function resetStaleOnlineSeat(message) {
+  const recoveredDiagnosticFailed = failRestoredOnlineDiagnosticRecovery({
+    recoveryFailure: "stale-room",
+    message: boundedUiErrorText(message, 1024, "The saved online room is no longer available.")
+  });
+  if (!recoveredDiagnosticFailed
+    && currentDiagnosticSnapshot()?.finalization
+    && !bugReportDecisionResolved()) {
+    bugReportUi.recovered = true;
+  }
+  cancelOnlineSeatRequestOperation();
+  invalidateOnlineSession();
   closeOnlineEvents();
   onlineSelectedCardId = null;
+  onlineDiagnosticGameKey = "";
+  pendingOnlineDiagnosticStart = null;
   online.mode = "offline";
   online.roomId = "";
   online.playerId = "";
   online.playerToken = "";
+  online.diagnosticGameId = "";
+  online.gameNumber = null;
   online.room = null;
+  online.commandPending = null;
   online.error = message;
   localStorage.removeItem(ONLINE_STORAGE_KEY);
-  appView = "multiplayer";
-  refreshRooms(false);
+  appView = recoveredDiagnosticFailed || diagnosticNavigationBlocked() ? "menu" : "multiplayer";
+  if (appView === "multiplayer") refreshRooms(false);
+}
+
+function onlineDiagnosticDescriptor(snapshot) {
+  const roomId = String(snapshot?.room?.roomId || online.roomId || "");
+  const gameNumber = Number(snapshot?.match?.gameNumber) || 1;
+  const diagnosticGameId = String(
+    snapshot?.room?.diagnosticGameId
+    || snapshot?.match?.diagnosticGameId
+    || snapshot?.diagnosticGameId
+    || ""
+  );
+  return {
+    key: diagnosticGameId ? `diagnostic:${diagnosticGameId}` : `${roomId}:game:${gameNumber}`,
+    roomId,
+    gameNumber,
+    diagnosticGameId,
+    sideboardingEnabled: Boolean(snapshot?.room?.sideboardingEnabled)
+  };
+}
+
+function retireOnlineCommandPendingForDescriptor(descriptor) {
+  const pending = online.commandPending;
+  if (!pending) return false;
+  const sameSession = pending.sessionGeneration === onlineSessionGeneration
+    && pending.roomId === descriptor?.roomId;
+  if (sameSession && pending.diagnosticIdentityCaptured !== true) return false;
+  if (sameSession && onlineDiagnosticIdentityMatchesDescriptor(pending, descriptor)) return false;
+  online.commandPending = null;
+  return true;
+}
+
+function currentDiagnosticSnapshot() {
+  try {
+    return gameDiagnostic?.summary?.() || gameDiagnostic?.snapshot?.() || null;
+  } catch {
+    return null;
+  }
+}
+
+function diagnosticMatchesOnlineDescriptor(log, descriptor) {
+  const metadata = log?.metadata || {};
+  if (metadata.mode !== "online") return false;
+  if (String(metadata.roomId || "") !== descriptor.roomId) return false;
+  const logDiagnosticGameId = String(metadata.diagnosticGameId || "");
+  const descriptorDiagnosticGameId = String(descriptor.diagnosticGameId || "");
+  if (logDiagnosticGameId || descriptorDiagnosticGameId) {
+    return Boolean(logDiagnosticGameId)
+      && Boolean(descriptorDiagnosticGameId)
+      && logDiagnosticGameId === descriptorDiagnosticGameId;
+  }
+  const logGameNumber = Number(metadata.gameNumber);
+  const descriptorGameNumber = Number(descriptor.gameNumber);
+  return Number.isInteger(logGameNumber)
+    && Number.isInteger(descriptorGameNumber)
+    && logGameNumber > 0
+    && logGameNumber === descriptorGameNumber;
+}
+
+function recoveredDiagnosticNeedsOnlineStop(log, descriptor) {
+  if (!diagnosticMatchesOnlineDescriptor(log, descriptor) || game?.phase === "complete") return false;
+  const finalization = log?.finalization;
+  return finalization?.reason === GAME_REPRODUCTION_END_REASONS.UI_ERROR
+    && finalization.details?.stopRequestAccepted !== true
+    && finalization.details?.serverStopConfirmed !== true
+    && finalization.details?.locallyPreservedOnly !== true
+    && (finalization.details?.recoveredAfterAppRestart === true
+      || finalization.details?.bootstrapCrash === true);
+}
+
+function stagePendingOnlineDiagnostic(snapshot, descriptor) {
+  pendingOnlineDiagnosticStart = { snapshot, descriptor };
+  bugReportUi.recovered = true;
+  appView = "menu";
+}
+
+function startPendingOnlineDiagnosticIfReady() {
+  if (!pendingOnlineDiagnosticStart || !bugReportDecisionResolved()) return false;
+  const pending = pendingOnlineDiagnosticStart;
+  pendingOnlineDiagnosticStart = null;
+  if (pending.snapshot?.game) game = pending.snapshot.game;
+  onlineDiagnosticGameKey = pending.descriptor.key;
+  beginGameDiagnostic("online", {
+    roomId: pending.descriptor.roomId,
+    gameNumber: pending.descriptor.gameNumber,
+    diagnosticGameId: pending.descriptor.diagnosticGameId || null,
+    sideboardingEnabled: pending.descriptor.sideboardingEnabled
+  });
+  recordDiagnosticOnlineSnapshot(pending.snapshot);
+  appView = "game";
+  return true;
 }
 
 function connectOnlineEvents() {
   if (!online.roomId || !online.playerToken) return;
+  prepareOnlineGameMode();
   closeOnlineEvents();
+  const eventGeneration = onlineEventGeneration;
   online.events = openRoomEvents(online.roomId, online.playerToken, {
     open() {
+      if (eventGeneration !== onlineEventGeneration) return;
       online.error = "";
       if (appView === "multiplayer" || appView === "game") render();
     },
     snapshot(snapshot) {
+      if (eventGeneration !== onlineEventGeneration) return;
       const selectedBeforeSnapshot = onlineSelectedCardId || game?.selectedCardId || null;
       online.room = snapshot.room;
       online.match = snapshot.match || null;
       online.playerId = snapshot.playerId;
+      syncOnlineSideboardDraft();
       online.mode = "online";
+      online.diagnosticGameId = String(
+        snapshot?.room?.diagnosticGameId
+        || snapshot?.match?.diagnosticGameId
+        || snapshot?.diagnosticGameId
+        || ""
+      );
+      const snapshotGameNumber = Number(snapshot?.match?.gameNumber);
+      online.gameNumber = Number.isInteger(snapshotGameNumber) && snapshotGameNumber > 0
+        ? snapshotGameNumber
+        : null;
       saveOnlineSeat();
       if (snapshot.game) {
+        const descriptor = onlineDiagnosticDescriptor(snapshot);
+        retireOnlineCommandPendingForDescriptor(descriptor);
+        const diagnosticKey = descriptor.key;
+        const emergencyOwner = emergencyStopOwner;
+        const emergencyOwnerIsCurrent = emergencyReportActive
+          && ["stopping", "failed"].includes(emergencyStopState)
+          && emergencyStopOwnerIsCurrent(emergencyOwner);
+        const emergencyOwnerMatchesIncomingGame = emergencyOwnerIsCurrent
+          && onlineDiagnosticIdentityMatchesDescriptor(emergencyOwner, descriptor);
+        if (emergencyOwnerIsCurrent && !emergencyOwnerMatchesIncomingGame) {
+          // Preserve the old game's recorder before replacing the global game
+          // with a snapshot belonging to a different diagnostic identity.
+          retireEmergencyOnlineStopOwner("diagnostic-changed");
+        }
         game = snapshot.game;
         onlineSnapshotRevision += 1;
-        if (!gameUiRenderIssue(game)) restoreOnlineSelection(selectedBeforeSnapshot);
-        appView = "game";
+        if (emergencyReportActive
+          && ["stopping", "failed"].includes(emergencyStopState)
+          && game.phase === "complete"
+          && emergencyOwnerMatchesIncomingGame) {
+          const diagnosticStateRecorded = recordDiagnosticOnlineSnapshot(snapshot, { deferFinalization: true });
+          confirmEmergencyOnlineStopFromSnapshot(emergencyOwner, descriptor, diagnosticStateRecorded);
+          online.error = "";
+          return;
+        }
+        if (pendingOnlineDiagnosticStart) {
+          pendingOnlineDiagnosticStart = { snapshot, descriptor };
+          online.error = "";
+          render();
+          return;
+        }
+        if (bugReportUi.recovered && !bugReportDecisionResolved()) {
+          const restoredLog = currentDiagnosticSnapshot();
+          if (recoveredDiagnosticNeedsOnlineStop(restoredLog, descriptor)) {
+            onlineDiagnosticGameKey = diagnosticKey;
+            recordDiagnosticOnlineSnapshot(snapshot);
+            if (!recoveredOnlineStopRequested) {
+              recoveredOnlineStopRequested = true;
+              void stopGameAfterUiError(
+                new Error("The app restarted before the online game was safely stopped."),
+                "recovered online game"
+              );
+            }
+          } else if (!diagnosticMatchesOnlineDescriptor(restoredLog, descriptor)) {
+            stagePendingOnlineDiagnostic(snapshot, descriptor);
+          } else {
+            closeOnlineEvents();
+          }
+          online.error = "";
+          render();
+          return;
+        }
+        if (onlineDiagnosticRecoveryInProgress
+          && restoredGameDiagnosticCanResume
+          && gameDiagnostic
+          && !gameDiagnostic.isFinalized?.()
+          && !gameDiagnostic.summary?.().finalization) {
+          const restoredLog = currentDiagnosticSnapshot();
+          if (!diagnosticMatchesOnlineDescriptor(restoredLog, descriptor)) {
+            failRestoredOnlineDiagnosticRecovery({
+              recoveryFailure: "diagnostic-identity-mismatch",
+              incomingDiagnosticGameId: descriptor.diagnosticGameId || null,
+              incomingGameNumber: descriptor.gameNumber
+            });
+            stagePendingOnlineDiagnostic(snapshot, descriptor);
+            online.error = "";
+            render();
+            return;
+          }
+          onlineDiagnosticGameKey = diagnosticKey;
+          restoredGameDiagnosticCanResume = false;
+          onlineDiagnosticRecoveryInProgress = false;
+        } else if (onlineDiagnosticGameKey !== diagnosticKey
+          || (currentDiagnosticSnapshot()?.finalization && game.phase !== "complete")) {
+          if (!bugReportDecisionResolved()) {
+            stagePendingOnlineDiagnostic(snapshot, descriptor);
+            online.error = "";
+            render();
+            return;
+          }
+          onlineDiagnosticGameKey = diagnosticKey;
+          beginGameDiagnostic("online", {
+            roomId: descriptor.roomId,
+            gameNumber: descriptor.gameNumber,
+            diagnosticGameId: descriptor.diagnosticGameId || null,
+            sideboardingEnabled: descriptor.sideboardingEnabled
+          });
+        }
+        recordDiagnosticOnlineSnapshot(snapshot);
+        if (!currentGameUiRenderIssue()) restoreOnlineSelection(selectedBeforeSnapshot);
+        if (!emergencyReportActive) appView = "game";
       }
       online.error = "";
-      render();
+      if (emergencyReportActive) showEmergencyReportView();
+      else render();
     },
     error(message) {
+      if (eventGeneration !== onlineEventGeneration) return;
       if (isStaleRoomError(message)) {
         resetStaleOnlineSeat(`${message} 새 방에 다시 참가해 주세요.`);
         render();
@@ -3908,6 +6078,25 @@ function setUiSelectedCard(cardId, { openInspector = true } = {}) {
       inspectorOpen = true;
       closeTabletopSheets("inspector");
     }
+  }
+}
+
+async function configureDiagnosticServer() {
+  try {
+    const response = await fetch("/build-info.json", { cache: "no-store" });
+    clientBuildInfo = response.ok ? await response.json() : {};
+  } catch {
+    clientBuildInfo = {};
+  }
+  configureBugReportServer(configuredBugReportServer(clientBuildInfo));
+  if (gameDiagnostic) {
+    try {
+      gameDiagnostic.recordEvent("client-build-configured", {
+        build: clientBuildInfo,
+        reportServerConfigured: Boolean(configuredBugReportServer(clientBuildInfo))
+      }, game);
+      persistGameDiagnostic();
+    } catch {}
   }
 }
 
@@ -3954,12 +6143,14 @@ function createNewDeckRecord() {
 }
 
 function openDeckImportDialog() {
+  closeDeckTransferDialog();
   deckEditor.transferNotice = null;
   deckEditor.transferDialog = { mode: "import", text: "", error: "", notice: "" };
 }
 
 function openDeckExportDialog(deck) {
   if (!deck) return;
+  closeDeckTransferDialog();
   try {
     deckEditor.transferNotice = null;
     deckEditor.transferDialog = {
@@ -3976,6 +6167,112 @@ function openDeckExportDialog(deck) {
         : `Could not create deck text: ${error?.message || error}`
     };
   }
+}
+
+function deckImageTransferView(dialog) {
+  const korean = dialog.locale === LOCALES.KO;
+  return `
+    <div class="deck-transfer-modal deck-image-modal">
+      <section class="deck-image-dialog" role="dialog" aria-modal="true" aria-labelledby="deck-image-title" aria-describedby="deck-image-description" data-ui-modal data-modal-key="deck-image" tabindex="-1">
+        <div class="deck-transfer-heading">
+          <div><span>RIFTBOUND ONLINE</span><h2 id="deck-image-title">${korean ? "덱 이미지 내보내기" : "Export Deck Image"}</h2></div>
+          <button class="deck-transfer-close" data-action="deck-transfer-close" aria-label="${korean ? "닫기" : "Close"}">×</button>
+        </div>
+        <div class="deck-image-options">
+          <p id="deck-image-description">${korean ? "중복 카드도 한 장씩, 룬은 종류별 아이콘과 개수로 표시합니다." : "Every card copy is shown individually. Runes use their icons and quantities."}</p>
+          <label>${korean ? "카드 정렬" : "Card order"}<select id="deck-image-sort" data-action="deck-image-sort">${DECK_IMAGE_SORT_OPTIONS.map((option) => `<option value="${option.id}" ${dialog.sort === option.id ? "selected" : ""}>${korean ? option.ko : option.en}</option>`).join("")}</select></label>
+          <small>${korean ? "메인 덱·사이드보드에 적용 · 유닛 → 도구 → 주문 · 낮은 코스트부터" : "Main & sideboard · Units → Gear → Spells · Lowest cost first"}</small>
+          <div class="deck-image-champion-options">
+            <label class="deck-image-champion-toggle" for="deck-image-champion-first"><input id="deck-image-champion-first" type="checkbox" data-action="deck-image-champion-first" ${dialog.championFirst ? "checked" : ""} ${dialog.championCandidates.length ? "" : "disabled"} />${korean ? "선택한 챔피언 1장을 맨 앞에" : "Show one chosen Champion first"}</label>
+            ${!dialog.championCandidates.length ? `<small>${korean ? "메인 덱에 레전드와 일치하는 챔피언이 없습니다." : "No matching Champion in the Main Deck."}</small>` : dialog.championFirst ? dialog.championCandidates.length === 1
+              ? `<small>${korean ? "자동 선택" : "Auto-selected"}: ${escapeHtml(translateCardName(dialog.championCandidates[0], dialog.locale))}</small>`
+              : `<label>${korean ? "챔피언" : "Champion"}<select id="deck-image-champion" data-action="deck-image-champion" aria-required="true"><option value="">${korean ? "챔피언을 선택해 주세요" : "Choose a Champion"}</option>${dialog.championCandidates.map((card) => `<option value="${escapeHtml(card.cardNumber)}" ${dialog.championNumber === card.cardNumber ? "selected" : ""}>${escapeHtml(translateCardName(card, dialog.locale))} · ${escapeHtml(card.cardNumber)}</option>`).join("")}</select></label>` : ""}
+          </div>
+        </div>
+        <div class="deck-image-preview" data-scroll-key="deck-image-preview" aria-busy="${dialog.loading}">
+          ${dialog.url
+            ? `<img src="${dialog.url}" alt="${escapeHtml(dialog.name)} ${korean ? "덱 이미지 미리보기" : "deck image preview"}" width="${dialog.width}" height="${dialog.height}" />`
+            : `<div class="deck-image-placeholder"><span class="deck-image-emblem" aria-hidden="true">◇</span><p data-deck-image-progress role="status">${escapeHtml(dialog.progress || (korean ? "이미지를 준비하고 있습니다…" : "Preparing image…"))}</p></div>`}
+        </div>
+        <div class="deck-image-feedback" aria-live="polite">
+          ${dialog.error ? `<p class="deck-transfer-message error" role="alert">${escapeHtml(dialog.error)}</p>` : ""}
+          ${dialog.missing?.length ? `<p class="deck-transfer-message error" role="alert">${korean ? "일부 카드 이미지를 불러오지 못해 카드 이름으로 표시했습니다" : "Some images could not load and show card names instead"}: ${escapeHtml(dialog.missing.map((card) => translateCardName(card, dialog.locale)).join(", "))}</p>` : ""}
+          ${dialog.url ? `<span>${dialog.width} × ${dialog.height} · PNG</span>` : ""}
+        </div>
+        <div class="actions">
+          <button data-action="deck-transfer-close">${korean ? "닫기" : "Close"}</button>
+          ${dialog.error || dialog.missing?.length ? `<button data-action="deck-image-retry">${korean ? "이미지 다시 불러오기" : "Retry Images"}</button>` : ""}
+          <button class="primary" data-action="deck-image-download" ${dialog.url ? "" : "disabled"}>${korean ? "PNG 저장" : "Save PNG"}</button>
+        </div>
+      </section>
+    </div>`;
+}
+
+function closeDeckTransferDialog() {
+  const dialog = deckEditor.transferDialog;
+  dialog?.controller?.abort();
+  if (dialog?.url) URL.revokeObjectURL(dialog.url);
+  deckEditor.transferDialog = null;
+}
+
+async function openDeckImageDialog(deck = getSelectedDeckRecord()) {
+  if (!deck) return;
+  closeDeckTransferDialog();
+  const championCandidates = deckImageChampionCandidates(deck, { cardByNumber });
+  const rememberedChampion = deckEditor.imageChampionSelections.get(deck.id);
+  const championNumber = championCandidates.length === 1 ? championCandidates[0].cardNumber
+    : championCandidates.some((card) => card.cardNumber === rememberedChampion) ? rememberedChampion : "";
+  const dialog = {
+    mode: "image", locale: locale(), name: localizedDeckName(deck.name), sort: deckEditor.imageSort,
+    championCandidates, championNumber, championFirst: deckEditor.imageChampionFirst && championCandidates.length > 0,
+    deck: structuredClone(deck), controller: new AbortController(), loading: true,
+    progress: "", error: "", url: "", missing: []
+  };
+  deckEditor.transferDialog = dialog;
+  try {
+    if (dialog.championFirst && !dialog.championNumber) {
+      dialog.progress = dialog.locale === LOCALES.KO ? "맨 앞에 표시할 챔피언을 선택해 주세요." : "Choose the Champion to show first.";
+      return;
+    }
+    const model = deckImageModel({ ...dialog.deck, name: dialog.name }, {
+      cardByNumber, runeByKey: (key) => cardByNumber(key) || makeRune(key), locale: dialog.locale, sort: dialog.sort,
+      championFirst: dialog.championFirst, championNumber: dialog.championNumber
+    });
+    // Packaged mobile builds use the configured server; desktop/web serve this API locally.
+    const base = window.Capacitor?.isNativePlatform?.() ? await defaultMultiplayerServer() : "";
+    const result = await renderDeckImage(model, {
+      signal: dialog.controller.signal,
+      imageUrl: (card) => `${base}/api/deck-card-image?${new URLSearchParams({ card: card.cardNumber, locale: dialog.locale })}`,
+      onProgress: (completed, total) => {
+        if (deckEditor.transferDialog !== dialog) return;
+        dialog.progress = dialog.locale === LOCALES.KO ? `카드 이미지를 불러오고 있습니다… ${completed} / ${total}` : `Loading card images… ${completed} / ${total}`;
+        const progress = app.querySelector("[data-deck-image-progress]");
+        if (progress) progress.textContent = dialog.progress;
+      }
+    });
+    if (deckEditor.transferDialog !== dialog) return;
+    Object.assign(dialog, result, { blob: undefined, url: URL.createObjectURL(result.blob) });
+  } catch (error) {
+    if (deckEditor.transferDialog !== dialog || dialog.controller.signal.aborted) return;
+    dialog.error = dialog.locale === LOCALES.KO ? `덱 이미지를 만들지 못했습니다: ${error.message}` : `Could not create deck image: ${error.message}`;
+    dialog.progress = dialog.locale === LOCALES.KO ? "이미지를 다시 불러와 주세요." : "Please retry loading the image.";
+  } finally {
+    dialog.loading = false;
+    if (deckEditor.transferDialog === dialog && appView === "decks") {
+      render();
+    }
+  }
+}
+
+function downloadDeckImage() {
+  const dialog = deckEditor.transferDialog;
+  if (dialog?.mode !== "image" || !dialog.url) return;
+  const link = document.createElement("a");
+  link.href = dialog.url;
+  link.download = deckImageFilename(dialog.name);
+  document.body.append(link);
+  link.click();
+  link.remove();
 }
 
 function importDeckTextValue(text) {
@@ -4000,7 +6297,7 @@ function importDeckTextValue(text) {
     deckEditor.selectedCardNumber = deckHeroCard(record)?.cardNumber || null;
     deckEditor.mobileView = "edit";
     deckEditor.mobileTab = "deck";
-    deckEditor.transferDialog = null;
+    closeDeckTransferDialog();
     deckEditor.transferNotice = {
       tone: "success",
       message: locale() === LOCALES.KO
@@ -4009,7 +6306,7 @@ function importDeckTextValue(text) {
     };
     saveDeckStore();
   } catch (error) {
-    const details = Array.isArray(error?.issues) ? error.issues.join(" · ") : String(error?.message || error);
+    const details = deckImportErrorSummary(error);
     if (deckEditor.transferDialog?.mode === "import") {
       deckEditor.transferDialog.error = locale() === LOCALES.KO
         ? `덱을 가져오지 못했습니다: ${details}`
@@ -4017,6 +6314,21 @@ function importDeckTextValue(text) {
       deckEditor.transferDialog.notice = "";
     }
   }
+}
+
+function deckImportErrorSummary(error) {
+  const issues = Array.isArray(error?.issues) && error.issues.length
+    ? error.issues.map(String)
+    : [String(error?.message || error)];
+  const visibleIssues = issues.slice(0, 3);
+  const remaining = issues.length - visibleIssues.length;
+  const separator = locale() === LOCALES.KO ? " / " : " · ";
+  const suffix = remaining > 0
+    ? (locale() === LOCALES.KO
+      ? ` / 이외 오류 ${remaining}개가 있습니다. 위 오류부터 수정해 주세요.`
+      : ` · ${remaining} more error${remaining === 1 ? "" : "s"}. Fix the errors above first.`)
+    : "";
+  return `${visibleIssues.join(separator)}${suffix}`;
 }
 
 function importedDeckName(imported) {
@@ -4261,6 +6573,13 @@ function resolveDeckRecord(deck) {
 }
 
 function resetGameUiState() {
+  cancelReplayAnalyses();
+  cardDragRenderPending = false;
+  clearCardDragPresentation();
+  clearRuneScrollGesture();
+  clearRunePowerHold();
+  cancelScheduledAiTurn();
+  resetAiTurnWorkerSession();
   logOpen = false;
   handOpen = false;
   chainZoneCollapsed = false;
@@ -4277,12 +6596,9 @@ function resetGameUiState() {
   stagedChoiceKey = null;
   stagedChoiceOptionId = null;
   choiceDrawerCollapsed = false;
-  draggingCardSession = null;
-  pointerCardDrag = null;
-  cardDragRenderPending = false;
-  pointerRuneScroll = null;
   suppressCardClickUntil = 0;
   suppressRuneClickUntil = 0;
+  suppressRunePowerContextMenuUntil = 0;
   pendingGameExit = null;
   lastViewerPlayerId = null;
   lastInteractionPhase = null;
@@ -4296,10 +6612,65 @@ function resetGameUiState() {
 
 function matchIsBetweenGames() {
   const match = isOnlineGame() ? online.match : localMatch;
-  return Boolean(match && ["sideboarding", "between-games", "ready-next-game"].includes(match.phase));
+  return Boolean(match && [
+    "initial-sideboarding",
+    "sideboarding",
+    "between-games",
+    "ready-initial-game",
+    "ready-next-game"
+  ].includes(match.phase));
+}
+
+function initialSideboardingActive(match = activeBetweenGamesMatch()) {
+  return Boolean(match?.initialSideboarding || ["initial-sideboarding", "ready-initial-game"].includes(match?.phase));
+}
+
+function revealedSetupBattlefields(candidate = game) {
+  return Object.fromEntries((candidate?.players || []).map((player) => {
+    const selected = (candidate?.battlefields || []).find((field) =>
+      field?.ownerId === player.id || field?.instanceId === player.selectedBattlefieldId);
+    return [player.id, selected?.cardNumber || selected?.collectorNumber || null];
+  }));
+}
+
+function enterInitialLocalSideboardingIfNeeded() {
+  if (!localMatch || game?.phase !== "sideboarding" || localMatch.phase !== "playing") return false;
+  const result = beginInitialSideboarding(localMatch, {
+    firstPlayerId: game.firstPlayerId,
+    battlefields: revealedSetupBattlefields(game)
+  });
+  if (!result.ok) {
+    actionRejection = localizedCommandFailure(result.message);
+    return false;
+  }
+  sideboardDrafts = localMatch.currentDecks.map((deck) => structuredClone(deck));
+  sideboardBaselines = localMatch.currentDecks.map((deck) => structuredClone(deck));
+  sideboardPlayerId = "p1";
+  sideboardPreviewNumber = null;
+  sideboardValidationMessages = [];
+  return true;
+}
+
+function syncOnlineSideboardDraft() {
+  const match = online.match;
+  const acceptingDraft = ["initial-sideboarding", "sideboarding", "between-games"].includes(match?.phase);
+  if (!acceptingDraft || !match?.currentDeck || !online.playerId) {
+    onlineSideboardDraft = null;
+    onlineSideboardBaseline = null;
+    onlineSideboardDraftKey = "";
+    return;
+  }
+  const key = `${online.roomId}:${match.gameNumber}:${online.playerId}:${initialSideboardingActive(match) ? "initial" : "between"}`;
+  if (onlineSideboardDraftKey === key && onlineSideboardDraft) return;
+  onlineSideboardDraftKey = key;
+  onlineSideboardDraft = structuredClone(match.currentDeck);
+  onlineSideboardBaseline = structuredClone(match.currentDeck);
+  sideboardPreviewNumber = null;
+  sideboardValidationMessages = [];
 }
 
 function recordLocalGameIfComplete() {
+  if (game.phase === "complete") ensureGameDiagnosticFinalized();
   if (!localMatch || localMatch.phase !== "playing" || game.phase !== "complete") return;
   const battlefields = Object.fromEntries(game.players.map((player) => {
     const selected = game.battlefields.find((field) => field.ownerId === player.id || field.instanceId === player.selectedBattlefieldId);
@@ -4312,8 +6683,10 @@ function recordLocalGameIfComplete() {
   });
   if (!result.ok || result.complete) return;
   sideboardDrafts = localMatch.currentDecks.map((deck) => structuredClone(deck));
+  sideboardBaselines = localMatch.currentDecks.map((deck) => structuredClone(deck));
   sideboardPlayerId = "p1";
-  sideboardSelectedMain = null;
+  sideboardPreviewNumber = null;
+  sideboardValidationMessages = [];
   resultDismissed = true;
 }
 
@@ -4325,72 +6698,199 @@ function sideboardingView() {
   const match = activeBetweenGamesMatch();
   const playerId = isOnlineGame() ? online.playerId : sideboardPlayerId;
   const playerIndex = playerId === "p2" ? 1 : 0;
-  const draft = isOnlineGame() ? online.match?.currentDeck : sideboardDrafts[playerIndex];
+  const draft = isOnlineGame() ? onlineSideboardDraft : sideboardDrafts[playerIndex];
+  const baseline = isOnlineGame() ? onlineSideboardBaseline : sideboardBaselines[playerIndex];
   const submitted = Boolean(match?.submissions?.[playerId]);
-  const sideboardingEnabled = isOnlineGame()
-    ? Boolean(online.room?.sideboardingEnabled)
-    : Boolean(match?.sideboardingEnabled);
-  const locked = !sideboardingEnabled;
+  const initial = initialSideboardingActive(match);
+  const editable = ["initial-sideboarding", "sideboarding"].includes(match?.phase) && !submitted;
   const wins = match?.wins || { p1: 0, p2: 0 };
   if (!draft) return `<main class="shell-screen sideboarding-screen"><p class="empty">${locale() === LOCALES.KO ? "사이드보드 정보를 기다리고 있습니다." : "Waiting for sideboard data."}</p></main>`;
+  const exchange = sideboardExchangeSummary(baseline, draft);
+  const validation = sideboardDraftValidation(match, playerIndex, baseline, draft, exchange);
+  const changed = exchange.out > 0 || exchange.in > 0;
+  const visibleMessages = [...new Set([...sideboardValidationMessages, ...validation.messages])];
   return `
     <main class="shell-screen sideboarding-screen">
-      <section class="sideboarding-shell">
+      <section class="sideboarding-shell ${initial ? "initial-sideboarding-shell" : ""}">
         <header class="sideboarding-head">
           <div>
-            <p class="eyebrow visible">${locale() === LOCALES.KO ? `게임 ${match.gameNumber} 종료` : `Game ${match.gameNumber} complete`}</p>
-            <h1>${locked ? (locale() === LOCALES.KO ? "다음 게임 준비" : "Prepare for the next game") : (locale() === LOCALES.KO ? "사이드보딩" : "Sideboarding")}</h1>
-            <p>${locked
-              ? (locale() === LOCALES.KO ? "등록한 덱 구성으로 다음 게임을 준비합니다." : "Prepare the next game with the registered deck configuration.")
+            <p class="eyebrow visible">${initial
+              ? (locale() === LOCALES.KO ? "단판 대회 변경 절차 · 챔피언 공개 전" : "Single-game tournament procedure · before Champion reveal")
+              : (locale() === LOCALES.KO ? `게임 ${match?.gameNumber || 1} 종료` : `Game ${match?.gameNumber || 1} complete`)}</p>
+            <h1>${locale() === LOCALES.KO ? "사이드보딩" : "Sideboarding"}</h1>
+            <p>${initial
+              ? (locale() === LOCALES.KO ? "공개된 전설·무작위 전장·선후공을 확인하고 덱을 조정하세요. 선택된 챔피언은 양쪽 확정 후 동시에 공개됩니다." : "Review the revealed Legends, random Battlefields, and play order, then adjust your deck. Chosen Champions are revealed together after both players lock in.")
               : match?.lastGameWasDraw
                 ? (locale() === LOCALES.KO ? "이전 선후공은 유지되고 무승부 전장은 다시 선택할 수 있습니다. 주 덱과 사이드 카드를 같은 수만큼 교환해 주세요." : "The previous play order is retained and Battlefields from the drawn game remain available. Exchange the same number of Main Deck and Sideboard cards.")
                 : (locale() === LOCALES.KO ? "주 덱 카드와 사이드 카드를 같은 수만큼 교환해 주세요." : "Exchange the same number of Main Deck and Sideboard cards.")}</p>
           </div>
-          <div class="match-score"><strong>${locale() === LOCALES.KO ? "플레이어 1" : "P1"} ${wins.p1}</strong><span>:</span><strong>${wins.p2} ${locale() === LOCALES.KO ? "플레이어 2" : "P2"}</strong></div>
+          ${initial ? "" : `<div class="match-score"><strong>${locale() === LOCALES.KO ? "플레이어 1" : "P1"} ${wins.p1}</strong><span>:</span><strong>${wins.p2} ${locale() === LOCALES.KO ? "플레이어 2" : "P2"}</strong></div>`}
         </header>
+        <div class="sideboarding-context">
+          ${initial ? initialSideboardingSetupSummary() : gameBugReportPanel()}
+          ${!initial && !bugReportDecisionResolved() ? `<p class="game-bug-report-gate">${locale() === LOCALES.KO ? "다음 게임으로 진행하려면 먼저 로그 전송 여부를 선택해 주세요." : "Choose whether to send the log before continuing to the next game."}</p>` : ""}
+        </div>
         <div class="sideboarding-player-banner">${isOnlineGame() ? (locale() === LOCALES.KO ? "내 사이드보드" : "Your sideboard") : `${playerId.toUpperCase()} · ${locale() === LOCALES.KO ? "다른 플레이어는 화면을 보지 마세요" : "Other player, please look away"}`}</div>
-        ${match?.firstPlayerChooserId ? `<p class="deck-note">${locale() === LOCALES.KO ? "양쪽 전장을 비공개로 고른 뒤 동시에 공개하면, 직전 경기의 패자가 선후공을 선택합니다." : "After both private Battlefield choices are revealed together, the previous game's loser chooses the play order."}</p>` : ""}
         <div class="sideboarding-grid">
           <section class="sideboarding-column">
             <div class="deck-zone-title"><strong>${t("mainDeck", locale())}</strong><span>${mainDeckCount(draft)}/${DECK_RULES.tournamentMainExact}</span></div>
-            <p class="deck-note">${sideboardSelectedMain ? (locale() === LOCALES.KO ? "이제 넣을 사이드 카드를 선택하세요." : "Now choose a Sideboard card to bring in.") : (locale() === LOCALES.KO ? "뺄 카드를 먼저 선택하세요." : "Choose a card to take out first.")}</p>
-            <div class="sideboarding-card-list">${draft.main.map(([number, count]) => sideboardCardRow(number, count, "main", locked || submitted)).join("")}</div>
+            <p class="deck-note">${locale() === LOCALES.KO ? "화살표로 한 장씩 사이드 아웃합니다. 카드 영역을 누르면 정보를 봅니다." : "Use the arrow to side out one copy. Select the card area to inspect it."}</p>
+            <div class="sideboarding-card-list">${(draft.main || []).map(([number, count]) => sideboardCardRow(number, count, "main", !editable, draft)).join("")}</div>
           </section>
           <section class="sideboarding-column">
             <div class="deck-zone-title"><strong>${locale() === LOCALES.KO ? "사이드보드" : "Sideboard"}</strong><span>${sideboardCount(draft)}/${DECK_RULES.sideboardMax}</span></div>
-            <p class="deck-note">${locale() === LOCALES.KO ? "교체된 주 덱 카드는 새 사이드보드가 됩니다." : "Cards removed from the Main Deck become the new Sideboard."}</p>
-            <div class="sideboarding-card-list">${draft.sideboard.map(([number, count]) => sideboardCardRow(number, count, "sideboard", locked || submitted)).join("") || `<p class="empty">${locale() === LOCALES.KO ? "등록된 사이드 카드가 없습니다." : "No registered Sideboard cards."}</p>`}</div>
+            <p class="deck-note">${locale() === LOCALES.KO ? "화살표로 한 장씩 사이드 인합니다. 어느 쪽부터 옮겨도 됩니다." : "Use the arrow to side in one copy. You may move cards in either order."}</p>
+            <div class="sideboarding-card-list">${(draft.sideboard || []).map(([number, count]) => sideboardCardRow(number, count, "sideboard", !editable, draft)).join("") || `<p class="empty">${locale() === LOCALES.KO ? "등록된 사이드 카드가 없습니다." : "No registered Sideboard cards."}</p>`}</div>
           </section>
         </div>
-        <div class="sideboarding-actions">
-          ${sideboardSelectedMain ? `<button class="secondary" data-action="sideboard-cancel-selection">${locale() === LOCALES.KO ? "선택 취소" : "Cancel selection"}</button>` : ""}
-          <button class="primary" data-action="sideboard-submit" ${submitted ? "disabled" : ""}>${submitted ? (locale() === LOCALES.KO ? "상대 준비 대기 중" : "Waiting for opponent") : (locale() === LOCALES.KO ? "구성 확정" : "Confirm configuration")}</button>
+        <div class="sideboarding-status">
+          <div class="sideboarding-exchange-summary" aria-live="polite">
+            <span>${locale() === LOCALES.KO ? "사이드 아웃" : "Side out"} <strong>${exchange.out}</strong></span>
+            <span>${locale() === LOCALES.KO ? "사이드 인" : "Side in"} <strong>${exchange.in}</strong></span>
+            <span class="${validation.playable ? "valid" : "invalid"}">${validation.playable ? (locale() === LOCALES.KO ? "플레이 규약 충족" : "Deck is legal") : (locale() === LOCALES.KO ? "확정 전 수정 필요" : "Changes required before lock-in")}</span>
+          </div>
+          ${visibleMessages.length ? `<div class="sideboarding-validation" role="alert">${visibleMessages.map((message) => `<p>${escapeHtml(sideboardValidationMessage(message))}</p>`).join("")}</div>` : ""}
         </div>
+        <div class="sideboarding-actions">
+          ${initial ? `<button class="secondary" data-action="exit-pregame-sideboarding">${isOnlineGame() ? (locale() === LOCALES.KO ? "로비로 돌아가기" : "Return to lobby") : (locale() === LOCALES.KO ? "메인 메뉴" : "Main menu")}</button>` : `<button class="secondary" data-action="exit-completed-game">${completedGameExitLabel()}</button>`}
+          <button class="secondary" data-action="sideboard-reset" ${!editable || !changed ? "disabled" : ""}>${locale() === LOCALES.KO ? "변경 초기화" : "Reset changes"}</button>
+          <button class="primary" data-action="sideboard-submit" ${submitted || !validation.playable || (!initial && !bugReportDecisionResolved()) ? "disabled" : ""}>${submitted ? (locale() === LOCALES.KO ? "상대 준비 대기 중" : "Waiting for opponent") : changed ? (locale() === LOCALES.KO ? "사이드보딩 확정" : "Lock in sideboard") : (locale() === LOCALES.KO ? "사이드보딩 건너뛰기" : "Skip sideboarding")}</button>
+        </div>
+        ${sideboardCardPreview()}
       </section>
     </main>
   `;
 }
 
-function sideboardCardRow(number, count, zone, disabled) {
+function sideboardCardRow(number, count, zone, disabled, draft) {
   const card = cardByNumber(number);
   if (!card) return "";
-  const selected = zone === "main" && sideboardSelectedMain === number;
-  const action = zone === "main" ? "sideboard-select-main" : "sideboard-swap-in";
-  return `<button class="sideboarding-card ${selected ? "selected" : ""}" data-action="${action}" data-card-number="${number}" ${disabled || (zone === "sideboard" && !sideboardSelectedMain) ? "disabled" : ""}>${card.image ? `<img src="${card.image}" alt="${cardName(card)}" />` : ""}<span><strong>${cardName(card)}</strong><small>${cardType(card)}</small></span><em>x${count}</em></button>`;
+  const legend = cardByNumber(draft?.legend);
+  const championCandidate = isChampionDeckCard(card) && championMatchesLegend(card, legend);
+  const direction = zone === "main" ? "→" : "←";
+  const label = zone === "main"
+    ? (locale() === LOCALES.KO ? `${cardName(card)} 한 장 사이드 아웃` : `Side out one ${cardName(card)}`)
+    : (locale() === LOCALES.KO ? `${cardName(card)} 한 장 사이드 인` : `Side in one ${cardName(card)}`);
+  return `
+    <div class="sideboarding-card-row ${sideboardPreviewNumber === number ? "selected" : ""}">
+      <button class="sideboarding-card-info" data-action="sideboard-view-card" data-card-number="${escapeHtml(number)}" aria-label="${escapeHtml(`${cardName(card)} ${locale() === LOCALES.KO ? "카드 정보" : "card information"}`)}">
+        <em>x${count}</em>
+        ${cardArtUrl(card) ? `<img src="${escapeHtml(cardArtUrl(card))}" alt="" loading="lazy" />` : `<span class="deck-card-back"></span>`}
+        <span><strong>${escapeHtml(cardName(card))}</strong><small>${escapeHtml(cardType(card))}${championCandidate ? ` · ${locale() === LOCALES.KO ? "챔피언 후보" : "Champion candidate"}` : ""}</small></span>
+      </button>
+      <button class="sideboarding-transfer" data-action="sideboard-move" data-from-zone="${zone}" data-card-number="${escapeHtml(number)}" aria-label="${escapeHtml(label)}" ${disabled ? "disabled" : ""}>${direction}</button>
+    </div>`;
 }
 
-function swapSideboardCard(draft, mainNumber, sideNumber) {
-  if (!draft || cardCount(draft.main, mainNumber) < 1 || cardCount(draft.sideboard, sideNumber) < 1) return;
-  setCountEntry(draft.main, mainNumber, cardCount(draft.main, mainNumber) - 1);
-  setCountEntry(draft.sideboard, mainNumber, cardCount(draft.sideboard, mainNumber) + 1);
-  setCountEntry(draft.sideboard, sideNumber, cardCount(draft.sideboard, sideNumber) - 1);
-  setCountEntry(draft.main, sideNumber, cardCount(draft.main, sideNumber) + 1);
+function moveSideboardCard(draft, number, fromZone) {
+  const source = fromZone === "main" ? draft?.main : draft?.sideboard;
+  const destination = fromZone === "main" ? draft?.sideboard : draft?.main;
+  if (!Array.isArray(source) || !Array.isArray(destination) || cardCount(source, number) < 1) return false;
+  setCountEntry(source, number, cardCount(source, number) - 1);
+  setCountEntry(destination, number, cardCount(destination, number) + 1);
+  return true;
+}
+
+function sideboardExchangeSummary(baseline, draft) {
+  const original = new Map(Array.isArray(baseline?.main) ? baseline.main : []);
+  const current = new Map(Array.isArray(draft?.main) ? draft.main : []);
+  const numbers = new Set([...original.keys(), ...current.keys()]);
+  let out = 0;
+  let inside = 0;
+  for (const number of numbers) {
+    const delta = (current.get(number) || 0) - (original.get(number) || 0);
+    if (delta < 0) out += -delta;
+    if (delta > 0) inside += delta;
+  }
+  return { out, in: inside };
+}
+
+function sideboardDraftValidation(match, playerIndex, baseline, draft, exchange) {
+  const registered = !isOnlineGame() ? match?.registeredDecks?.[playerIndex] : baseline;
+  const result = registered && draft
+    ? validateSideboardConfiguration(registered, draft, cardByNumber)
+    : { playable: false, messages: ["Sideboard data is unavailable."] };
+  const messages = [...result.messages];
+  if (exchange.out !== exchange.in) messages.unshift(`Sideboard in and sideboard out counts must match (${exchange.in}/${exchange.out}).`);
+  return { playable: messages.length === 0, messages };
+}
+
+function sideboardValidationMessage(message) {
+  const raw = String(message || "").trim();
+  if (locale() !== LOCALES.KO || !raw) return raw;
+  const mainCount = raw.match(/^A tournament Main Deck must contain exactly (\d+) cards\. It currently contains (\d+)\.$/);
+  if (mainCount) return `대회용 주 덱은 정확히 ${mainCount[1]}장이어야 합니다. 현재 ${mainCount[2]}장입니다.`;
+  const sideboardLimit = raw.match(/^Sideboard can contain at most (\d+) cards\. It currently contains (\d+)\.$/);
+  if (sideboardLimit) return `사이드보드는 최대 ${sideboardLimit[1]}장까지 넣을 수 있습니다. 현재 ${sideboardLimit[2]}장입니다.`;
+  const exchange = raw.match(/^Sideboard in and sideboard out counts must match \((\d+)\/(\d+)\)\.$/);
+  if (exchange) return `사이드 인과 사이드 아웃 매수가 같아야 합니다. 현재 사이드 인 ${exchange[1]}장, 사이드 아웃 ${exchange[2]}장입니다.`;
+  if (raw === "At least one matching Champion Unit is required in the Main Deck.") {
+    return "전설과 일치하는 챔피언 유닛을 주 덱에 최소 1장 남겨야 합니다.";
+  }
+  const feedback = localizedCommandFailure(raw);
+  return feedback?.detail || feedback?.title || raw;
+}
+
+function initialSideboardingSetupSummary() {
+  const firstPlayerId = game?.firstPlayerId;
+  const sideboardViewerId = isOnlineGame() ? online.playerId : sideboardPlayerId;
+  return `
+    <section class="sideboarding-setup-summary" aria-label="${locale() === LOCALES.KO ? "공개된 경기 준비 정보" : "Revealed game setup"}">
+      ${(game?.players || []).map((player) => {
+        const field = (game?.battlefields || []).find((candidate) =>
+          candidate?.ownerId === player.id || candidate?.instanceId === player.selectedBattlefieldId);
+        const order = player.id === firstPlayerId
+          ? (locale() === LOCALES.KO ? "선공" : "First")
+          : (locale() === LOCALES.KO ? "후공" : "Second");
+        return `<article class="sideboarding-setup-player ${player.id === sideboardViewerId ? "mine" : "opponent"}">
+          <header><strong>${escapeHtml(playerName(player))}</strong><span>${order}</span></header>
+          <div>${sideboardingSetupCard(player.legend, locale() === LOCALES.KO ? "전설" : "Legend")}${sideboardingSetupCard(field, locale() === LOCALES.KO ? "무작위 전장" : "Random Battlefield")}
+            <div class="sideboarding-setup-pending"><small>${locale() === LOCALES.KO ? "선택된 챔피언" : "Chosen Champion"}</small><strong>${locale() === LOCALES.KO ? "사이드보딩 후 공개" : "Revealed after sideboarding"}</strong></div>
+          </div>
+        </article>`;
+      }).join("")}
+    </section>`;
+}
+
+function sideboardingSetupCard(card, label) {
+  if (!card || card.redacted) return `<div class="sideboarding-setup-card unavailable"><small>${escapeHtml(label)}</small><strong>${t("waiting", locale())}</strong></div>`;
+  return `<button class="sideboarding-setup-card" data-action="sideboard-view-card" data-card-number="${escapeHtml(card.cardNumber || card.collectorNumber || "")}">
+    <small>${escapeHtml(label)}</small>${cardArtUrl(card) ? `<img src="${escapeHtml(cardArtUrl(card))}" alt="" />` : ""}<strong>${escapeHtml(cardName(card))}</strong>
+  </button>`;
+}
+
+function sideboardCardPreview() {
+  const card = cardByNumber(sideboardPreviewNumber);
+  if (!card) return "";
+  return `<aside class="sideboarding-card-preview" role="dialog" aria-modal="false" aria-label="${escapeHtml(cardName(card))}">
+    <button class="sideboarding-preview-close" data-action="sideboard-close-card" aria-label="${locale() === LOCALES.KO ? "카드 정보 닫기" : "Close card information"}">×</button>
+    ${cardArtUrl(card) ? `<img src="${escapeHtml(cardArtUrl(card))}" alt="${escapeHtml(cardName(card))}" />` : ""}
+    <div><h2>${escapeHtml(cardName(card))}</h2><p>${escapeHtml(cardTags(card).join(" · "))}</p><div class="sideboarding-card-rules">${escapeHtml(cardText(card))}</div></div>
+  </aside>`;
 }
 
 async function submitSideboardDraft() {
+  const match = activeBetweenGamesMatch();
+  const initial = initialSideboardingActive(match);
+  if (!initial && !bugReportDecisionResolved()) {
+    bugReportUi.error = locale() === LOCALES.KO
+      ? "다음 게임 전에 이 경기의 로그 전송 여부를 선택해 주세요."
+      : "Choose whether to send this game's log before the next game.";
+    render();
+    return;
+  }
   const playerId = isOnlineGame() ? online.playerId : sideboardPlayerId;
   const index = playerId === "p2" ? 1 : 0;
-  const draft = isOnlineGame() ? online.match.currentDeck : sideboardDrafts[index];
+  const draft = isOnlineGame() ? onlineSideboardDraft : sideboardDrafts[index];
+  const baseline = isOnlineGame() ? onlineSideboardBaseline : sideboardBaselines[index];
+  const exchange = sideboardExchangeSummary(baseline, draft);
+  const validation = sideboardDraftValidation(match, index, baseline, draft, exchange);
+  if (!validation.playable) {
+    sideboardValidationMessages = validation.messages;
+    render();
+    return;
+  }
+  sideboardValidationMessages = [];
   if (isOnlineGame()) {
     dispatchGameCommand({ kind: "submitSideboard", deckRecord: draft });
     return;
@@ -4401,12 +6901,14 @@ async function submitSideboardDraft() {
     submitSideboardConfiguration(localMatch, "p2", sideboardDrafts[1], cardByNumber);
   } else if (!localMatch.submissions.p2) {
     sideboardPlayerId = "p2";
-    sideboardSelectedMain = null;
+    sideboardPreviewNumber = null;
+    sideboardValidationMessages = [];
   }
-  if (localMatch.phase === "ready-next-game") startNextLocalMatchGame();
+  if (["ready-initial-game", "ready-next-game"].includes(localMatch.phase)) startNextLocalMatchGame();
 }
 
 function startNextLocalMatchGame() {
+  settleReplayAnalysesWithoutCoaching(aiReplay);
   const next = beginNextMatchGame(localMatch);
   if (!next.ok) return;
   game = createGame({
@@ -4417,72 +6919,230 @@ function startNextLocalMatchGame() {
     lockedBattlefields: next.lockedBattlefields,
     unavailableBattlefields: next.unavailableBattlefields,
     format: localMatch.sideboardingEnabled ? "match" : "duel",
+    setupProcedure: localMatch.setupProcedure,
+    initialSideboardingComplete: next.initialSideboardingComplete,
     manualActionChainPriority: true,
     enforceChampionLegendMatch: true,
-    decks: next.decks.map(resolveDeckRecord)
+    decks: next.decks.map(resolveDeckRecord),
+    ...reproductionRandomSeeds()
+  });
+  beginGameDiagnostic(aiMode ? "ai" : "local", {
+    gameNumber: localMatch.gameNumber,
+    sideboardingEnabled: Boolean(localMatch.sideboardingEnabled)
   });
   sideboardDrafts = localMatch.currentDecks.map((deck) => structuredClone(deck));
-  sideboardSelectedMain = null;
+  sideboardBaselines = localMatch.currentDecks.map((deck) => structuredClone(deck));
+  sideboardPreviewNumber = null;
+  sideboardValidationMessages = [];
+  if (aiMode) {
+    aiHumanPlayerId = game.players[0].id;
+    aiPlayerId = game.players[1].id;
+    aiReplay = createAiReplay(game, {
+      humanPlayerId: aiHumanPlayerId,
+      aiPlayerId,
+      model: activeCoachModel(),
+      deckIds: localMatch.currentDecks.map((deck) => deck.id)
+    });
+  }
   resetGameUiState();
 }
 
-function startGameFromMenu() {
-  clearOnlineSeat();
-  aiMode = false;
-  aiReplay = null;
+function queueNewGameAfterReportDecision() {
+  if (pendingPostReportAction?.kind === "new-local-game"
+    && pendingPostReportAction.sourceGame === game
+    && pendingPostReportAction.sourceMatch === localMatch) return pendingPostReportAction;
+  const diagnosticLogId = currentDiagnosticSnapshot()?.logId || "";
+  const continuation = {
+    kind: "new-local-game",
+    id: `${Date.now()}-${++postReportActionSequence}`,
+    status: "waiting-report",
+    sourceGame: game,
+    sourceMatch: localMatch,
+    diagnosticLogId
+  };
+  pendingPostReportAction = continuation;
+  try {
+    gameDiagnostic?.recordEvent("post-report-continuation-queued", {
+      kind: continuation.kind,
+      id: continuation.id
+    }, game);
+    persistGameDiagnostic();
+  } catch {}
+  return continuation;
+}
+
+function continuePendingPostReportActionIfReady() {
+  if (!pendingPostReportAction
+    || pendingPostReportAction.status !== "waiting-report"
+    || postReportActionRunning
+    || !bugReportDecisionResolved()) return false;
+  const continuation = pendingPostReportAction;
+  if (continuation.kind !== "new-local-game"
+    || isOnlineGame()
+    || game !== continuation.sourceGame
+    || localMatch !== continuation.sourceMatch
+    || game.phase !== "complete") return false;
+  const activeLogId = currentDiagnosticSnapshot()?.logId || "";
+  if (continuation.diagnosticLogId && activeLogId !== continuation.diagnosticLogId) return false;
+  continuation.status = "starting";
+  pendingPostReportAction = null;
+  postReportActionRunning = true;
+  try {
+    startFreshLocalGame({ continuationId: continuation.id });
+    return true;
+  } catch (error) {
+    reportUiException(error, "post-report new game");
+    return false;
+  } finally {
+    postReportActionRunning = false;
+  }
+}
+
+function startFreshLocalGame(options = {}) {
+  settleReplayAnalysesWithoutCoaching(aiReplay);
   const pair = activeDeckRecords();
-  if (pair.length !== 2 || pair.some((deck) => !validateDeckRecord(deck).playable)) return;
-  localMatch = createMatchState({ decks: pair, sideboardingEnabled: settings.sideboardingEnabled });
-  sideboardDrafts = localMatch.currentDecks.map((deck) => structuredClone(deck));
+  const playablePair = pair.length === 2 && pair.every((deck) => validateDeckRecord(deck).playable);
+  localMatch = playablePair
+    ? createMatchState({
+      decks: pair,
+      sideboardingEnabled: settings.sideboardingEnabled,
+      setupProcedure: settings.sideboardingEnabled ? "match" : "single-game-sideboard"
+    })
+    : null;
   game = createGame({
     interactive: true,
     randomFirstPlayer: true,
     manualActionChainPriority: true,
     enforceChampionLegendMatch: true,
     format: settings.sideboardingEnabled ? "match" : "duel",
-    decks: pair.map(resolveDeckRecord)
+    setupProcedure: settings.sideboardingEnabled ? "match" : "single-game-sideboard",
+    decks: playablePair ? pair.map(resolveDeckRecord) : undefined,
+    ...reproductionRandomSeeds()
+  });
+  if (aiMode) {
+    aiHumanPlayerId = game.players[0].id;
+    aiPlayerId = game.players[1].id;
+    aiReplay = createAiReplay(game, {
+      humanPlayerId: aiHumanPlayerId,
+      aiPlayerId,
+      model: activeCoachModel(),
+      deckIds: (localMatch?.currentDecks || pair).map((deck) => deck.id)
+    });
+  } else {
+    aiReplay = null;
+  }
+  beginGameDiagnostic(aiMode ? "ai" : "local", {
+    gameNumber: localMatch?.gameNumber || 1,
+    sideboardingEnabled: Boolean(localMatch?.sideboardingEnabled),
+    ...(aiMode ? { aiGeneration: activeAiGeneration() } : {}),
+    ...(options.continuationId
+      ? {
+        startedFromPostReportContinuation: true,
+        postReportContinuationId: options.continuationId
+      }
+      : {})
+  });
+  sideboardDrafts = localMatch?.currentDecks.map((deck) => structuredClone(deck)) || [];
+  sideboardBaselines = localMatch?.currentDecks.map((deck) => structuredClone(deck)) || [];
+  resetGameUiState();
+  return true;
+}
+
+function startGameFromMenu() {
+  if (diagnosticNavigationBlocked()) return;
+  clearOnlineSeat();
+  aiMode = false;
+  aiReplay = null;
+  const pair = activeDeckRecords();
+  if (pair.length !== 2 || pair.some((deck) => !validateDeckRecord(deck).playable)) return;
+  localMatch = createMatchState({
+    decks: pair,
+    sideboardingEnabled: settings.sideboardingEnabled,
+    setupProcedure: settings.sideboardingEnabled ? "match" : "single-game-sideboard"
+  });
+  sideboardDrafts = localMatch.currentDecks.map((deck) => structuredClone(deck));
+  sideboardBaselines = localMatch.currentDecks.map((deck) => structuredClone(deck));
+  game = createGame({
+    interactive: true,
+    randomFirstPlayer: true,
+    manualActionChainPriority: true,
+    enforceChampionLegendMatch: true,
+    format: settings.sideboardingEnabled ? "match" : "duel",
+    setupProcedure: settings.sideboardingEnabled ? "match" : "single-game-sideboard",
+    decks: pair.map(resolveDeckRecord),
+    ...reproductionRandomSeeds()
+  });
+  beginGameDiagnostic("local", {
+    gameNumber: localMatch.gameNumber,
+    sideboardingEnabled: Boolean(localMatch.sideboardingEnabled)
   });
   resetGameUiState();
   appView = "game";
 }
 
 function startTutorial(tutorialId = TUTORIAL_IDS.firstVictory) {
+  retireTutorialDiagnosticForTransition();
+  if (diagnosticNavigationBlocked()) return;
   clearOnlineSeat();
   aiMode = false;
   aiReplay = null;
   localMatch = null;
   game = createTutorialGame(tutorialId);
+  if (locale() !== LOCALES.KO) {
+    const trainee = game.players.find((player) => player.id === game.tutorial.playerId);
+    const opponent = game.players.find((player) => player.id === game.tutorial.opponentId);
+    if (trainee) trainee.name = "Trainee";
+    if (opponent) opponent.name = "Training Opponent";
+    const lesson = TUTORIAL_CATALOG.find((entry) => entry.id === tutorialId);
+    game.log = [`Tutorial: ${lesson?.englishTitle || "Beginner Tutorial"}`];
+  }
+  beginGameDiagnostic("tutorial", { tutorialId });
   resetGameUiState();
   appView = "game";
 }
 
 function exitTutorial() {
+  retireTutorialDiagnosticForTransition();
+  if (diagnosticNavigationBlocked()) return;
   game.tutorial.active = false;
   appView = "tutorials";
   resetGameUiState();
 }
 
 async function startAiGameFromMenu() {
+  if (diagnosticNavigationBlocked()) return;
   clearOnlineSeat();
+  const startSessionGeneration = onlineSessionGeneration;
   const pair = activeDeckRecords();
   if (pair.length !== 2 || pair.some((deck) => !validateDeckRecord(deck).playable)) return;
   const generation = selectedAiGenerationDescriptor();
-  if (!trainingDeckIdForGeneration(pair[1], generation)) return;
-  if (!await ensureNeuralAiLoaded()) return;
+  if (!trainingDeckIdForGeneration(pair[1], generation) && !matchingAiPreset(pair[1], cardByNumber)) return;
+  if (!await ensureNeuralAiLoaded()
+    || diagnosticNavigationBlocked()
+    || startSessionGeneration !== onlineSessionGeneration
+    || isOnlineGame()
+    || appView !== "menu") return;
   const currentPair = activeDeckRecords();
-  if (currentPair.length !== 2 || !trainingDeckIdForGeneration(currentPair[1], generation)) return;
-  localMatch = createMatchState({ decks: currentPair, sideboardingEnabled: settings.sideboardingEnabled });
+  if (currentPair.length !== 2 || currentPair.some(deck => !validateDeckRecord(deck).playable)
+    || (!trainingDeckIdForGeneration(currentPair[1], generation) && !matchingAiPreset(currentPair[1], cardByNumber))) return;
+  localMatch = createMatchState({
+    decks: currentPair,
+    sideboardingEnabled: settings.sideboardingEnabled,
+    setupProcedure: settings.sideboardingEnabled ? "match" : "single-game-sideboard"
+  });
   sideboardDrafts = localMatch.currentDecks.map((deck) => structuredClone(deck));
+  sideboardBaselines = localMatch.currentDecks.map((deck) => structuredClone(deck));
   game = createGame({
     interactive: true,
     randomFirstPlayer: true,
     manualActionChainPriority: true,
     enforceChampionLegendMatch: true,
     format: settings.sideboardingEnabled ? "match" : "duel",
-    decks: currentPair.map(resolveDeckRecord)
+    setupProcedure: settings.sideboardingEnabled ? "match" : "single-game-sideboard",
+    decks: currentPair.map(resolveDeckRecord),
+    ...reproductionRandomSeeds()
   });
   aiMode = true;
-  neuralAiSession?.reset();
   aiHumanPlayerId = game.players[0].id;
   aiPlayerId = game.players[1].id;
   aiReplay = createAiReplay(game, {
@@ -4491,91 +7151,228 @@ async function startAiGameFromMenu() {
     model: activeCoachModel(),
     deckIds: currentPair.map((deck) => deck.id)
   });
+  beginGameDiagnostic("ai", {
+    gameNumber: localMatch.gameNumber,
+    sideboardingEnabled: Boolean(localMatch.sideboardingEnabled),
+    aiGeneration: activeAiGeneration()
+  });
   resetGameUiState();
   appView = "game";
   render();
 }
 
 async function onlineCreateRoom() {
-  try {
-    online.loading = true;
-    online.error = "";
-    const result = await createOnlineRoom({ sideboardingEnabled: settings.sideboardingEnabled });
-    applyOnlineSeatResult(result);
-    connectOnlineEvents();
-    await refreshRooms(false);
-  } catch (error) {
-    online.error = error.message;
-  } finally {
-    online.loading = false;
-    render();
-  }
+  if (diagnosticNavigationBlocked()) return;
+  const sideboardingEnabled = settings.sideboardingEnabled === true;
+  const { poolId, banlistEnabled } = normalizeRoomDeckOptions({ poolId: settings.onlinePoolId, banlistEnabled: settings.onlineBanlistEnabled });
+  const key = `create:${sideboardingEnabled}:${poolId}:${banlistEnabled}`;
+  if (onlineSeatRequestOperation) return onlineSeatRequestOperation.promise;
+  const operation = {
+    id: ++onlineRequestOperationSequence,
+    key,
+    kind: "create",
+    promise: null
+  };
+  onlineSeatRequestOperation = operation;
+  beginOnlineOperationLoading(operation);
+  online.error = "";
+  operation.promise = (async () => {
+    try {
+      const result = await createOnlineRoom({ sideboardingEnabled, poolId, banlistEnabled });
+      if (onlineSeatRequestOperation !== operation) return;
+      applyOnlineSeatResult(result);
+      connectOnlineEvents();
+    } catch (error) {
+      if (onlineSeatRequestOperation !== operation) return;
+      online.error = error.message;
+    } finally {
+      if (onlineSeatRequestOperation !== operation) return;
+      onlineSeatRequestOperation = null;
+      finishOnlineOperationLoading(operation);
+      render();
+    }
+  })();
+  return operation.promise;
 }
 
 async function onlineJoinRoom(roomId) {
+  if (diagnosticNavigationBlocked()) return;
   if (!roomId) return;
-  try {
-    online.loading = true;
-    online.error = "";
-    const result = await joinOnlineRoom(roomId, online.roomId === roomId ? online.playerToken : "");
-    applyOnlineSeatResult(result);
-    connectOnlineEvents();
-    await refreshRooms(false);
-  } catch (error) {
-    online.error = error.message;
-  } finally {
-    online.loading = false;
-    render();
-  }
+  const normalizedRoomId = String(roomId).trim().toUpperCase();
+  if (!normalizedRoomId) return;
+  const rejoinToken = online.roomId === normalizedRoomId ? online.playerToken : "";
+  const key = `join:${normalizedRoomId}:${rejoinToken}`;
+  if (onlineSeatRequestOperation) return onlineSeatRequestOperation.promise;
+  const operation = {
+    id: ++onlineRequestOperationSequence,
+    key,
+    kind: "join",
+    roomId: normalizedRoomId,
+    playerToken: rejoinToken,
+    promise: null
+  };
+  onlineSeatRequestOperation = operation;
+  beginOnlineOperationLoading(operation);
+  online.error = "";
+  operation.promise = (async () => {
+    try {
+      const result = await joinOnlineRoom(operation.roomId, operation.playerToken);
+      if (onlineSeatRequestOperation !== operation) return;
+      applyOnlineSeatResult(result);
+      connectOnlineEvents();
+    } catch (error) {
+      if (onlineSeatRequestOperation !== operation) return;
+      online.error = error.message;
+    } finally {
+      if (onlineSeatRequestOperation !== operation) return;
+      onlineSeatRequestOperation = null;
+      finishOnlineOperationLoading(operation);
+      render();
+    }
+  })();
+  return operation.promise;
 }
 
 async function onlineSubmitDeck() {
+  if (diagnosticNavigationBlocked()) return;
   const deck = activeDeckRecords()[0];
   if (!deck || !online.roomId || !online.playerToken) return;
-  try {
-    online.loading = true;
-    online.error = "";
-    const result = await submitOnlineDeck(online.roomId, online.playerToken, deck);
-    online.room = result.room;
-  } catch (error) {
-    online.error = error.message;
-  } finally {
-    online.loading = false;
-    render();
-  }
+  return runOnlineRoomMutation("submit-deck", (operation) =>
+    submitOnlineDeck(operation.roomId, operation.playerToken, deck));
 }
 
 async function onlineReady() {
+  if (diagnosticNavigationBlocked()) return;
   if (!online.roomId || !online.playerToken) return;
-  try {
-    online.loading = true;
-    online.error = "";
-    const result = await setOnlineReady(online.roomId, online.playerToken, true);
-    online.room = result.room;
-  } catch (error) {
-    online.error = error.message;
-  } finally {
-    online.loading = false;
-    render();
+  return runOnlineRoomMutation("ready", (operation) =>
+    setOnlineReady(operation.roomId, operation.playerToken, true));
+}
+
+async function runOnlineRoomMutation(kind, request) {
+  if (diagnosticNavigationBlocked()) return;
+  if (onlineRoomMutationOperation
+    && onlineCommandSessionIsCurrent(onlineRoomMutationOperation)) {
+    return onlineRoomMutationOperation.promise;
   }
+  const operation = {
+    id: ++onlineRequestOperationSequence,
+    kind,
+    generation: onlineSessionGeneration,
+    roomId: online.roomId,
+    playerToken: online.playerToken,
+    promise: null
+  };
+  onlineRoomMutationOperation = operation;
+  beginOnlineOperationLoading(operation);
+  online.error = "";
+  operation.promise = (async () => {
+    try {
+      const result = await request(operation);
+      if (!onlineRoomMutationOperationIsCurrent(operation)) return;
+      online.room = result.room;
+    } catch (error) {
+      if (!onlineRoomMutationOperationIsCurrent(operation)) return;
+      online.error = error.message;
+    } finally {
+      if (!onlineRoomMutationOperationIsCurrent(operation)) return;
+      onlineRoomMutationOperation = null;
+      finishOnlineOperationLoading(operation);
+      render();
+    }
+  })();
+  return operation.promise;
+}
+
+function onlineRoomMutationOperationIsCurrent(operation) {
+  return onlineRoomMutationOperation === operation
+    && onlineCommandSessionIsCurrent(operation);
+}
+
+function boundedOnlineLeaveRequest(request, timeoutMs = 8_000) {
+  let timeoutId = null;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = window.setTimeout(() => reject(new Error("Room leave request timed out.")), timeoutMs);
+  });
+  return Promise.race([request, timeout]).finally(() => window.clearTimeout(timeoutId));
 }
 
 async function onlineLeaveRoom() {
   const roomId = online.roomId;
   const playerToken = online.playerToken;
-  try {
-    if (roomId && playerToken) await leaveOnlineRoom(roomId, playerToken);
-  } catch (error) {
-    online.error = error.message;
-  } finally {
+  if (onlineLeaveOperation
+    && onlineLeaveOperation.roomId === roomId
+    && onlineLeaveOperation.playerToken === playerToken
+    && onlineLeaveOperation.departureGeneration === onlineSessionGeneration) {
+    return onlineLeaveOperation.promise;
+  }
+  cancelOnlineSeatRequestOperation();
+  if (!roomId || !playerToken) {
     clearOnlineSeat();
     appView = "multiplayer";
     refreshRooms();
     render();
+    return undefined;
   }
+  const departureGeneration = invalidateOnlineSession();
+  // Stop room snapshots before waiting for the leave request. Otherwise a
+  // just-finished room can advance and start a fresh diagnostic while this
+  // client is already on its way back to the lobby.
+  closeOnlineEvents();
+  const operation = {
+    roomId,
+    playerToken,
+    departureGeneration,
+    promise: null
+  };
+  onlineLeaveOperation = operation;
+  operation.promise = (async () => {
+    let leaveError = "";
+    try {
+      await boundedOnlineLeaveRequest(leaveOnlineRoom(roomId, playerToken));
+    } catch (error) {
+      leaveError = errorMessage(error);
+    } finally {
+      const stillLeavingCapturedSeat = onlineSessionGeneration === departureGeneration
+        && online.roomId === roomId
+        && online.playerToken === playerToken;
+      if (onlineLeaveOperation === operation) onlineLeaveOperation = null;
+      if (!stillLeavingCapturedSeat) return;
+      clearOnlineSeat();
+      online.error = leaveError;
+      online.leaveNotice = leaveError;
+      if (currentDiagnosticSnapshot()?.finalization && !bugReportDecisionResolved()) {
+        bugReportUi.recovered = true;
+      }
+      appView = diagnosticNavigationBlocked() ? "menu" : "multiplayer";
+      if (appView === "multiplayer") refreshRooms();
+      render();
+    }
+  })();
+  return operation.promise;
+}
+
+function prepareOnlineGameMode() {
+  // An online snapshot belongs to the server. Retire local controllers before
+  // accepting it, including decisions still in flight from an earlier AI game.
+  pauseReplayPlayback();
+  aiMode = false;
+  aiHumanPlayerId = null;
+  aiPlayerId = null;
+  aiReplay = null;
+  replayMode = false;
+  replayBrowser.current = null;
+  localMatch = null;
+  sideboardDrafts = [];
+  sideboardBaselines = [];
+  resetGameUiState();
 }
 
 function applyOnlineSeatResult(result) {
+  prepareOnlineGameMode();
+  invalidateOnlineSession();
+  online.leaveNotice = "";
+  online.diagnosticGameId = "";
+  online.gameNumber = null;
   online.mode = "online";
   online.room = result.room;
   online.roomId = result.room?.roomId || online.roomId;
@@ -4585,20 +7382,43 @@ function applyOnlineSeatResult(result) {
 }
 
 function dispatchGameCommand(command, applyLocal) {
-  if (online.commandPending) return;
+  if (online.commandPending?.sessionGeneration === onlineSessionGeneration) return;
+  if (online.commandPending) online.commandPending = null;
   clearRealtimeFeedback();
   actionRejection = null;
   if (!isOnlineGame()) {
     const resolvedCommand = resolveCurrentGameCommand(command);
     if (!resolvedCommand) {
+      recordDiagnosticCommand(command, {
+        status: "rejected",
+        reason: "That action is not legal in the current game state.",
+        context: { actorId: aiActiveActorId(game) }
+      });
       actionRejection = localizedCommandFailure("That action is not legal in the current game state.");
-      render();
       return;
     }
-    const before = aiReplay ? cloneGame(game) : null;
     const actorId = aiActiveActorId(game);
-    const result = applyLocal?.(resolvedCommand);
+    const before = aiReplay?.humanPlayerId === actorId
+      && isStrategicAction(resolvedCommand)
+      && !replayAnalysisWorkerUnavailable
+      && typeof Worker === "function"
+      ? cloneGame(game)
+      : null;
+    const attemptId = recordDiagnosticCommandAttempt(resolvedCommand, { actorId, online: false });
+    let result;
+    try {
+      result = applyLocal?.(resolvedCommand);
+    } catch (error) {
+      markGameStateChanged();
+      recordDiagnosticCommand(resolvedCommand, {
+        status: "exception",
+        error,
+        context: { actorId, attemptId }
+      });
+      throw error;
+    }
     if (result?.ok === false) actionRejection = localizedCommandFailure(result.message);
+    if (result?.ok !== false) enterInitialLocalSideboardingIfNeeded();
     advanceTutorialAfterCommand(game, resolvedCommand, result);
     if (game.tutorial?.completed && !tutorialRecord.completedIds.includes(game.tutorial.id)) {
       const completedAt = new Date().toISOString();
@@ -4608,13 +7428,26 @@ function dispatchGameCommand(command, applyLocal) {
       };
       saveTutorialRecord();
     }
+    if (result?.ok !== false) markGameStateChanged();
+    recordDiagnosticCommand(resolvedCommand, {
+      status: result?.ok === false ? "rejected" : "success",
+      ...(result?.ok === false
+        ? { reason: result.message || "Command rejected." }
+        : { result }),
+      context: { actorId, attemptId }
+    });
     recordLocalGameIfComplete();
-    if (aiReplay && result?.ok) queueReplayAnalysis(before, actorId, resolvedCommand, result);
+    if (before && result?.ok) queueReplayAnalysis(before, actorId, resolvedCommand, result);
+    if (result?.ok && game.phase === "complete") completeAiReplay();
     return;
   }
   if (!['surrender', 'restartGame', 'submitSideboard'].includes(command.kind) && !viewerCanAct()) {
+    recordDiagnosticCommand(command, {
+      status: "rejected",
+      reason: "The viewer cannot act right now.",
+      context: { actorId: online.playerId, online: true }
+    });
     online.error = "상대의 턴 또는 Focus입니다.";
-    render();
     return;
   }
   // Online snapshots are intentionally redacted and JSON-only. They are not
@@ -4622,39 +7455,115 @@ function dispatchGameCommand(command, applyLocal) {
   // doing so can both disagree with hidden server state and execute transitions
   // on serialized data. Send the explicit UI command and let the server's
   // shared legal-action gate validate and canonicalize it.
-  const resolvedCommand = command;
+  const commandSession = {
+    generation: onlineSessionGeneration,
+    roomId: online.roomId,
+    playerToken: online.playerToken,
+    playerId: online.playerId,
+    diagnosticRecorder: gameDiagnostic,
+    ...captureOnlineDiagnosticIdentity({
+      roomId: online.roomId,
+      diagnosticKey: onlineDiagnosticGameKey,
+      metadata: currentDiagnosticSnapshot()?.metadata
+    })
+  };
+  const resolvedCommand = command.kind === "surrender"
+    ? guardedOnlineSurrenderCommand(command, commandSession)
+    : command;
+  if (!resolvedCommand) {
+    const reason = "The current online game identity is unavailable; no surrender was sent.";
+    recordDiagnosticCommand(command, {
+      status: "rejected",
+      reason,
+      context: { actorId: commandSession.playerId, online: true }
+    });
+    online.error = reason;
+    actionRejection = localizedCommandFailure(reason);
+    return;
+  }
   const snapshotRevisionAtDispatch = onlineSnapshotRevision;
-  online.commandPending = { kind: command.kind, startedAt: Date.now() };
-  render();
-  sendOnlineCommand(online.roomId, online.playerToken, resolvedCommand)
-    .then(() => {
+  const attemptId = recordDiagnosticCommandAttempt(resolvedCommand, {
+    actorId: commandSession.playerId,
+    online: true
+  });
+  const commandPending = {
+    kind: command.kind,
+    startedAt: Date.now(),
+    sessionGeneration: commandSession.generation,
+    roomId: commandSession.roomId,
+    diagnosticIdentityCaptured: commandSession.diagnosticIdentityCaptured,
+    diagnosticKey: commandSession.diagnosticKey,
+    diagnosticGameId: commandSession.diagnosticGameId,
+    gameNumber: commandSession.gameNumber
+  };
+  online.commandPending = commandPending;
+  sendOnlineCommand(commandSession.roomId, commandSession.playerToken, resolvedCommand)
+    .then((result) => {
+      if (!onlineCommandSessionIsCurrent(commandSession)
+        || gameDiagnostic !== commandSession.diagnosticRecorder) return;
       online.error = "";
       actionRejection = null;
+      recordDiagnosticCommand(resolvedCommand, {
+        status: "success",
+        result,
+        context: { actorId: commandSession.playerId, online: true, attemptId }
+      });
     })
     .catch((error) => {
+      if (!onlineCommandSessionIsCurrent(commandSession)
+        || gameDiagnostic !== commandSession.diagnosticRecorder) return;
       online.error = error.message;
       actionRejection = localizedCommandFailure(error.message);
+      recordDiagnosticCommand(resolvedCommand, {
+        status: Number(error?.status) >= 400 && Number(error?.status) < 500 ? "rejected" : "exception",
+        ...(Number(error?.status) >= 400 && Number(error?.status) < 500
+          ? { reason: error.message }
+          : { error }),
+        context: { actorId: commandSession.playerId, online: true, attemptId }
+      });
     })
     .finally(() => {
+      if (!onlineCommandSessionIsCurrent(commandSession)
+        || online.commandPending !== commandPending) return;
       online.commandPending = null;
+      if (gameDiagnostic !== commandSession.diagnosticRecorder) return;
       if (onlineSnapshotRevision === snapshotRevisionAtDispatch) render();
       else renderAfterTabletopFlights();
     });
 }
 
+function onlineCommandSessionIsCurrent(commandSession) {
+  return commandSession?.generation === onlineSessionGeneration
+    && commandSession.roomId === online.roomId
+    && commandSession.playerToken === online.playerToken;
+}
+
 function renderAfterTabletopFlights() {
+  const generation = ++deferredOnlineRenderGeneration;
   if (deferredOnlineRenderTimer) clearTimeout(deferredOnlineRenderTimer);
-  const deadline = Date.now() + 1800;
+  deferredOnlineRenderTimer = null;
+  const animations = [...document.querySelectorAll(".tabletop-card-flight-layer, .tabletop-state-motion")]
+    .flatMap((node) => {
+      if (typeof node.getAnimations !== "function") return [];
+      try { return node.getAnimations({ subtree: true }); } catch { return node.getAnimations(); }
+    })
+    .filter((animation) => !["finished", "idle"].includes(animation.playState));
+  if (!animations.length || appView !== "game") {
+    render();
+    return;
+  }
+  let settled = false;
   const finish = () => {
+    if (settled || generation !== deferredOnlineRenderGeneration) return;
+    settled = true;
+    if (deferredOnlineRenderTimer) clearTimeout(deferredOnlineRenderTimer);
     deferredOnlineRenderTimer = null;
-    const activeTabletopMotion = document.querySelector(".tabletop-card-flight-layer, .tabletop-state-motion");
-    if (!activeTabletopMotion || Date.now() >= deadline || appView !== "game") {
-      render();
-      return;
-    }
-    deferredOnlineRenderTimer = setTimeout(finish, 32);
+    render();
   };
-  finish();
+  deferredOnlineRenderTimer = window.setTimeout(finish, 1800);
+  Promise.allSettled(animations.map((animation) => {
+    try { return animation.finished; } catch { return Promise.resolve(); }
+  })).then(finish);
 }
 
 function resolveCurrentGameCommand(command) {
@@ -4664,62 +7573,591 @@ function resolveCurrentGameCommand(command) {
     && !game.players.some((player) => player.id === game.pendingPayment.playerId)) return command;
   const actorId = aiActiveActorId(game);
   if (!actorId) return null;
-  return resolveLegalAction(game, command, actorId);
+  if (["beginPlayCard", "beginPlayCardFromTrash", "beginPlayChampion", "hideCard", "moveUnit"].includes(command?.kind)) {
+    const key = actionKey(command);
+    const cached = uiActionByKey.get(key);
+    if (cached) return cached;
+  }
+  return canonicalizeActionCommand(game, command, actorId);
 }
 
 function queueReplayAnalysis(before, actorId, command, result) {
-  window.setTimeout(() => {
-    try {
-      recordReplayDecision(aiReplay, before, actorId, command, result, activeCoachModel());
-      if (game.phase === "complete" && !aiReplay.report) completeAiReplay();
-    } catch (error) {
-      reportUiException(error, "AI replay analysis");
+  const replay = aiReplay;
+  if (before) recordExecutedReplayAction(replay,before,actorId,command,result);
+  if (!replay || !before || !result?.ok || actorId !== replay.humanPlayerId || !isStrategicAction(command)) return;
+  const requestId = `replay-analysis-${++replayAnalysisRequestSequence}`;
+  const pending = {
+    requestId,
+    order: replayAnalysisRequestSequence,
+    replay,
+    gameBefore: before,
+    actorId,
+    command,
+    model: activeCoachModel(),
+    ready: false,
+    decision: null,
+    idleCallback: null,
+    timer: null,
+    watchdog: null
+  };
+  pendingReplayAnalyses.set(requestId, pending);
+  const worker = ensureReplayAnalysisWorker();
+  if (!worker) {
+    scheduleReplayAnalysisFallback(pending);
+    return;
+  }
+  try {
+    worker.postMessage(createReplayAnalysisWorkerRequest({
+      requestId,
+      gameBefore: before,
+      actorId,
+      command,
+      model: pending.model
+    }));
+    pending.watchdog = window.setTimeout(() => {
+      if (pendingReplayAnalyses.get(requestId) === pending && !pending.ready) {
+        handleReplayAnalysisWorkerFailure();
+      }
+    }, 15_000);
+  } catch {
+    handleReplayAnalysisWorkerFailure();
+  }
+}
+
+function ensureReplayAnalysisWorker() {
+  if (replayAnalysisWorker) return replayAnalysisWorker;
+  if (replayAnalysisWorkerUnavailable || typeof Worker !== "function") return null;
+  try {
+    const worker = new Worker(new URL("./ai/replay-worker.mjs", import.meta.url), { type: "module" });
+    worker.addEventListener("message", handleReplayAnalysisWorkerMessage);
+    worker.addEventListener("error", handleReplayAnalysisWorkerFailure);
+    worker.addEventListener("messageerror", handleReplayAnalysisWorkerFailure);
+    replayAnalysisWorker = worker;
+    return worker;
+  } catch {
+    replayAnalysisWorkerUnavailable = true;
+    return null;
+  }
+}
+
+function handleReplayAnalysisWorkerMessage(event) {
+  const message = event.data;
+  const pending = pendingReplayAnalyses.get(message?.requestId);
+  if (!pending) return;
+  if (pending.watchdog != null) window.clearTimeout(pending.watchdog);
+  pending.watchdog = null;
+  if (message.type === REPLAY_ANALYSIS_WORKER_MESSAGE_TYPES.result && message.ok) {
+    pending.decision = message.decision;
+    pending.ready = true;
+    drainReplayAnalysisResults(pending.replay);
+    return;
+  }
+  scheduleReplayAnalysisFallback(pending);
+}
+
+function handleReplayAnalysisWorkerFailure() {
+  replayAnalysisWorker?.terminate();
+  replayAnalysisWorker = null;
+  replayAnalysisWorkerUnavailable = true;
+  for (const pending of pendingReplayAnalyses.values()) {
+    if (pending.ready) continue;
+    if (pending.watchdog != null) window.clearTimeout(pending.watchdog);
+    pending.watchdog = null;
+    scheduleReplayAnalysisFallback(pending);
+  }
+}
+
+function scheduleReplayAnalysisFallback(pending) {
+  if (!pending?.replay || pending.replay !== aiReplay) {
+    if (pending?.requestId) pendingReplayAnalyses.delete(pending.requestId);
+    return;
+  }
+  if (pending.watchdog != null) window.clearTimeout(pending.watchdog);
+  if (pending.idleCallback != null && typeof window.cancelIdleCallback === "function") {
+    window.cancelIdleCallback(pending.idleCallback);
+  }
+  pending.watchdog = null;
+  if (pending.timer != null) window.clearTimeout(pending.timer);
+  pending.idleCallback = null;
+  pending.timer = null;
+  // A Worker failure must never move full policy enumeration back onto the
+  // gameplay thread. Mark this item complete without coaching data so ordered
+  // replay draining releases the retained state snapshot immediately.
+  pending.gameBefore = null;
+  pending.decision = null;
+  pending.ready = true;
+  pendingReplayAnalyses.set(pending.requestId, pending);
+  drainReplayAnalysisResults(pending.replay);
+}
+
+function drainReplayAnalysisResults(replay) {
+  let appended = false;
+  const ordered = [...pendingReplayAnalyses.values()]
+    .filter((pending) => pending.replay === replay)
+    .sort((left, right) => left.order - right.order);
+  for (const next of ordered) {
+    if (!next.ready) break;
+    pendingReplayAnalyses.delete(next.requestId);
+    if (next.decision && next.gameBefore) {
+      appendAnalyzedReplayDecision(replay, next.decision, next.gameBefore, {
+        stateAlreadyCloned: true
+      });
     }
-  }, 0);
+    appended = true;
+  }
+  if (appended) finishReplayAnalysisUpdate(replay);
+}
+
+function settleReplayAnalysesWithoutCoaching(replay) {
+  if (!replay) return;
+  for (const pending of pendingReplayAnalyses.values()) {
+    if (pending.replay !== replay) continue;
+    if (pending.idleCallback != null && typeof window.cancelIdleCallback === "function") {
+      window.cancelIdleCallback(pending.idleCallback);
+    }
+    if (pending.timer != null) window.clearTimeout(pending.timer);
+    if (pending.watchdog != null) window.clearTimeout(pending.watchdog);
+    pending.idleCallback = null;
+    pending.timer = null;
+    pending.watchdog = null;
+    if (!pending.ready) {
+      pending.gameBefore = null;
+      pending.decision = null;
+      pending.ready = true;
+    }
+  }
+  drainReplayAnalysisResults(replay);
+  if (replay === aiReplay && game.phase === "complete") completeAiReplay();
+}
+
+function finishReplayAnalysisUpdate(replay) {
+  if ([...pendingReplayAnalyses.values()].some((pending) => pending.replay === replay)) return;
+  if (replay === aiReplay && game.phase === "complete") completeAiReplay();
+  else if (replay === aiReplay && appView === "analysis") render();
+}
+
+function cancelReplayAnalyses() {
+  replayAnalysisWorker?.removeEventListener("message", handleReplayAnalysisWorkerMessage);
+  replayAnalysisWorker?.removeEventListener("error", handleReplayAnalysisWorkerFailure);
+  replayAnalysisWorker?.removeEventListener("messageerror", handleReplayAnalysisWorkerFailure);
+  replayAnalysisWorker?.terminate();
+  replayAnalysisWorker = null;
+  replayAnalysisWorkerUnavailable = false;
+  for (const pending of pendingReplayAnalyses.values()) {
+    if (pending.idleCallback != null && typeof window.cancelIdleCallback === "function") {
+      window.cancelIdleCallback(pending.idleCallback);
+    }
+    if (pending.timer != null) window.clearTimeout(pending.timer);
+    if (pending.watchdog != null) window.clearTimeout(pending.watchdog);
+  }
+  pendingReplayAnalyses.clear();
+}
+
+function persistCurrentAiReplay(replay) {
+  if (!replay?.report) return Promise.resolve(false);
+  let state = aiReplayPersistenceStates.get(replay);
+  if (!state) {
+    state = { promise: null, inFlightReport: null, savedReport: null };
+    aiReplayPersistenceStates.set(replay, state);
+  }
+  const requestedReport = replay.report;
+  if (state.savedReport === requestedReport) return Promise.resolve(true);
+  if (state.promise) {
+    if (state.inFlightReport === requestedReport) return state.promise;
+    // Refined reports must wait for an older write to finish. Both writes use
+    // the same replay id, so parallel persistence could let stale data win.
+    return state.promise.catch(() => false).then(() => persistCurrentAiReplay(replay));
+  }
+
+  let payload;
+  let persistence;
+  try {
+    payload = persistableAiReplay(replay);
+    persistence = persistAiReplay(payload);
+  } catch (error) {
+    return Promise.reject(error);
+  }
+  state.inFlightReport = requestedReport;
+  const savePromise = Promise.resolve(persistence)
+    .then(() => {
+      state.savedReport = requestedReport;
+      return true;
+    })
+    .finally(() => {
+      if (state.promise !== savePromise) return;
+      state.promise = null;
+      state.inFlightReport = null;
+    });
+  state.promise = savePromise;
+  return savePromise;
 }
 
 function completeAiReplay() {
-  if (!aiReplay || aiReplay.report) return;
-  finalizeAiReplay(aiReplay, game, activeCoachModel());
-  persistAiReplay(persistableAiReplay(aiReplay)).catch((error) => {
+  const replay = aiReplay;
+  if (!replay) return;
+  if ([...pendingReplayAnalyses.values()].some((pending) => pending.replay === replay)) return;
+  if (!replay.report) finalizeAiReplay(replay, game, activeCoachModel());
+  persistCurrentAiReplay(replay).catch((error) => {
+    // A later review/exit/new-game action can retry this exact report because
+    // failed writes never advance savedReport.
     reportUiException(error, "AI replay persistence");
   });
 }
 
 function scheduleAiTurn() {
-  if (!aiMode || appView !== "game" || aiThinking || aiTurnTimer || game.phase === "complete") return;
+  if (!aiMode
+    || isOnlineGame()
+    || appView !== "game"
+    || matchIsBetweenGames()
+    || aiThinking
+    || aiTurnTimer
+    || aiTurnWorkerBusyRequestId
+    || aiTurnWorkerUnavailable
+    || game.phase === "complete") return;
   if (aiActiveActorId(game) !== aiPlayerId) return;
-  aiTurnTimer = window.setTimeout(() => {
+  const scheduledGame = game;
+  const scheduledGeneration = aiTurnGeneration;
+  const scheduledAiPlayerId = aiPlayerId;
+  aiTurnTimer = window.setTimeout(async () => {
     aiTurnTimer = null;
+    if (!aiTurnSessionIsCurrent(scheduledGame, scheduledGeneration, scheduledAiPlayerId)) return;
     aiThinking = true;
+    render();
+    if (!aiTurnSessionIsCurrent(scheduledGame, scheduledGeneration, scheduledAiPlayerId)) return;
+    let attemptedCommand = { kind: "ai-turn" };
+    let diagnosticRecorded = false;
+    let diagnosticAttemptId = "";
     try {
-      if (game.pendingPayment) {
-        const payment = resolvePlannedPayment(game, {
-          model: aiModel,
-          ...(neuralAiModel && neuralValueEstimator ? {
-            learnedCandidateLimit: 3,
-            valueEstimator: (state, actorId) => neuralValueEstimator(neuralAiModel, state, actorId)
-          } : {})
+      const workerDecision = await requestAiTurnDecision({
+        game: scheduledGame,
+        actorId: scheduledAiPlayerId,
+        model: aiModel,
+        selectionMode: neuralAiCheckpointMetadata
+          && aiTurnWorkerConfiguredNeuralKey
+          && aiTurnWorkerConfiguredNeuralKey === neuralAiLoadedDescriptorKey
+          ? "neural"
+          : "policy",
+        temperature: 0.22
+      });
+      if (!aiTurnSessionIsCurrent(scheduledGame, scheduledGeneration, scheduledAiPlayerId)) return;
+
+      if (workerDecision?.kind === "payment") {
+        const replayBefore={turnNumber:game.turnNumber,phase:game.phase};
+        attemptedCommand = { kind: "aiResolvePlannedPayment" };
+        diagnosticAttemptId = recordDiagnosticCommandAttempt(attemptedCommand, {
+          actorId: scheduledAiPlayerId,
+          ai: true
         });
+        const payment = applyAiPaymentActions(workerDecision.actions, scheduledAiPlayerId);
+        recordExecutedReplayAction(aiReplay,replayBefore,scheduledAiPlayerId,attemptedCommand,payment);
+        if (payment?.ok || payment?.actionsApplied) markGameStateChanged();
+        recordDiagnosticCommand(attemptedCommand, {
+          status: payment?.ok ? "success" : "rejected",
+          ...(payment?.ok
+            ? { result: payment }
+            : { reason: payment?.message || "AI payment was rejected." }),
+          context: { actorId: scheduledAiPlayerId, ai: true, attemptId: diagnosticAttemptId }
+        });
+        diagnosticRecorded = true;
         if (!payment?.ok) throw new Error(payment?.message || "AI가 비용 결제를 완료하지 못했습니다.");
+        enterInitialLocalSideboardingIfNeeded();
+        recordLocalGameIfComplete();
+        if (game.phase === "complete") completeAiReplay();
         return;
       }
-      const before = cloneGame(game);
-      const legal = enumerateAiPolicyActions(game, aiPlayerId);
-      const selected = neuralAiSession
-        ? neuralAiSession.decide(game, aiPlayerId, legal, { temperature: 0.22 })
-        : choosePolicyAction(game, aiPlayerId, legal, aiModel, { temperature: 0.22 });
+
+      const selected = workerDecision?.selected;
       if (!selected) throw new Error("AI가 실행 가능한 행동을 찾지 못했습니다.");
-      const result = applyAiAction(game, selected.action, aiPlayerId);
+      attemptedCommand = selected.action;
+      diagnosticAttemptId = recordDiagnosticCommandAttempt(attemptedCommand, {
+        actorId: scheduledAiPlayerId,
+        ai: true,
+        runtimeReview: workerDecision.runtimeReview
+      });
+      const replayBefore={turnNumber:game.turnNumber,phase:game.phase};
+      const result = applyAiAction(game, selected.action, scheduledAiPlayerId);
+      recordExecutedReplayAction(aiReplay,replayBefore,scheduledAiPlayerId,selected.action,result);
+      if (result?.ok) markGameStateChanged();
+      recordDiagnosticCommand(selected.action, {
+        status: result?.ok ? "success" : "rejected",
+        ...(result?.ok
+          ? { result }
+          : { reason: result?.message || "AI action was rejected." }),
+        context: { actorId: scheduledAiPlayerId, ai: true, attemptId: diagnosticAttemptId,
+          runtimeReview: workerDecision.runtimeReview }
+      });
+      diagnosticRecorded = true;
       if (!result?.ok) throw new Error(result?.message || "AI 행동이 거절되었습니다.");
-      queueReplayAnalysis(before, aiPlayerId, selected.action, result);
+      enterInitialLocalSideboardingIfNeeded();
+      recordLocalGameIfComplete();
+      if (game.phase === "complete") completeAiReplay();
     } catch (error) {
-      reportUiException(error, "AI turn");
+      // Cancelled or superseded work must not contaminate the new game's log.
+      if (scheduledGeneration !== aiTurnGeneration
+        || scheduledGame !== game
+        || isOnlineGame()) return;
+      if (!diagnosticRecorded) {
+        recordDiagnosticCommand(attemptedCommand, {
+          status: "exception",
+          error,
+          context: { actorId: scheduledAiPlayerId, ai: true, attemptId: diagnosticAttemptId }
+        });
+      }
+      if (aiTurnSessionIsCurrent(scheduledGame, scheduledGeneration, scheduledAiPlayerId)) {
+        reportUiException(error, "AI turn");
+      }
     } finally {
-      aiThinking = false;
-      render();
+      if (scheduledGeneration === aiTurnGeneration) {
+        aiThinking = false;
+        render();
+      }
     }
   }, EFFECT_ANIMATION_DURATION_MS);
+}
+
+function aiTurnSessionIsCurrent(scheduledGame, scheduledGeneration, scheduledAiPlayerId) {
+  return scheduledGeneration === aiTurnGeneration
+    && scheduledGame === game
+    && !isOnlineGame()
+    && appView === "game"
+    && aiMode
+    && aiPlayerId === scheduledAiPlayerId
+    && game.phase !== "complete"
+    && aiActiveActorId(game) === scheduledAiPlayerId;
+}
+
+function applyAiPaymentActions(actions, actorId) {
+  if (!Array.isArray(actions) || !actions.length) {
+    return { ok: false, message: "No AI payment action is available.", actionsApplied: 0 };
+  }
+  let actionsApplied = 0;
+  const appliedActions=[];
+  for (const action of actions) {
+    const recorded=recordablePaymentCommand(game,actorId,action);
+    const result = applyAiAction(game, action, actorId);
+    if (!result?.ok) {
+      return {
+        ok: false,
+        message: result?.message || "AI payment action was rejected.",
+        actionsApplied,appliedActions
+      };
+    }
+    actionsApplied += 1;
+    appliedActions.push(recorded);
+    if (action.kind === "cancelPayment") {
+      return { ok: true, complete: true, cancelled: true, actionsApplied,appliedActions };
+    }
+    // Generated resource ids are authoritative only in the live game. Replan
+    // in the Worker after the activation instead of applying ids from its copy.
+    if (action.kind === "activateCard" && game.pendingPayment) {
+      return { ok: true, complete: false, replan: true, actionsApplied,appliedActions };
+    }
+  }
+  if (game.pendingPayment) {
+    return { ok: false, message: "AI payment plan did not complete.", actionsApplied,appliedActions };
+  }
+  return { ok: true, complete: true, actionsApplied,appliedActions };
+}
+
+function requestAiTurnDecision(options) {
+  const worker = ensureAiTurnWorker();
+  if (!worker) return Promise.reject(new Error("AI turn Worker is unavailable."));
+  if (pendingAiTurnRequest || aiTurnWorkerBusyRequestId) {
+    return Promise.reject(new Error("An AI turn decision is already pending."));
+  }
+  const requestId = `ai-turn-${++aiTurnRequestSequence}`;
+  return new Promise((resolve, reject) => {
+    const pending = {
+      requestId,
+      resolve,
+      reject
+    };
+    aiTurnWorkerBusyRequestId = requestId;
+    aiTurnWorkerBusyWatchdog = window.setTimeout(() => {
+      if (aiTurnWorkerBusyRequestId === requestId) {
+        failAiTurnWorker(new Error("AI turn Worker timed out."));
+      }
+    }, AI_TURN_DECISION_TIMEOUT_MS);
+    pendingAiTurnRequest = pending;
+    try {
+      worker.postMessage(createAiTurnWorkerRequest({ requestId, ...options }));
+    } catch (error) {
+      failAiTurnWorker(error);
+    }
+  });
+}
+
+function configureAiTurnWorkerNeural(checkpointBuffer, descriptorKey, expectedGeneration) {
+  if (aiTurnWorkerConfiguredNeuralKey === descriptorKey && neuralAiCheckpointMetadata) {
+    return Promise.resolve(neuralAiCheckpointMetadata);
+  }
+  if (pendingAiTurnWorkerConfiguration?.descriptorKey === descriptorKey) {
+    return pendingAiTurnWorkerConfiguration.promise;
+  }
+  const worker = ensureAiTurnWorker();
+  if (!worker) return Promise.reject(new Error("AI turn Worker is unavailable."));
+  if (pendingAiTurnWorkerConfiguration) {
+    return pendingAiTurnWorkerConfiguration.promise
+      .catch(() => false)
+      .then(() => {
+        if (neuralAiDescriptorKey(selectedAiGenerationDescriptor()) !== descriptorKey) {
+          const error = new Error("AI turn neural Worker configuration was superseded.");
+          error.name = "AbortError";
+          throw error;
+        }
+        return configureAiTurnWorkerNeural(checkpointBuffer, descriptorKey, expectedGeneration);
+      });
+  }
+  const requestId = `ai-turn-config-${++aiTurnWorkerConfigurationSequence}`;
+  let resolveConfiguration;
+  let rejectConfiguration;
+  const promise = new Promise((resolve, reject) => {
+    resolveConfiguration = resolve;
+    rejectConfiguration = reject;
+  });
+  const pending = {
+    requestId,
+    descriptorKey,
+    expectedGeneration,
+    promise,
+    resolve: resolveConfiguration,
+    reject: rejectConfiguration,
+    watchdog: window.setTimeout(() => {
+      if (pendingAiTurnWorkerConfiguration === pending) {
+        failAiTurnWorker(new Error("AI turn neural Worker configuration timed out."));
+      }
+    }, AI_TURN_NEURAL_CONFIGURATION_TIMEOUT_MS)
+  };
+  pendingAiTurnWorkerConfiguration = pending;
+  try {
+    worker.postMessage(createAiTurnNeuralConfigureRequest({
+      requestId,
+      descriptorKey,
+      checkpointBuffer,
+      expectedGeneration
+    }), [checkpointBuffer]);
+  } catch (error) {
+    failAiTurnWorker(error);
+  }
+  return promise;
+}
+
+function ensureAiTurnWorker() {
+  if (aiTurnWorker) return aiTurnWorker;
+  if (aiTurnWorkerUnavailable || typeof Worker !== "function") return null;
+  try {
+    const worker = new Worker(new URL("./ai/turn-worker.mjs?v=public-review-20261001", import.meta.url), { type: "module" });
+    worker.addEventListener("message", handleAiTurnWorkerMessage);
+    worker.addEventListener("error", handleAiTurnWorkerFailure);
+    worker.addEventListener("messageerror", handleAiTurnWorkerFailure);
+    aiTurnWorker = worker;
+    return worker;
+  } catch (error) {
+    aiTurnWorkerUnavailable = true;
+    return null;
+  }
+}
+
+function handleAiTurnWorkerMessage(event) {
+  const message = event.data;
+  const configuration = pendingAiTurnWorkerConfiguration;
+  if (configuration
+    && message?.type === AI_TURN_WORKER_MESSAGE_TYPES.neuralConfigured
+    && message.requestId === configuration.requestId) {
+    window.clearTimeout(configuration.watchdog);
+    pendingAiTurnWorkerConfiguration = null;
+    if (message.ok
+      && message.descriptorKey === configuration.descriptorKey
+      && Number(message.checkpointMetadata?.generation) === Number(configuration.expectedGeneration)) {
+      aiTurnWorkerConfiguredNeuralKey = configuration.descriptorKey;
+      configuration.resolve(lightweightNeuralAiCheckpointMetadata(message.checkpointMetadata));
+    } else {
+      configuration.reject(new Error(message?.error || "AI turn neural Worker configuration failed."));
+    }
+    return;
+  }
+  const releasedBusyWorker = message?.type === AI_TURN_WORKER_MESSAGE_TYPES.result
+    && message.requestId === aiTurnWorkerBusyRequestId;
+  if (releasedBusyWorker) {
+    if (aiTurnWorkerBusyWatchdog) window.clearTimeout(aiTurnWorkerBusyWatchdog);
+    aiTurnWorkerBusyWatchdog = null;
+    aiTurnWorkerBusyRequestId = "";
+  }
+  const pending = pendingAiTurnRequest;
+  if (!pending || message?.requestId !== pending.requestId) {
+    if (releasedBusyWorker && appView === "game") render();
+    return;
+  }
+  pendingAiTurnRequest = null;
+  if (message.type === AI_TURN_WORKER_MESSAGE_TYPES.result && message.ok) {
+    pending.resolve(message.decision);
+  } else {
+    const error = new Error(message?.error || "AI turn Worker failed.");
+    pending.reject(error);
+    failAiTurnWorker(error);
+  }
+}
+
+function handleAiTurnWorkerFailure(event) {
+  failAiTurnWorker(event?.error || new Error(event?.message || "AI turn Worker failed."));
+}
+
+function failAiTurnWorker(error) {
+  aiTurnWorkerUnavailable = true;
+  disposeAiTurnWorker(error instanceof Error ? error : new Error(String(error || "AI turn Worker failed.")));
+}
+
+function disposeAiTurnWorker(pendingError = null) {
+  aiTurnWorker?.removeEventListener("message", handleAiTurnWorkerMessage);
+  aiTurnWorker?.removeEventListener("error", handleAiTurnWorkerFailure);
+  aiTurnWorker?.removeEventListener("messageerror", handleAiTurnWorkerFailure);
+  aiTurnWorker?.terminate();
+  aiTurnWorker = null;
+  aiTurnWorkerConfiguredNeuralKey = "";
+  if (aiTurnWorkerBusyWatchdog) window.clearTimeout(aiTurnWorkerBusyWatchdog);
+  aiTurnWorkerBusyWatchdog = null;
+  aiTurnWorkerBusyRequestId = "";
+  const configuration = pendingAiTurnWorkerConfiguration;
+  pendingAiTurnWorkerConfiguration = null;
+  if (configuration) {
+    window.clearTimeout(configuration.watchdog);
+    const error = pendingError || new Error("AI turn Worker configuration was cancelled.");
+    if (!pendingError) error.name = "AbortError";
+    configuration.reject(error);
+  }
+  const pending = pendingAiTurnRequest;
+  pendingAiTurnRequest = null;
+  if (!pending) return;
+  const error = pendingError || new Error("AI turn was cancelled.");
+  if (!pendingError) error.name = "AbortError";
+  pending.reject(error);
+}
+
+function resetAiTurnWorkerSession() {
+  if (!aiTurnWorker || !aiTurnWorkerConfiguredNeuralKey) return;
+  try {
+    aiTurnWorker.postMessage(createAiTurnNeuralResetRequest());
+  } catch (error) {
+    failAiTurnWorker(error);
+  }
+}
+
+function cancelScheduledAiTurn() {
+  aiTurnGeneration += 1;
+  if (aiTurnTimer) window.clearTimeout(aiTurnTimer);
+  aiTurnTimer = null;
+  aiThinking = false;
+  const pending = pendingAiTurnRequest;
+  pendingAiTurnRequest = null;
+  if (pending) {
+    const error = new Error("AI turn was cancelled.");
+    error.name = "AbortError";
+    pending.reject(error);
+    // The Worker cannot interrupt synchronous inference. Queue a reset behind
+    // the discarded decision so returning from the coach/another screen does
+    // not reuse recurrent memory advanced for an action that was never played.
+    resetAiTurnWorkerSession();
+  }
 }
 
 function isOnlineGame() {
@@ -4755,6 +8193,21 @@ function emptyEffectAnimationState() {
     mightChanges: new Map(),
     countered: new Map()
   };
+}
+
+function prepareUiMotionForCurrentState() {
+  observeCurrentGame();
+  const viewerId = viewerPlayerId();
+  if (motionGame === game
+    && motionGameRevision === gameStateRevision
+    && motionViewerId === viewerId) {
+    pruneEffectAnimations();
+    return emptyMotion();
+  }
+  motionGame = game;
+  motionGameRevision = gameStateRevision;
+  motionViewerId = viewerId;
+  return prepareUiMotion();
 }
 
 function prepareUiMotion() {
@@ -4900,9 +8353,9 @@ function effectUnitSnapshot(card, location) {
     playerId: card.controllerId || card.ownerId,
     ownerId: card.ownerId,
     name: card.name || "Unit",
-    image: card.image || "",
+    image: cardArtUrl(card) || "",
     location,
-    might: currentMight(game, card)
+    might: uiCurrentMight(card)
   };
 }
 
@@ -4940,7 +8393,7 @@ function motionCardZone(card, { playerId = "", zone = "", locationId = "", index
     locationId: String(locationId || ""),
     index: Number.isFinite(Number(index)) ? Number(index) : 0,
     faceVisible: visible,
-    image: visible ? String(card.image || "") : "",
+    image: visible ? String(cardArtUrl(card) || "") : "",
     name: visible ? String(cardName(card) || "") : "",
     exhausted: Boolean(card.exhausted)
   };
@@ -5076,15 +8529,25 @@ function clearViewerTransientPresentation() {
   clearRealtimeFeedback();
   clearEffectAnimations();
   resetPresentationState(presentationState);
+  motionGame = null;
+  motionGameRevision = -1;
+  motionViewerId = "";
+  presentationGame = null;
+  presentationGameRevision = -1;
+  presentationViewerId = "";
   previousUiSnapshot = null;
   uiMotion = emptyMotion();
   activeImpact = null;
   staticImpactPreview = false;
   actionRejection = null;
   chainTreePresentationItems = [];
+  chainTreeCacheGame = null;
+  chainTreeCacheRevision = -1;
+  chainTreeCacheViewerId = "";
+  chainTreeCacheItems = null;
   if (impactDismissTimer) clearTimeout(impactDismissTimer);
   impactDismissTimer = null;
-  for (const layer of document.querySelectorAll(".tabletop-card-flight-layer")) layer.remove();
+  clearTabletopFlightAnimations();
   clearTabletopStateMotions(document);
 }
 
@@ -5233,7 +8696,7 @@ function firstPlayerPanel() {
         <div class="section-head">
           <div>
             <h2>${t("firstPlayer", locale())}</h2>
-            <span>${game.officialMatchSetup
+            <span>${game.officialMatchSetup || game.singleGameSideboardSetup
               ? (locale() === LOCALES.KO ? "전장 공개 후 확정된 선후공입니다." : "This play order is confirmed after both Battlefields are revealed.")
               : t("decidedBeforeSetup", locale())}</span>
           </div>
@@ -5358,11 +8821,74 @@ function winnerName() {
   return game.players.find((player) => player.id === game.winnerId)?.name || t("nobody", locale());
 }
 
+function completedGameExitLabel() {
+  if (isOnlineGame()) return locale() === LOCALES.KO ? "로비로 돌아가기" : "Return to lobby";
+  return locale() === LOCALES.KO ? "메인 메뉴로" : "Main menu";
+}
+
+function completedGameExitGateMessage() {
+  const korean = locale() === LOCALES.KO;
+  if (isOnlineGame()) {
+    return korean
+      ? "로비로 이동하기 전에 이 경기의 로그 전송 여부를 선택해 주세요."
+      : "Choose whether to send this game's log before returning to the lobby.";
+  }
+  return korean
+    ? "메인 메뉴로 이동하기 전에 이 경기의 로그 전송 여부를 선택해 주세요."
+    : "Choose whether to send this game's log before returning to the main menu.";
+}
+
+function exitCompletedGame() {
+  if (appView !== "game" || (!matchIsBetweenGames() && game?.phase !== "complete")) return false;
+  if (initialSideboardingActive()) {
+    if (isOnlineGame()) void onlineLeaveRoom();
+    else {
+      appView = "menu";
+      resetGameUiState();
+      render();
+    }
+    return true;
+  }
+  if (!bugReportDecisionResolved()) {
+    resultDismissed = false;
+    bugReportUi.error = completedGameExitGateMessage();
+    render();
+    return false;
+  }
+  settleReplayAnalysesWithoutCoaching(aiReplay);
+  // This click is recorded before the action handler runs. Remove that final
+  // breadcrumb copy and retire the in-memory recorder too. An online room can
+  // emit one last snapshot while it is being left; keeping the recorder alive
+  // would persist the already-resolved report again during that short window.
+  forgetPersistedGameDiagnostic();
+  gameDiagnostic = null;
+  if (isOnlineGame()) {
+    void onlineLeaveRoom();
+    return true;
+  }
+  appView = "menu";
+  resetGameUiState();
+  render();
+  return true;
+}
+
 function updateGamePresentation() {
-  const snapshot = snapshotPresentationGame(game, (card) => currentMight(game, card), viewerPlayerId());
+  const snapshot = snapshotPresentationGame(game, (card) => uiCurrentMight(card), viewerPlayerId());
   const update = advancePresentation(presentationState, snapshot, viewerPlayerId());
   if (update.impact) rememberCinematicImpact(update.impact);
   return update;
+}
+
+function updateGamePresentationForCurrentState() {
+  observeCurrentGame();
+  const viewerId = viewerPlayerId();
+  if (presentationGame === game
+    && presentationGameRevision === gameStateRevision
+    && presentationViewerId === viewerId) return { impact: null };
+  presentationGame = game;
+  presentationGameRevision = gameStateRevision;
+  presentationViewerId = viewerId;
+  return updateGamePresentation();
 }
 
 function rememberCinematicImpact(impact) {
@@ -5406,34 +8932,37 @@ function gameResultModal() {
   const korean = locale() === LOCALES.KO;
   return `
     <section class="result-modal match-result-modal modal-panel ${won ? "result-victory" : "result-defeat"}" role="dialog" aria-modal="true" aria-labelledby="match-result-title" data-ui-modal data-modal-key="match-result" tabindex="-1">
-      <div class="result-crown" aria-hidden="true"><span></span></div>
-      <div class="result-modal-copy">
-        <span>${game.surrenderedPlayerId ? (korean ? "항복으로 종료" : "Ended by surrender") : t("gameEnded", locale())}</span>
-        <h2 id="match-result-title">${t(won ? "victory" : "defeat", locale())}</h2>
-        <p>${korean ? `${winner ? playerName(winner) : winnerName()}님이 전장을 지배했습니다.` : `${winner?.name || winnerName()} controlled the battlefield.`}</p>
-      </div>
-      <div class="result-scoreline">
-        <strong>${winner?.score || 0}</strong>
-        <span>${winner ? playerName(winner) : ""}<b>${locale() === LOCALES.KO ? "최종" : "FINAL"}</b>${loser ? playerName(loser) : ""}</span>
-        <strong>${loser?.score || 0}</strong>
-      </div>
-      <section class="match-highlights" aria-label="${korean ? "결정적 플레이" : "Decisive plays"}">
-        <div class="match-highlights-head">
-          <span>${korean ? "승부를 가른 장면" : "Plays that decided the match"}</span>
-          <small>${korean ? `총 ${game.turnNumber || 1}라운드` : `${game.turnNumber || 1} rounds`}</small>
+      <div class="result-scroll-region">
+        <div class="result-crown" aria-hidden="true"><span></span></div>
+        <div class="result-modal-copy">
+          <span>${game.surrenderedPlayerId ? (korean ? "항복으로 종료" : "Ended by surrender") : t("gameEnded", locale())}</span>
+          <h2 id="match-result-title">${t(won ? "victory" : "defeat", locale())}</h2>
+          <p>${korean ? `${winner ? playerName(winner) : winnerName()}님이 전장을 지배했습니다.` : `${winner?.name || winnerName()} controlled the battlefield.`}</p>
         </div>
-        ${highlights.length ? highlights.map((highlight, index) => resultHighlightCard(highlight, index)).join("") : `
-          <article class="result-highlight fallback-highlight">
-            <b>01</b>
-            <div><strong>${korean ? "끝까지 유지한 전장 압박" : "Sustained battlefield pressure"}</strong><p>${korean ? "마지막 득점까지 이어진 운영이 승부를 만들었습니다." : "Consistent control carried the match to its final score."}</p></div>
-          </article>
-        `}
-      </section>
-      <div class="result-actions">
+        <div class="result-scoreline">
+          <strong>${winner?.score || 0}</strong>
+          <span>${winner ? playerName(winner) : ""}<b>${locale() === LOCALES.KO ? "최종" : "FINAL"}</b>${loser ? playerName(loser) : ""}</span>
+          <strong>${loser?.score || 0}</strong>
+        </div>
+        <section class="match-highlights" aria-label="${korean ? "결정적 플레이" : "Decisive plays"}">
+          <div class="match-highlights-head">
+            <span>${korean ? "승부를 가른 장면" : "Plays that decided the match"}</span>
+            <small>${korean ? `총 ${game.turnNumber || 1}라운드` : `${game.turnNumber || 1} rounds`}</small>
+          </div>
+          ${highlights.length ? highlights.map((highlight, index) => resultHighlightCard(highlight, index)).join("") : `
+            <article class="result-highlight fallback-highlight">
+              <b>01</b>
+              <div><strong>${korean ? "끝까지 유지한 전장 압박" : "Sustained battlefield pressure"}</strong><p>${korean ? "마지막 득점까지 이어진 운영이 승부를 만들었습니다." : "Consistent control carried the match to its final score."}</p></div>
+            </article>
+          `}
+        </section>
+        ${gameBugReportPanel()}
+        ${!bugReportDecisionResolved() ? `<p class="game-bug-report-gate">${escapeHtml(completedGameExitGateMessage())}</p>` : ""}
+      </div>
+      <div class="result-actions ${isOnlineGame() ? "" : "three-actions"}">
         <button type="button" class="secondary" data-action="review-result" data-primary-focus>${korean ? "전장 돌아보기" : "Review battlefield"}</button>
-        ${isOnlineGame()
-          ? `<button type="button" class="primary" data-action="confirm-online-result">${korean ? "로비로 돌아가기" : "Return to lobby"}</button>`
-          : `<button type="button" class="primary" data-action="new-game">${t("newGame", locale())}</button>`}
+        ${isOnlineGame() ? "" : `<button type="button" class="secondary" data-action="new-game" ${!bugReportDecisionResolved() ? "disabled" : ""}>${t("newGame", locale())}</button>`}
+        <button type="button" class="primary exit-completed-game" data-action="exit-completed-game">${completedGameExitLabel()}</button>
       </div>
     </section>
   `;
@@ -5727,10 +9256,11 @@ function moveBatchCommandGroup(player) {
 
 function batchMoveDestinations(units) {
   const options = [];
-  const destinationIds = new Set(sharedLegalMoveDestinationIds(
-    uiLegalActions,
-    units.map((unit) => unit.instanceId)
-  ));
+  const destinationIds = new Set(enumerateUiMoveUnitsActions(
+    game,
+    units.map((unit) => unit.instanceId),
+    viewerPlayerId()
+  ).map((action) => action.destinationId));
   if (destinationIds.has("base")) {
     options.push({ id: "base", label: t("moveToBase", locale()) });
   }
@@ -5895,9 +9425,27 @@ function paymentPanel() {
   const modalAttributes = replayMode
     ? `role="region" aria-labelledby="payment-stage-title" aria-readonly="true" data-replay-readonly-decision inert`
     : `role="region" aria-labelledby="payment-stage-title" aria-describedby="payment-stage-help" data-payment-stage data-modal-key="payment-${escapeHtml(payment.id || payment.cardId || payment.source || "pending")}"`;
-  const help = locale() === LOCALES.KO
-    ? "룬은 왼쪽 클릭으로 에너지, 오른쪽 클릭으로 힘을 지불합니다. 생성 자원은 아래에서 선택하고 전설·문장 등 자원 능력도 바로 사용할 수 있습니다."
-    : "Left-click Runes for Energy and right-click for Power. Select generated resources below, or activate a Legend, Seal, or another resource ability.";
+  const directRuneStates = (player.runes || []).map((rune) => ({
+    rune,
+    payment: directRunePaymentState(rune, player.id)
+  }));
+  const energyRuneInputAvailable = directRuneStates.some(({ rune, payment: runePayment }) =>
+    runePayment.canPayEnergy && tutorialAllowsUiAction("pay-rune", { rune: rune.instanceId, mode: "energy" }));
+  const powerRuneInputAvailable = directRuneStates.some(({ rune, payment: runePayment }) =>
+    runePayment.canPayPower && tutorialAllowsUiAction("pay-rune", { rune: rune.instanceId, mode: "power" }));
+  const help = [
+    energyRuneInputAvailable
+      ? (locale() === LOCALES.KO ? "룬을 클릭하거나 짧게 눌러 에너지를 지불합니다." : "Click or tap a Rune to pay Energy.")
+      : "",
+    powerRuneInputAvailable
+      ? (locale() === LOCALES.KO
+          ? "룬을 오른쪽 클릭하거나 길게 누르거나 Shift+Enter를 눌러 힘을 지불합니다."
+          : "Right-click, touch and hold, or press Shift+Enter on a Rune to pay Power.")
+      : "",
+    locale() === LOCALES.KO
+      ? "생성 자원은 아래에서 선택하고 전설·문장 등 자원 능력도 바로 사용할 수 있습니다."
+      : "Select generated resources below, or activate a Legend, Seal, or another resource ability."
+  ].filter(Boolean).join(" ");
   return `
     <section class="payment-stage-banner payment-panel" ${modalAttributes}>
       <div class="payment-stage-copy">
@@ -6353,12 +9901,13 @@ function syncStagedChoiceUi(choice) {
   const key = choiceUiKey(choice);
   if (key !== stagedChoiceKey) {
     stagedChoiceKey = key;
-    stagedChoiceOptionId = null;
+    stagedChoiceOptionId = choice?.effect === "recycleTopDeck" ? "keep" : null;
     choiceDrawerCollapsed = false;
   }
   if (!choice || !stagedChoiceOptionId) return;
   const stillAvailable = validChoiceOptions(choice).some((option) =>
-    option.id === stagedChoiceOptionId && choiceOptionCardId(option) && !option.disabled
+    option.id === stagedChoiceOptionId
+      && (choice.effect === "recycleTopDeck" || choiceOptionCardId(option)) && !option.disabled
   );
   if (!stillAvailable) stagedChoiceOptionId = null;
 }
@@ -6373,6 +9922,7 @@ const FLOATING_EFFECT_CHOICES = new Set([
   "triggerOrder",
   "payDeflect",
   "predictChoice",
+  "recycleTopDeck",
   "observedTopDeckSelfAbility",
   "acknowledgeReveal",
   "chooseDrawOrBuffSelf",
@@ -6431,7 +9981,7 @@ function setStagedChoiceOption(optionId) {
   if (!choice || !decisionVisibleToViewer(choice)) return false;
   syncStagedChoiceUi(choice);
   const option = validChoiceOptions(choice).find((candidate) => candidate.id === optionId);
-  if (!option || option.disabled || !choiceOptionHasPhysicalCard(option)) return false;
+  if (!option || option.disabled || (choice.effect !== "recycleTopDeck" && !choiceOptionHasPhysicalCard(option))) return false;
   stagedChoiceOptionId = option.id;
   return true;
 }
@@ -6622,6 +10172,7 @@ function choicePanel() {
   if (["alphaStrikeDamage", "splitDamageAllocation"].includes(choice.effect)) return alphaStrikeDamagePanel(choice);
   if (choice.effect === "payDeflect") return deflectPaymentPanel(choice);
   if (choice.effect === "predictChoice") return predictChoicePanel(choice);
+  if (choice.effect === "recycleTopDeck") return recycleTopDeckPanel(choice);
   if (choice.effect === "observedTopDeckSelfAbility") return observedTopDeckSelfAbilityPanel(choice);
   if (choice.effect === "acknowledgeReveal") return revealConfirmationPanel(choice);
   const options = choice.options.filter((option) => option && typeof option === "object" && !Array.isArray(option));
@@ -6689,7 +10240,7 @@ function triggerOrderPanel(choice) {
           return `
             <div class="trigger-order-step ${trigger ? "is-chosen" : "is-pending"}">
               <b>${index + 1}</b>
-              <span>${trigger ? triggerOrderSourceName(trigger) : t("pending", locale())}</span>
+              <span>${trigger ? escapeHtml(triggerOrderSourceName(trigger)) : t("pending", locale())}</span>
             </div>
           `;
         }).join("")}
@@ -6698,7 +10249,7 @@ function triggerOrderPanel(choice) {
         <div class="trigger-order-selected">
           <strong>${t("triggerOrderSelected", locale())}</strong>
           <ol>
-            ${chosen.map((trigger) => `<li><b>${triggerOrderSourceName(trigger)}</b><span>${triggerOrderEffectText(trigger)}</span></li>`).join("")}
+            ${chosen.map(triggerOrderSelectedItem).join("")}
           </ol>
         </div>
       ` : ""}
@@ -6706,6 +10257,18 @@ function triggerOrderPanel(choice) {
         ${triggerOptions.map((option) => triggerOrderOptionButton(choice, option)).join("")}
       </div>
     </section>
+  `;
+}
+
+function triggerOrderSelectedItem(trigger, index) {
+  const sourceName = escapeHtml(triggerOrderSourceName(trigger));
+  const kind = escapeHtml(triggerKindLabel(trigger) || t("triggeredAbility", locale()));
+  const effect = triggerOrderEffectText(trigger);
+  return `
+    <li title="${effect}" aria-label="${sourceName}: ${effect}">
+      <b aria-hidden="true">${index + 1}</b>
+      <span class="trigger-order-selected-copy"><strong>${sourceName}</strong><small>${kind}</small></span>
+    </li>
   `;
 }
 
@@ -6739,6 +10302,79 @@ function triggerOrderEffectText(trigger, option = null) {
   const source = findVisibleCard(trigger?.sourceCardId) || trigger?.sourceCardSnapshot;
   if (source) return escapeHtml(cardText(source));
   return escapeHtml(triggerKindLabel(trigger) || localizedChoiceOptionLabel(option || {}) || t("triggeredAbility", locale()));
+}
+
+function recycleTopDeckPanel(choice) {
+  const ko = locale() === LOCALES.KO;
+  const options = validChoiceOptions(choice);
+  const selected = stagedChoiceOption(choice);
+  const cardOptions = (choice.data?.cardIds || []).map((cardId) =>
+    options.find((option) => option.cardId === cardId)
+  ).filter(Boolean);
+  const recycled = cardOptions.filter((option) => selected?.id === "recycle-all" || selected?.id === option.id);
+  const returned = cardOptions.filter((option) => !recycled.includes(option));
+  if (selected?.id === "swap") returned.reverse();
+  const name = (option) => {
+    const card = choicePreviewCard(option);
+    return card && !card.redacted ? cardName(card) : (ko ? "카드" : "Card");
+  };
+  const stageButton = (id, label, extra = "") => {
+    const option = options.find((candidate) => candidate.id === id);
+    return option ? `<button type="button" class="secondary" data-action="stage-choice-option" data-choice="${escapeHtml(id)}" ${extra} ${option.disabled ? "disabled" : ""}>${escapeHtml(label)}</button>` : "";
+  };
+  const confirmLabel = recycled.length
+    ? (ko ? `${recycled.length}장 재활용 확정` : `Confirm recycling ${recycled.length} card${recycled.length > 1 ? "s" : ""}`)
+    : (ko ? "이 순서로 덱 위에 놓기" : "Put back in this order");
+  return `
+    <section class="choice-panel modal-panel top-deck-choice-panel" ${choiceModalAttributes(choice)}>
+      <div class="section-head">
+        <div>
+          <h2>${escapeHtml(choiceStageTitle(choice))}</h2>
+          <span>${ko ? "재활용할 카드를 선택해 주세요. 남은 카드는 원하는 순서로 주 덱 맨 위에 놓습니다." : "Select cards to recycle. Put the remaining cards on top of your Main Deck in your chosen order."}</span>
+        </div>
+      </div>
+      <div class="top-deck-choice-content" data-scroll-key="choice-${escapeHtml(choiceUiKey(choice))}-cards">
+        <div class="top-deck-choice-cards">
+          ${cardOptions.map((option, index) => {
+            const isRecycled = recycled.includes(option);
+            const nextRecycled = isRecycled ? recycled.filter((item) => item !== option) : [...recycled, option];
+            const nextId = nextRecycled.length === 0 ? "keep" : nextRecycled.length === 1 ? nextRecycled[0].id : "recycle-all";
+            const nextOption = options.find((candidate) => candidate.id === nextId);
+            const position = returned.indexOf(option) + 1;
+            const destination = isRecycled
+              ? (ko ? "재활용 · 덱 맨 아래" : "Recycle · bottom of deck")
+              : (ko ? `덱 위 ${position}번째${position === 1 ? " · 먼저 뽑을 카드" : ""}` : `Top ${position}${position === 1 ? " · drawn first" : ""}`);
+            return `
+              <article class="top-deck-choice-card ${isRecycled ? "is-recycled" : "is-kept"}" data-card-id="${escapeHtml(option.cardId)}">
+                <small>${ko ? `확인한 ${index + 1}번째 카드` : `Looked-at card ${index + 1}`}</small>
+                <button type="button" class="top-deck-recycle-toggle" data-action="stage-choice-option" data-choice="${escapeHtml(nextId)}" aria-pressed="${isRecycled}" aria-label="${escapeHtml(`${name(option)}: ${ko ? "재활용" : "Recycle"}`)}" ${!nextOption || nextOption.disabled ? "disabled" : ""}>
+                  ${choiceOptionImage(option)}
+                  <strong>${escapeHtml(name(option))}</strong>
+                  <span class="top-deck-destination">${escapeHtml(destination)}</span>
+                  <span class="top-deck-toggle-label">${isRecycled ? (ko ? "✓ 재활용 선택됨 · 누르면 취소" : "✓ Recycling · click to undo") : (ko ? "이 카드 재활용하기" : "Recycle this card")}</span>
+                </button>
+                <button type="button" class="choice-card-view" data-action="view-choice-card" data-card-id="${escapeHtml(option.cardId)}">${t("viewFullCard", locale())}</button>
+              </article>
+            `;
+          }).join("")}
+        </div>
+        <div class="top-deck-choice-tools">
+          ${stageButton("keep", ko ? "모두 덱 위에 놓기" : "Keep all on top")}
+          ${stageButton("recycle-all", ko ? "모두 재활용하기" : "Recycle all")}
+          ${returned.length > 1 ? stageButton(selected?.id === "swap" ? "keep" : "swap", ko ? "덱 위 순서 바꾸기 ⇄" : "Swap top order ⇄", 'data-top-deck-swap') : ""}
+        </div>
+        <div class="top-deck-choice-result" role="status" aria-live="polite">
+          <strong>${ko ? "처리 결과 미리보기" : "Result preview"}</strong>
+          <p class="top-deck-return-order">${ko ? "덱 맨 위 → " : "Top of deck → "}${returned.map((option, index) => `${index + 1}. ${escapeHtml(name(option))}`).join(" → ") || (ko ? "남기는 카드 없음" : "No cards kept")}</p>
+          <p class="top-deck-recycle-result">${ko ? "재활용 → " : "Recycle → "}${recycled.map((option) => escapeHtml(name(option))).join(", ") || (ko ? "없음" : "None")}</p>
+          ${recycled.length ? `<small>${ko ? "재활용한 카드는 주 덱 맨 아래에 무작위 순서로 놓습니다." : "Recycled cards go to the bottom of your Main Deck in random order."}</small>` : ""}
+        </div>
+      </div>
+      <div class="actions top-deck-choice-actions">
+        <button type="button" class="primary" data-action="confirm-staged-choice" ${selected ? "" : "disabled"}>${escapeHtml(confirmLabel)}</button>
+      </div>
+    </section>
+  `;
 }
 
 function predictChoicePanel(choice) {
@@ -6794,7 +10430,7 @@ function binaryEffectChoicePanel(choice) {
         <strong>${escapeHtml(sourceName)}</strong>
         <p>${escapeHtml(prompt)}</p>
       </div>
-      ${source?.image ? `<button type="button" class="binary-effect-source" data-action="view-choice-card" data-card-id="${escapeHtml(source.instanceId || "")}" aria-label="${escapeHtml(`${sourceName} · ${t("cardInfo", locale())}`)}"><img src="${escapeHtml(source.image)}" alt="${escapeHtml(sourceName)}" loading="lazy" /></button>` : ""}
+      ${cardArtUrl(source) ? `<button type="button" class="binary-effect-source" data-action="view-choice-card" data-card-id="${escapeHtml(source.instanceId || "")}" aria-label="${escapeHtml(`${sourceName} · ${t("cardInfo", locale())}`)}"><img src="${escapeHtml(cardArtUrl(source))}" alt="${escapeHtml(sourceName)}" loading="lazy" /></button>` : ""}
       <div class="binary-effect-actions" role="group" aria-label="${escapeHtml(title)}">
         ${options.map((option, index) => `
           <button type="button" class="${index === 0 ? "primary" : "secondary"}" data-action="choose-effect" data-choice="${escapeHtml(option.id || "")}" ${option.disabled ? "disabled aria-disabled=\"true\"" : ""}>
@@ -7194,7 +10830,7 @@ function deflectPaymentPanel(choice) {
           const rune = findVisibleCard(option.cardId);
           return `
             <button type="button" class="deflect-rune-option" data-action="choose-effect" data-choice="${option.id}">
-              ${rune?.image ? `<img class="deflect-rune-art" src="${rune.image}" alt="${cardName(rune)}" />` : `<span class="rune-swatch" style="--rune:${rune?.color || "#94a3b8"}"></span>`}
+              ${cardArtUrl(rune) ? `<img class="deflect-rune-art" src="${cardArtUrl(rune)}" alt="${cardName(rune)}" />` : `<span class="rune-swatch" style="--rune:${rune?.color || "#94a3b8"}"></span>`}
               <strong>${rune ? domainText(rune.domain) : localizedDynamicText(option.label)}</strong>
               <span>${rune?.exhausted ? t("spent", locale()) : t("ready", locale())}</span>
             </button>
@@ -7307,37 +10943,84 @@ function choiceOptionImage(option) {
   const card = option?.revealed && optionCard ? optionCard : (visibleCard && !visibleCard.redacted ? visibleCard : optionCard || visibleCard || null);
   if (!card && option.image) return `<span class="choice-card-art"><img src="${option.image}" alt="${localizedDynamicText(option.label || (locale() === LOCALES.KO ? "카드" : "Card"))}" loading="lazy" /></span>`;
   if (!card) return `<div class="choice-card-fallback">${localizedDynamicText(option.label || (locale() === LOCALES.KO ? "카드" : "Card"))}</div>`;
-  if (!card.image) return `<div class="choice-card-fallback">${cardName(card)}</div>`;
-  return `<span class="choice-card-art"><img src="${card.image}" alt="${cardName(card)}" loading="lazy" /></span>`;
+  if (!cardArtUrl(card)) return `<div class="choice-card-fallback">${cardName(card)}</div>`;
+  return `<span class="choice-card-art"><img src="${cardArtUrl(card)}" alt="${cardName(card)}" loading="lazy" /></span>`;
+}
+
+function ensureVisibleCardIndex() {
+  observeCurrentGame();
+  if (visibleCardIndexGame === game && visibleCardIndexRevision === gameStateRevision) return;
+  const cardsById = new Map();
+  const contextsById = new Map();
+  const addCard = (card, context = null) => {
+    if (!card || typeof card !== "object") return;
+    const identifiers = [card.instanceId, card.id].map((id) => String(id || "")).filter(Boolean);
+    for (const id of identifiers) {
+      if (!cardsById.has(id)) cardsById.set(id, card);
+    }
+    if (context && card.instanceId && !contextsById.has(card.instanceId)) {
+      contextsById.set(card.instanceId, context);
+    }
+  };
+  const addAttachments = (permanent, context) => {
+    for (const attachment of permanent?.attachments || []) {
+      addCard(attachment, {
+        playerId: attachment.controllerId || attachment.ownerId || context.playerId,
+        zone: "attachment",
+        location: context.location,
+        parentUnitId: permanent.instanceId
+      });
+      addAttachments(attachment, context);
+    }
+  };
+
+  for (const player of game.players || []) {
+    addCard(player.legend, { playerId: player.id, zone: "legend", location: "legend" });
+    addCard(player.champion);
+    for (const card of player.availableChampions || []) {
+      addCard(card, { playerId: player.id, zone: "champion-choice", location: "champion-choice" });
+    }
+    for (const card of player.availableBattlefields || []) addCard(card);
+    for (const card of player.mainDeck || []) addCard(card);
+    for (const card of player.runeDeck || []) addCard(card);
+    for (const card of player.hand || []) addCard(card, { playerId: player.id, zone: "hand", location: "hand" });
+    for (const card of player.base || []) {
+      addCard(card, { playerId: player.id, zone: "base", location: "base" });
+      addAttachments(card, { playerId: player.id, location: "base" });
+    }
+    for (const card of player.runes || []) addCard(card, { playerId: player.id, zone: "rune", location: "rune" });
+    for (const card of player.trash || []) addCard(card);
+    for (const card of player.banished || []) addCard(card, { playerId: player.id, zone: "banished", location: "banished" });
+    if (player.champion?.zone === "champion" && !player.championPlayed) {
+      contextsById.set(player.champion.instanceId, { playerId: player.id, zone: "champion", location: "champion" });
+    }
+  }
+  for (const field of game.battlefields || []) {
+    addCard(field, { playerId: null, zone: "battlefield-card", location: field.instanceId });
+    for (const item of field.hidden || []) {
+      addCard(item?.card, {
+        playerId: hiddenCardControllerId(item),
+        zone: "hidden",
+        location: field.instanceId
+      });
+    }
+    for (const card of field.units || []) {
+      addCard(card, { playerId: card.controllerId, zone: "battlefield", location: field.instanceId });
+      addAttachments(card, { playerId: card.controllerId, location: field.instanceId });
+    }
+  }
+  for (const item of game.showdown?.chain || []) addCard(item?.card);
+  for (const item of game.actionChain?.chain || []) addCard(item?.card);
+  visibleCardIndexGame = game;
+  visibleCardIndexRevision = gameStateRevision;
+  visibleCardIndex = cardsById;
+  selectedContextIndex = contextsById;
 }
 
 function findVisibleCard(cardId) {
   if (!cardId) return null;
-  const allAttachments = game.players.flatMap((player) => player.base)
-    .concat(game.battlefields.flatMap((field) => field.units))
-    .flatMap((card) => card.attachments || []);
-  const pools = [
-    ...game.players.flatMap((player) => [
-      player.legend,
-      player.champion,
-      ...(player.availableChampions || []),
-      ...(player.availableBattlefields || []),
-      ...player.mainDeck,
-      ...player.runeDeck,
-      ...player.hand,
-      ...player.base,
-      ...player.runes,
-      ...player.trash
-      ,...(player.banished || [])
-    ]),
-    ...allAttachments,
-    ...game.battlefields,
-    ...game.battlefields.flatMap((field) => field.units),
-    ...game.battlefields.flatMap((field) => (field.hidden || []).map((item) => item.card)),
-    ...(game.showdown?.chain.map((item) => item?.card).filter(Boolean) || []),
-    ...(game.actionChain?.chain.map((item) => item?.card).filter(Boolean) || [])
-  ];
-  return pools.find((card) => card?.instanceId === cardId || card?.id === cardId) || null;
+  ensureVisibleCardIndex();
+  return visibleCardIndex.get(String(cardId)) || null;
 }
 
 function findChoicePreviewCard(cardId) {
@@ -7360,6 +11043,9 @@ function chainZonePanel() {
   if (!items.length && !responding && !counteredItems.length) {
     chainZoneCollapsed = false;
     return "";
+  }
+  if (isTutorialGame() && game.pendingChoice && choiceCardSurface(game.pendingChoice) === "board") {
+    chainZoneCollapsed = true;
   }
   return `
     <section class="chain-zone chain-pod ${chainZoneCollapsed ? "is-collapsed" : ""} ${counteredItems.length ? "has-counter-animation" : ""}" data-zone="chain" aria-label="${t("processingQueue", locale())}" aria-live="polite">
@@ -7385,6 +11071,12 @@ function chainZonePanel() {
 }
 
 function currentChainTreeItems() {
+  observeCurrentGame();
+  const cacheViewerId = String(viewerPlayerId() || "");
+  if (chainTreeCacheGame === game
+    && chainTreeCacheRevision === gameStateRevision
+    && chainTreeCacheViewerId === cacheViewerId
+    && chainTreeCacheItems) return chainTreeCacheItems;
   const chain = game?.actionChain || game?.showdown;
   const chainItems = chain ? [...normalizeUiChain(Array.isArray(chain.chain) ? chain.chain : [])].reverse() : [];
   const resolvingItem = pendingResolutionChainItem();
@@ -7417,7 +11109,7 @@ function currentChainTreeItems() {
   });
   if (uniqueLiveItems.length) {
     chainTreePresentationItems = uniqueLiveItems.map(snapshotChainPresentationItem);
-    return uniqueLiveItems;
+    return cacheChainTreeItems(uniqueLiveItems, cacheViewerId);
   }
   const pending = game?.pendingChoice || game?.pendingPayment;
   const activeChainState = Boolean(
@@ -7431,13 +11123,21 @@ function currentChainTreeItems() {
     || game?.resolvingChainContext
   );
   if (resolutionStillOpen && chainTreePresentationItems.length) {
-    return chainTreePresentationItems.map((item, index) => ({
+    return cacheChainTreeItems(chainTreePresentationItems.map((item, index) => ({
       ...item,
       status: index === 0 ? "resolving" : (item.status || "pending")
-    }));
+    })), cacheViewerId);
   }
   chainTreePresentationItems = [];
-  return [];
+  return cacheChainTreeItems([], cacheViewerId);
+}
+
+function cacheChainTreeItems(items, viewerId) {
+  chainTreeCacheGame = game;
+  chainTreeCacheRevision = gameStateRevision;
+  chainTreeCacheViewerId = viewerId;
+  chainTreeCacheItems = items;
+  return items;
 }
 
 function chainPresentationItemsMatch(pendingItem, chainItem) {
@@ -7606,7 +11306,7 @@ function chainTargetCard(targetId) {
   }
   return `
     <button type="button" class="chain-target-card" data-action="focus-chain-target" data-card-id="${escapeHtml(targetId)}">
-      ${card.image ? `<img src="${escapeHtml(card.image)}" alt="" loading="lazy" />` : `<span class="chain-target-fallback" aria-hidden="true">◎</span>`}
+      ${cardArtUrl(card) ? `<img src="${escapeHtml(cardArtUrl(card))}" alt="" loading="lazy" />` : `<span class="chain-target-fallback" aria-hidden="true">◎</span>`}
       <span><small>${t("target", locale())}</small><strong>${escapeHtml(cardName(card))}</strong></span>
     </button>
   `;
@@ -7645,7 +11345,7 @@ function chainZoneItem(item = {}, order = 0, { active = false } = {}) {
   const previewCard = chainItemSourceCard(item);
   const previewCardId = String(previewCard?.instanceId || item?.trigger?.sourceCardId || "");
   const snapshotPreview = previewCard === triggerSnapshotCard(item?.trigger);
-  const previewVisible = Boolean(previewCard?.image
+  const previewVisible = Boolean(cardArtUrl(previewCard)
     && !previewCard.redacted
     && (snapshotPreview || cardVisibleToCurrentViewer(previewCardId)));
   const itemId = String(item?.id || `${previewCardId || "chain"}-${order}`);
@@ -7661,7 +11361,7 @@ function chainZoneItem(item = {}, order = 0, { active = false } = {}) {
   return `
     <button type="button" class="${itemClass}" data-action="inspect-chain-effect" data-chain-item-id="${escapeHtml(itemId)}" data-card-id="${escapeHtml(previewCardId)}" title="${escapeHtml(t("target", locale()))}">
       <span class="chain-card-motion-anchor" data-motion-anchor data-motion-zone="chain" data-motion-player-id="${escapeHtml(playerId)}" data-motion-card-id="${escapeHtml(previewCardId)}" aria-hidden="true">
-        ${previewVisible ? `<img class="chain-card-motion-art" src="${escapeHtml(previewCard.image)}" alt="" width="42" height="59" loading="lazy" />` : `<i class="chain-card-motion-back">R</i>`}
+        ${previewVisible ? `<img class="chain-card-motion-art" src="${escapeHtml(cardArtUrl(previewCard))}" alt="" width="42" height="59" loading="lazy" />` : `<i class="chain-card-motion-back">R</i>`}
       </span>
       <span class="chain-zone-copy">
         <span class="chain-zone-meta"><b>[${escapeHtml(order)}] ${escapeHtml(playerPerspectiveLabel(player?.id || playerId))}</b><em>${escapeHtml(localizedDynamicText(t(status, locale())))}</em></span>
@@ -8137,7 +11837,7 @@ function tableCardPile({ zone, player, cards, label, action = "", title = "", ca
     <${tag} class="table-card-pile pile-${zone} ${cardBack ? "face-down" : "face-up"} ${compact ? "compact" : ""}" data-zone="${zone}" data-count="${list.length}" data-effect="${effect}" ${actionAttributes} ${titleAttribute} aria-label="${escapeHtml(`${label} ${list.length}`)}">
       <span class="pile-cards" data-motion-anchor data-motion-zone="${escapeHtml(zone)}" data-motion-player-id="${escapeHtml(playerId)}" aria-hidden="true">
         <i></i><i></i>
-        ${top?.image ? `<img src="${escapeHtml(top.image)}" alt="" loading="lazy" />` : `<b>${cardBack ? "R" : zone === "banished" ? "◇" : "—"}</b>`}
+        ${cardArtUrl(top) ? `<img src="${escapeHtml(cardArtUrl(top))}" alt="" loading="lazy" />` : `<b>${cardBack ? "R" : zone === "banished" ? "◇" : "—"}</b>`}
       </span>
       <span class="pile-label"><span class="pile-label-full">${label}</span><span class="pile-label-short">${compactLabel}</span></span>
       <strong class="pile-count">${list.length}</strong>
@@ -8164,7 +11864,7 @@ function miniIdentity(card, player = null) {
   return `
     <button class="identity-button${championState}${exhausted}${sourceGlow}${chainTarget} ${cardStatusClassNames(card)} ${choiceCardStateClasses(card.instanceId)}" data-action="select-card" data-card="${escapeHtml(card.instanceId || "")}" data-card-id="${escapeHtml(card.instanceId || "")}" data-exhausted="${Boolean(card.exhausted)}" ${dragAttributes} title="${escapeHtml(cardName(card))}">
       <span class="identity-orientation-layer card-exhaust-layer">
-        ${card.image ? `<img src="${escapeHtml(card.image)}" alt="${escapeHtml(cardName(card))}" loading="lazy" />` : `<span class="identity-card-fallback">${escapeHtml(cardName(card))}</span>`}
+        ${cardArtUrl(card) ? `<img src="${escapeHtml(cardArtUrl(card))}" alt="${escapeHtml(cardName(card))}" loading="lazy" />` : `<span class="identity-card-fallback">${escapeHtml(cardName(card))}</span>`}
       </span>
       ${identityEmpoweredMarker(card)}
       ${championState || exhausted ? `<span class="identity-state-label">${card.exhausted ? t("spent", locale()) : championState.trim() === "deployed" ? t("used", locale()) : t("zone", locale())}</span>` : ""}
@@ -8177,7 +11877,7 @@ function championPanelStatus(player) {
   if (!["champion", "played"].includes(player.champion.zone)) return "";
   const deployed = player.championPlayed || player.champion.zone === "played";
   const mine = viewerPlayerId() === player.id;
-  const canUse = mine && !deployed && uiLegalActions.some((action) => action.kind === "beginPlayChampion");
+  const canUse = mine && !deployed && uiChampionPlayActions.length > 0;
   const reason = deployed
     ? t("alreadyUsed", locale())
     : !mine
@@ -8469,9 +12169,9 @@ function opponentPlayer() {
 function viewerCanAct() {
   if (replayMode) return false;
   if (online.commandPending) return false;
+  if (isOnlineGame()) return activePlayerId() === viewerPlayerId();
   if (aiMode) return activePlayerId() === aiHumanPlayerId && !aiThinking;
-  if (!isOnlineGame()) return true;
-  return activePlayerId() === viewerPlayerId();
+  return true;
 }
 
 function visibleBattlefields() {
@@ -8520,7 +12220,7 @@ function handCard(card, index = 0, total = 1) {
 
 function legalHandCardPlayDestinations(cardId) {
   if (!cardId || replayMode || game?.pendingChoice || game?.pendingPayment || online.commandPending || !viewerCanAct()) return [];
-  return [...new Set(uiLegalActions
+  return [...new Set(uiCardActions(cardId)
     .filter((action) => action?.kind === "beginPlayCard" && action.cardId === cardId && typeof action.destination === "string")
     .filter((action) => tutorialAllowsUiAction("begin-play", { card: cardId, destination: action.destination }))
     .map((action) => action.destination)
@@ -8532,7 +12232,7 @@ function legalChampionPlayDestinations(cardId) {
   const player = viewerPlayer();
   if (!requestedCardId || !player || replayMode || game?.pendingChoice || game?.pendingPayment || online.commandPending || !viewerCanAct()) return [];
   if (player.champion?.instanceId !== requestedCardId || player.championPlayed || player.champion?.zone !== "champion") return [];
-  return [...new Set(uiLegalActions
+  return [...new Set(uiChampionPlayActions
     .filter((action) => action?.kind === "beginPlayChampion" && typeof action.destination === "string")
     .filter((action) => tutorialAllowsUiAction("begin-champion", { card: requestedCardId, destination: action.destination }))
     .map((action) => action.destination)
@@ -8545,7 +12245,7 @@ function requestChampionPlay(cardId, destination) {
   if (!requestedCardId || !requestedDestination) return false;
   if (!legalChampionPlayDestinations(requestedCardId).includes(requestedDestination)) return false;
   const player = viewerPlayer();
-  const legalAction = uiLegalActions.find((action) =>
+  const legalAction = uiChampionPlayActions.find((action) =>
     action?.kind === "beginPlayChampion" && action.destination === requestedDestination
   );
   if (!player || player.champion?.instanceId !== requestedCardId || !legalAction
@@ -8563,7 +12263,7 @@ function requestHandCardPlay(cardId, destination) {
   const requestedDestination = String(destination || "");
   if (!requestedCardId || !requestedDestination) return false;
   if (!legalHandCardPlayDestinations(requestedCardId).includes(requestedDestination)) return false;
-  const legalAction = uiLegalActions.find((action) =>
+  const legalAction = uiCardActions(requestedCardId).find((action) =>
     action?.kind === "beginPlayCard"
       && action.cardId === requestedCardId
       && action.destination === requestedDestination
@@ -8582,9 +12282,9 @@ function requestHandCardPlay(cardId, destination) {
 
 function legalUnitMoveDestinations(unitId) {
   if (!unitId || replayMode || game?.pendingChoice || game?.pendingPayment || online.commandPending || !viewerCanAct()) return [];
-  return [...new Set(legalMoveDestinationIds(uiLegalActions, String(unitId))
+  return uiUnitMoveDestinationIds(unitId)
     .filter((destination) => tutorialAllowsUiAction("move", { unit: String(unitId), destination }))
-    .filter(Boolean))];
+    .filter(Boolean);
 }
 
 function requestUnitMove(unitId, destination) {
@@ -8592,12 +12292,8 @@ function requestUnitMove(unitId, destination) {
   const requestedDestination = String(destination || "");
   if (!requestedUnitId || !requestedDestination) return false;
   if (!legalUnitMoveDestinations(requestedUnitId).includes(requestedDestination)) return false;
-  const legalAction = uiLegalActions.find((action) =>
-    action?.kind === "moveUnit"
-      && action.unitId === requestedUnitId
-      && action.destinationId === requestedDestination
-  );
-  if (!legalAction || !tutorialAllowsUiAction("move", {
+  if (!uiUnitMoveDestinationIds(requestedUnitId).includes(requestedDestination)
+    || !tutorialAllowsUiAction("move", {
     unit: requestedUnitId,
     destination: requestedDestination
   })) return false;
@@ -8624,6 +12320,7 @@ function cardDragDescriptor(sourceNode) {
 
 function dragSessionDestinations(session = draggingCardSession) {
   if (!session?.cardId) return [];
+  if (session.destinations instanceof Set) return [...session.destinations];
   if (session.kind === "move") return legalUnitMoveDestinations(session.cardId);
   if (session.kind === "champion") return legalChampionPlayDestinations(session.cardId);
   return legalHandCardPlayDestinations(session.cardId);
@@ -8634,7 +12331,10 @@ function legalDropDestinationNode(node, session = draggingCardSession) {
   if (!destinationNode || !app.contains(destinationNode)) return null;
   if (String(destinationNode.dataset.dropOwner || "") !== String(viewerPlayerId() || "")) return null;
   const destination = String(destinationNode.dataset.playDestination || "");
-  return dragSessionDestinations(session).includes(destination) ? destinationNode : null;
+  const destinations = session?.destinations instanceof Set
+    ? session.destinations
+    : new Set(dragSessionDestinations(session));
+  return destinations.has(destination) ? destinationNode : null;
 }
 
 function beginCardDragPresentation(session, sourceNode = null) {
@@ -8647,31 +12347,45 @@ function beginCardDragPresentation(session, sourceNode = null) {
   )) clearCardDragPresentation();
   const destinations = new Set(dragSessionDestinations(normalized));
   if (!normalized || !destinations.size) return false;
-  draggingCardSession = normalized;
+  const destinationNodes = new Set();
+  draggingCardSession = {
+    ...normalized,
+    destinations,
+    destinationNodes,
+    activeTarget: null,
+    sourceNode
+  };
   app.classList.add("is-dragging-card", `is-dragging-${normalized.kind}`);
   sourceNode?.classList.add("drag-source-active");
   for (const node of app.querySelectorAll("[data-play-destination]")) {
     const ownDestination = String(node.dataset.dropOwner || "") === String(viewerPlayerId() || "");
-    node.classList.toggle("is-legal-drop", ownDestination && destinations.has(String(node.dataset.playDestination || "")));
+    const destination = String(node.dataset.playDestination || "");
+    const legal = ownDestination && destinations.has(destination);
+    node.classList.toggle("is-legal-drop", legal);
+    if (legal) destinationNodes.add(node);
   }
   return true;
 }
 
 function updateCardDragDestination(node) {
-  for (const current of app.querySelectorAll("[data-play-destination].drag-over, [data-play-destination].drop-target-active")) {
-    current.classList.remove("drag-over", "drop-target-active");
-  }
+  const previous = draggingCardSession?.activeTarget || null;
   const target = legalDropDestinationNode(node);
+  if (target === previous) return target;
+  previous?.classList?.remove("drag-over", "drop-target-active");
   if (target) target.classList.add("drag-over", "drop-target-active");
+  if (draggingCardSession) draggingCardSession.activeTarget = target;
   return target;
 }
 
 function clearCardDragPresentation() {
   const pointerSession = pointerCardDrag;
   pointerCardDrag = null;
+  if (pointerCardDragFrame) cancelAnimationFrame(pointerCardDragFrame);
+  pointerCardDragFrame = 0;
   app.classList.remove("is-dragging-card", "is-dragging-play", "is-dragging-move", "is-dragging-champion");
-  for (const node of app.querySelectorAll(".drag-source-active, [data-play-destination].is-legal-drop, [data-play-destination].drag-over, [data-play-destination].drop-target-active")) {
-    node.classList.remove("drag-source-active", "is-legal-drop", "drag-over", "drop-target-active");
+  draggingCardSession?.sourceNode?.classList?.remove("drag-source-active");
+  for (const node of draggingCardSession?.destinationNodes?.values?.() || []) {
+    node.classList.remove("is-legal-drop", "drag-over", "drop-target-active");
   }
   pointerSession?.ghost?.remove?.();
   try {
@@ -8708,17 +12422,25 @@ function createPointerDragGhost(sourceNode) {
 
 function positionPointerDragGhost(ghost, clientX, clientY) {
   if (!ghost) return;
-  ghost.style.left = `${clientX}px`;
-  ghost.style.top = `${clientY}px`;
+  ghost.style.setProperty("--drag-x", `${clientX}px`);
+  ghost.style.setProperty("--drag-y", `${clientY}px`);
 }
 
 function visibleCardStatuses(card) {
-  return cardStatusItems(card, {
+  const activeLocale = locale();
+  if (visibleCardStatusCacheLocale !== activeLocale) {
+    visibleCardStatusCache = new WeakMap();
+    visibleCardStatusCacheLocale = activeLocale;
+  }
+  if (card && visibleCardStatusCache.has(card)) return visibleCardStatusCache.get(card);
+  const statuses = cardStatusItems(card, {
     locale: locale(),
     keywordLabel: (keyword) => keywordText([keyword]),
     cardLabel: (name) => localizedDynamicText(name),
     domainLabel: (domain) => domainText(domain)
   });
+  if (card && typeof card === "object") visibleCardStatusCache.set(card, statuses);
+  return statuses;
 }
 
 function cardStatusBadges(card, { excludeKinds = [] } = {}) {
@@ -8749,7 +12471,7 @@ function cardStatusPanel(card, { compact = false } = {}) {
   const statuses = visibleCardStatuses(card);
   const isUnit = card.type === "unit";
   const printedMight = Number(card.might) || 0;
-  const boardMight = isUnit ? currentMight(game, card) : 0;
+  const boardMight = isUnit ? uiCurrentMight(card) : 0;
   const stateTitle = locale() === LOCALES.KO ? "현재 카드 상태" : "Current card status";
   const stateCount = statuses.length
     ? (locale() === LOCALES.KO ? `${statuses.length}개 효과 적용 중` : `${statuses.length} active effects`)
@@ -8796,8 +12518,8 @@ function unitDeathGhosts(location, playerId) {
 
 function unitDeathGhost(unit) {
   const label = locale() === LOCALES.KO ? `${unit.name} 처치됨` : `${unit.name} defeated`;
-  const art = unit.image
-    ? `<img src="${escapeHtml(unit.image)}" alt="" />`
+  const art = cardArtUrl(unit)
+    ? `<img src="${escapeHtml(cardArtUrl(unit))}" alt="" />`
     : `<span>${escapeHtml(unit.name)}</span>`;
   return `
     <article class="unit-token unit-death-ghost owner-${unit.ownerId}" aria-label="${escapeHtml(label)}">
@@ -8880,9 +12602,9 @@ function baseToken(card, location, owner, motion, attachments, flashed) {
       <div class="card-exhaust-layer">
         <div class="card-face-layer">
           <div class="unit-token-art">
-            ${card.image ? `<img src="${escapeHtml(card.image)}" alt="${escapeHtml(cardName(card))}" loading="lazy" />` : `<span>${escapeHtml(cardName(card))}</span>`}
+            ${cardArtUrl(card) ? `<img src="${escapeHtml(cardArtUrl(card))}" alt="${escapeHtml(cardName(card))}" loading="lazy" />` : `<span>${escapeHtml(cardName(card))}</span>`}
           </div>
-          ${card.image ? "" : `<div class="unit-token-body"><strong>${escapeHtml(cardName(card))}</strong><span>${escapeHtml(domain)}</span></div>`}
+          ${cardArtUrl(card) ? "" : `<div class="unit-token-body"><strong>${escapeHtml(cardName(card))}</strong><span>${escapeHtml(domain)}</span></div>`}
           ${empoweredBoardMarker(card)}
           ${boardCardCornerOverlay(card, stats)}
         </div>
@@ -8914,9 +12636,9 @@ function unitToken(card, location, owner, motion, attachments, flashed) {
       <div class="card-exhaust-layer">
         <div class="card-face-layer">
           <div class="unit-token-art">
-            ${card.image ? `<img src="${escapeHtml(card.image)}" alt="${escapeHtml(cardName(card))}" loading="lazy" />` : `<span>${escapeHtml(cardName(card))}</span>`}
+            ${cardArtUrl(card) ? `<img src="${escapeHtml(cardArtUrl(card))}" alt="${escapeHtml(cardName(card))}" loading="lazy" />` : `<span>${escapeHtml(cardName(card))}</span>`}
           </div>
-          ${card.image ? "" : `<div class="unit-token-body"><strong>${escapeHtml(cardName(card))}</strong><span>${escapeHtml(domain)}</span></div>`}
+          ${cardArtUrl(card) ? "" : `<div class="unit-token-body"><strong>${escapeHtml(cardName(card))}</strong><span>${escapeHtml(domain)}</span></div>`}
           ${empoweredBoardMarker(card)}
           ${boardCardCornerOverlay(card, stats)}
         </div>
@@ -8959,7 +12681,7 @@ function attachmentStrip(attachments) {
         return `
         <button class="attached-gear ${gear.exhausted ? "exhausted" : "ready"} ${cardStatusClassNames(gear)} ${game.selectedCardId === gear.instanceId ? "selected-attachment" : ""} ${chainTargetClass(gear.instanceId)} ${choiceCardStateClasses(gear.instanceId)}" data-action="select-card" data-card="${escapeHtml(gear.instanceId || "")}" data-card-id="${escapeHtml(gear.instanceId || "")}" data-current-might="${state.might}" data-exhausted="${Boolean(gear.exhausted)}" title="${escapeHtml(`${cardName(gear)} · ${state.summary}`)}">
           <span class="attachment-orientation-layer">
-            ${gear.image ? `<img src="${escapeHtml(gear.image)}" alt="${escapeHtml(cardName(gear))}" loading="lazy" />` : `<span>${escapeHtml(cardName(gear))}</span>`}
+            ${cardArtUrl(gear) ? `<img src="${escapeHtml(cardArtUrl(gear))}" alt="${escapeHtml(cardName(gear))}" loading="lazy" />` : `<span>${escapeHtml(cardName(gear))}</span>`}
             <span class="attached-gear-board-overlay" aria-hidden="true">
               ${cardStatusBadges(gear)}
             </span>
@@ -8971,7 +12693,7 @@ function attachmentStrip(attachments) {
 }
 
 function boardUnitStats(card, location) {
-  const raw = showdownUnitStats(card, location) || unitDamageState(game, card);
+  const raw = showdownUnitStats(card, location) || unitDamageState(game, card, { might: uiCurrentMight(card) });
   const might = Number.isFinite(Number(raw?.might)) ? Number(raw.might) : 0;
   const remaining = Number.isFinite(Number(raw?.remaining)) ? Math.max(0, Number(raw.remaining)) : Math.max(0, might);
   return { might, remaining };
@@ -9088,16 +12810,20 @@ function motionCardClass() {
   return "";
 }
 
+function cardArtUrl(card) {
+  return translateCardImage(card, locale());
+}
+
 function cardImage(card) {
-  const art = card.image
-    ? `<img class="card-art" src="${card.image}" alt="${cardName(card)}" loading="lazy" />`
+  const art = cardArtUrl(card)
+    ? `<img class="card-art" src="${cardArtUrl(card)}" alt="${cardName(card)}" loading="lazy" />`
     : `<div class="card-art placeholder">${cardName(card)}</div>`;
   return art;
 }
 
 function statusLine(card) {
   if (card.type !== "unit") return "";
-  const items = [`${t("might", locale())} ${currentMight(game, card)}`];
+  const items = [`${t("might", locale())} ${uiCurrentMight(card)}`];
   if (card.exhausted) items.push(t("exhausted", locale()));
   if (card.damage) items.push(`${card.damage} ${t("damageShort", locale())}`);
   if (card.stunned) items.push(t("stunned", locale()));
@@ -9113,7 +12839,7 @@ function statusLine(card) {
 }
 
 function moveButtons(card) {
-  const destinationIds = new Set(legalMoveDestinationIds(uiLegalActions, card.instanceId));
+  const destinationIds = new Set(uiUnitMoveDestinationIds(card.instanceId));
   const buttons = destinationIds.has("base")
     ? [`<button data-action="move" data-unit="${card.instanceId}" data-destination="base">${t("base", locale())}</button>`]
     : [];
@@ -9319,7 +13045,7 @@ function selectedActions(card, context) {
 
 function trashActions(card, player) {
   if (!player || player.id !== viewerPlayerId()) return [];
-  return uiLegalActions
+  return uiCardActions(card.instanceId)
     .filter((action) => action.kind === "beginPlayCardFromTrash" && action.cardId === card.instanceId)
     .map((command) => {
       const field = game.battlefields.find((candidate) => candidate.instanceId === command.destination);
@@ -9334,7 +13060,7 @@ function handActions(card, player) {
   const inShowdown = game.phase === "showdown";
   const inActionChain = game.phase === "action" && Boolean(game.actionChain);
   const actions = [];
-  const legalCardActions = uiLegalActions.filter((action) => action.cardId === card.instanceId);
+  const legalCardActions = uiCardActions(card.instanceId);
   for (const command of legalCardActions.filter((action) => action.kind === "beginPlayCard")) {
     const destination = command.destination;
     const field = game.battlefields.find((candidate) => candidate.instanceId === destination);
@@ -9358,11 +13084,16 @@ function handActions(card, player) {
 
 function championActions(player) {
   if (!player.champion) return [];
-  return uiLegalActions.filter((action) => action.kind === "beginPlayChampion").map(({ destination }) => {
+  const actions = uiChampionPlayActions.map(({ destination }) => {
     if (destination === "base") return `<button data-action="begin-champion" data-destination="base">${t("playChampionToBase", locale())}</button>`;
     const field = game.battlefields.find((candidate) => candidate.instanceId === destination);
     return `<button data-action="begin-champion" data-destination="${destination}">${t("playChampionToField", locale(), { name: battlefieldName(field) })}</button>`;
   });
+  for (const command of uiCardActions(player.champion.instanceId).filter((action) => action.kind === "hideCard")) {
+    const field = game.battlefields.find((candidate) => candidate.instanceId === command.destination);
+    if (field) actions.push(`<button data-action="hide-card" data-card="${player.champion.instanceId}" data-destination="${field.instanceId}">${t("hideAtBattlefield", locale(), { name: battlefieldName(field) })}</button>`);
+  }
+  return actions;
 }
 
 function unitActions(card, context) {
@@ -9406,7 +13137,7 @@ function hiddenActions(card, context) {
 
 function hiddenPlayable(hidden, field, player = viewerPlayer()) {
   if (!hidden || !field || !player || !hiddenCardIsControlledBy(hidden, player.id)) return false;
-  return uiLegalActions.some((action) =>
+  return uiCardActions(hidden.card.instanceId).some((action) =>
     action.kind === "beginPlayCard"
     && action.cardId === hidden.card.instanceId
     && action.destination === field.instanceId);
@@ -9438,40 +13169,29 @@ function actionHint(card, context, actions) {
 }
 
 function selectedContext(cardId) {
-  for (const player of game.players) {
-    if (player.legend?.instanceId === cardId) return { playerId: player.id, zone: "legend", location: "legend" };
-    if ((player.availableChampions || []).some((card) => card.instanceId === cardId)) return { playerId: player.id, zone: "champion-choice", location: "champion-choice" };
-    if (player.hand.some((card) => card.instanceId === cardId)) return { playerId: player.id, zone: "hand", location: "hand" };
-    if (player.base.some((card) => card.instanceId === cardId)) return { playerId: player.id, zone: "base", location: "base" };
-    if (player.runes.some((card) => card.instanceId === cardId)) return { playerId: player.id, zone: "rune", location: "rune" };
-    if ((player.banished || []).some((card) => card.instanceId === cardId)) return { playerId: player.id, zone: "banished", location: "banished" };
-    if (player.champion?.instanceId === cardId && !player.championPlayed && player.champion.zone === "champion") {
-      return { playerId: player.id, zone: "champion", location: "champion" };
-    }
-    for (const unit of player.base.filter((card) => card.type === "unit")) {
-      const attachment = (unit.attachments || []).find((card) => card.instanceId === cardId);
-      if (attachment) return { playerId: attachment.controllerId || attachment.ownerId, zone: "attachment", location: "base", parentUnitId: unit.instanceId };
-    }
-  }
-  for (const field of game.battlefields) {
-    if (field.instanceId === cardId) return { playerId: null, zone: "battlefield-card", location: field.instanceId };
-    const hidden = field.hidden?.find((item) => item.card.instanceId === cardId);
-    if (hidden) return { playerId: hiddenCardControllerId(hidden), zone: "hidden", location: field.instanceId };
-    const unit = field.units.find((card) => card.instanceId === cardId);
-    if (unit) return { playerId: unit.controllerId, zone: "battlefield", location: field.instanceId };
-    for (const unit of field.units) {
-      const attachment = (unit.attachments || []).find((card) => card.instanceId === cardId);
-      if (attachment) return { playerId: attachment.controllerId || attachment.ownerId, zone: "attachment", location: field.instanceId, parentUnitId: unit.instanceId };
-    }
-  }
-  return null;
+  if (!cardId) return null;
+  ensureVisibleCardIndex();
+  return selectedContextIndex.get(String(cardId)) || null;
 }
 
 function isUsableCard(card) {
   if (!card || game.pendingPayment || game.pendingChoice) return false;
   if (["first-player", "champion-select", "battlefield-select", "mulligan", "complete"].includes(game.phase)) return false;
+  observeCurrentGame();
+  const cacheContext = [viewerPlayerId(), viewerCanAct() ? "can-act" : "waiting", replayMode ? "replay" : "live", appView].join("|");
+  if (usableCardCacheGame !== game
+    || usableCardCacheRevision !== gameStateRevision
+    || usableCardCacheContext !== cacheContext) {
+    usableCardCache = new WeakMap();
+    usableCardCacheGame = game;
+    usableCardCacheRevision = gameStateRevision;
+    usableCardCacheContext = cacheContext;
+  }
+  if (usableCardCache.has(card)) return usableCardCache.get(card);
   const context = selectedContext(card.instanceId);
-  return selectedActions(card, context).length > 0;
+  const usable = selectedActions(card, context).length > 0;
+  usableCardCache.set(card, usable);
+  return usable;
 }
 
 function canSelectForBatchMove(card) {
@@ -9533,15 +13253,14 @@ function canUseTarget(card, context, destination, ownerId) {
   if (ownerId !== viewerPlayerId()) return false;
   if (context.playerId !== viewerPlayerId()) return false;
   if (context.zone === "hand") {
-    return uiLegalActions.some((action) =>
+    return uiCardActions(card.instanceId).some((action) =>
       action.kind === "beginPlayCard" && action.cardId === card.instanceId && action.destination === destination);
   }
   if (context.zone === "champion") {
-    return uiLegalActions.some((action) => action.kind === "beginPlayChampion" && action.destination === destination);
+    return uiChampionPlayActions.some((action) => action.destination === destination);
   }
   if (context.zone === "base" || context.zone === "battlefield") {
-    return uiLegalActions.some((action) =>
-      action.kind === "moveUnit" && action.unitId === card.instanceId && action.destinationId === destination);
+    return uiUnitMoveDestinationIds(card.instanceId).includes(destination);
   }
   return false;
 }
@@ -9564,7 +13283,7 @@ function runeSummary(player) {
       total: 0,
       ready: 0,
       color: rune.color,
-      image: rune.image || "",
+      image: cardArtUrl(rune) || "",
       name: cardName(rune),
       cardId: rune.instanceId,
       cardReady: !rune.exhausted
@@ -9612,13 +13331,25 @@ function runeChip(rune, index = 0, total = 1, playerId = "") {
         !payment.canPayEnergy && !payment.canPayPower ? "payment-unavailable" : ""
       ].filter(Boolean).join(" ")
     : "";
-  const paymentHelp = locale() === LOCALES.KO
-    ? "왼쪽 클릭: 에너지로 탈진 · 오른쪽 클릭: 힘으로 재활용"
-    : "Left-click: exhaust for Energy · Right-click: recycle for Power";
+  const energyInputAvailable = payment.active
+    && payment.canPayEnergy
+    && tutorialAllowsUiAction("pay-rune", { rune: rune.instanceId, mode: "energy" });
+  const powerInputAvailable = payment.active
+    && payment.canPayPower
+    && tutorialAllowsUiAction("pay-rune", { rune: rune.instanceId, mode: "power" });
+  const paymentHelp = [
+    energyInputAvailable
+      ? (locale() === LOCALES.KO ? "클릭/짧게 누르기: 에너지로 탈진" : "Click/tap: exhaust for Energy")
+      : "",
+    powerInputAvailable
+      ? (locale() === LOCALES.KO ? "오른쪽 클릭/길게 누르기/Shift+Enter: 힘으로 재활용" : "Right-click/touch and hold/Shift+Enter: recycle for Power")
+      : ""
+  ].filter(Boolean).join(" · ");
+  const paymentTitle = payment.active && paymentHelp ? `${cardText(rune)} · ${paymentHelp}` : cardText(rune);
   return `
-    <button type="button" class="rune rune-card-chip${spent} ${paymentClasses} ${choiceCardStateClasses(rune.instanceId)}" data-action="${payment.active ? "pay-rune" : "select-card"}" data-mode="${payment.active ? "energy" : ""}" data-direct-payment-rune="${payment.active}" data-card="${escapeHtml(rune.instanceId || "")}" data-card-id="${escapeHtml(rune.instanceId || "")}" data-rune="${escapeHtml(rune.instanceId || "")}" data-rune-card data-payment-energy="${payment.canPayEnergy}" data-payment-power="${payment.canPayPower}" style="--rune:${rune.color || RUNE_COLORS.Any};--rune-index:${index};--rune-count:${Math.max(1, total)}" title="${escapeHtml(payment.active ? `${cardText(rune)} · ${paymentHelp}` : cardText(rune))}" aria-pressed="${payment.active ? payment.energySelected || payment.powerSelected : choiceOptionCardId(stagedChoiceOption()) === rune.instanceId || game.selectedCardId === rune.instanceId}" ${payment.active ? `aria-describedby="payment-stage-help"` : ""}>
+    <button type="button" class="rune rune-card-chip${spent} ${paymentClasses} ${choiceCardStateClasses(rune.instanceId)}" data-action="${payment.active ? "pay-rune" : "select-card"}" data-mode="${payment.active ? "energy" : ""}" data-direct-payment-rune="${payment.active}" data-card="${escapeHtml(rune.instanceId || "")}" data-card-id="${escapeHtml(rune.instanceId || "")}" data-rune="${escapeHtml(rune.instanceId || "")}" data-rune-card data-payment-energy="${payment.canPayEnergy}" data-payment-power="${payment.canPayPower}" style="--rune:${rune.color || RUNE_COLORS.Any};--rune-index:${index};--rune-count:${Math.max(1, total)}" title="${escapeHtml(paymentTitle)}" aria-pressed="${payment.active ? payment.energySelected || payment.powerSelected : choiceOptionCardId(stagedChoiceOption()) === rune.instanceId || game.selectedCardId === rune.instanceId}" ${payment.active ? `aria-describedby="payment-stage-help"${powerInputAvailable ? " aria-keyshortcuts=\"Shift+Enter\"" : ""}` : ""}>
       <span class="rune-orientation-layer">
-        ${rune.image ? `<img src="${escapeHtml(rune.image)}" alt="${escapeHtml(cardName(rune))}" loading="lazy" />` : `<span class="rune-swatch"></span>`}
+        ${cardArtUrl(rune) ? `<img src="${escapeHtml(cardArtUrl(rune))}" alt="${escapeHtml(cardName(rune))}" loading="lazy" />` : `<span class="rune-swatch"></span>`}
         <span class="rune-card-caption">${domainText(rune.domain)}</span>
         ${payment.energySelected ? `<strong class="payment-rune-mode energy-mode">${t("energy", locale())}</strong>` : ""}
         ${payment.powerSelected ? `<strong class="payment-rune-mode power-mode">${t("power", locale())}</strong>` : ""}
@@ -9670,7 +13401,7 @@ function inspector(card) {
       </div>
       <div class="inspector-card">
         <div class="inspector-card-fallback" aria-label="${escapeHtml(displayName)}"><strong>${escapeHtml(displayName)}</strong></div>
-        ${normalizedCard.image ? `<img src="${escapeHtml(normalizedCard.image)}" alt="${escapeHtml(displayName)}" />` : ""}
+        ${cardArtUrl(normalizedCard) ? `<img src="${escapeHtml(cardArtUrl(normalizedCard))}" alt="${escapeHtml(displayName)}" />` : ""}
       </div>
       <div class="inspector-text">
         <h2>${escapeHtml(displayName)}</h2>
@@ -9698,7 +13429,7 @@ function inspectorUnitMight(card) {
     .some((unit) => unit?.instanceId === card?.instanceId))
     || battlefields.some((field) => (Array.isArray(field?.units) ? field.units : [])
       .some((unit) => unit?.instanceId === card?.instanceId));
-  return onBoard ? currentMight(game, card) : effectiveMight(card);
+  return onBoard ? uiCurrentMight(card) : effectiveMight(card);
 }
 
 function attachedGearPanel(attachments) {
@@ -9711,7 +13442,7 @@ function attachedGearPanel(attachments) {
           return `
           <button class="attached-gear-card ${gear.exhausted ? "exhausted" : "ready"} ${cardStatusClassNames(gear)}" data-action="select-card" data-card="${escapeHtml(gear.instanceId || "")}" data-card-id="${escapeHtml(gear.instanceId || "")}" data-current-might="${state.might}" data-exhausted="${Boolean(gear.exhausted)}" title="${escapeHtml(`${cardName(gear)} · ${state.summary}`)}">
             <span class="attachment-orientation-layer">
-              ${gear.image ? `<img src="${escapeHtml(gear.image)}" alt="${escapeHtml(cardName(gear))}" loading="lazy" />` : `<span>${escapeHtml(cardName(gear))}</span>`}
+              ${cardArtUrl(gear) ? `<img src="${escapeHtml(cardArtUrl(gear))}" alt="${escapeHtml(cardName(gear))}" loading="lazy" />` : `<span>${escapeHtml(cardName(gear))}</span>`}
             </span>
             <strong>${escapeHtml(cardName(gear))}</strong>
             ${attachedGearStateMarkup(state)}
@@ -9734,7 +13465,7 @@ function fullCardModal(card) {
         <button data-action="close-full-card" data-primary-focus>${t("close", locale())}</button>
       </div>
       <div class="full-card-body">
-        ${card.image ? `<img src="${card.image}" alt="${cardName(card)}" />` : ""}
+        ${cardArtUrl(card) ? `<img src="${cardArtUrl(card)}" alt="${cardName(card)}" />` : ""}
         <div class="full-card-copy">
           <p>${cardText(card)}</p>
           ${cardStatusPanel(card)}
@@ -9745,6 +13476,10 @@ function fullCardModal(card) {
 }
 
 function dismissTopUiLayer() {
+  if (appView === "decks" && deckEditor.transferDialog) {
+    closeDeckTransferDialog();
+    return true;
+  }
   if (appView !== "game") return false;
   if (!game || typeof game !== "object") return false;
   const modalKey = topUiModal()?.dataset.modalKey || "";
@@ -9824,8 +13559,15 @@ function dismissTopUiLayer() {
 
 window.__riftboundDismissTopUiLayer = () => {
   const dismissed = dismissTopUiLayer();
-  if (dismissed) render();
-  return dismissed;
+  if (dismissed) {
+    render();
+    return true;
+  }
+  if (appView === "game" && (game?.phase === "complete" || matchIsBetweenGames())) {
+    exitCompletedGame();
+    return true;
+  }
+  return false;
 };
 
 function hasKeyword(card, keyword) {
@@ -9856,6 +13598,60 @@ function clearRuneScrollGesture() {
     // Pointer capture may already have been released by the browser.
   }
 }
+
+function clearRunePowerHold() {
+  const session = pointerRunePowerHold;
+  pointerRunePowerHold = null;
+  if (session?.timerId) clearTimeout(session.timerId);
+}
+
+function payDirectRuneAsPower(runeButton) {
+  const runeId = String(runeButton?.dataset?.rune || "");
+  if (!runeId || runeButton?.dataset?.paymentPower !== "true") return false;
+  if (!tutorialAllowsUiAction("pay-rune", { rune: runeId, mode: "power" })) return false;
+  dispatchGameCommand(
+    { kind: "togglePaymentRune", runeId, mode: "power" },
+    () => togglePaymentRune(game, runeId, "power")
+  );
+  return true;
+}
+
+app.addEventListener("pointerdown", (event) => {
+  if (event.pointerType !== "touch" || !event.isPrimary || event.button !== 0 || replayMode || appView !== "game" || !game?.pendingPayment) return;
+  const runeButton = event.target.closest?.("button[data-direct-payment-rune='true'][data-rune][data-payment-power='true']");
+  if (!runeButton || !app.contains(runeButton)) return;
+  clearRunePowerHold();
+  const session = {
+    pointerId: event.pointerId,
+    runeButton,
+    startX: event.clientX,
+    startY: event.clientY,
+    timerId: null
+  };
+  session.timerId = setTimeout(() => {
+    if (pointerRunePowerHold !== session || !runeButton.isConnected) return;
+    pointerRunePowerHold = null;
+    suppressRuneClickUntil = Date.now() + 700;
+    suppressRunePowerContextMenuUntil = Date.now() + 700;
+    payDirectRuneAsPower(runeButton);
+    render();
+  }, 550);
+  pointerRunePowerHold = session;
+});
+
+app.addEventListener("pointermove", (event) => {
+  const session = pointerRunePowerHold;
+  if (!session || session.pointerId !== event.pointerId) return;
+  if (Math.hypot(event.clientX - session.startX, event.clientY - session.startY) >= 10) clearRunePowerHold();
+});
+
+app.addEventListener("pointerup", (event) => {
+  if (pointerRunePowerHold?.pointerId === event.pointerId) clearRunePowerHold();
+});
+
+app.addEventListener("pointercancel", (event) => {
+  if (pointerRunePowerHold?.pointerId === event.pointerId) clearRunePowerHold();
+});
 
 app.addEventListener("pointerdown", (event) => {
   if (!event.isPrimary || event.button !== 0 || event.pointerType === "touch" || replayMode || appView !== "game") return;
@@ -9912,6 +13708,7 @@ app.addEventListener("pointercancel", (event) => {
 
 app.addEventListener("lostpointercapture", (event) => {
   if (pointerRuneScroll?.pointerId === event.pointerId) clearRuneScrollGesture();
+  if (pointerRunePowerHold?.pointerId === event.pointerId) clearRunePowerHold();
   if (pointerCardDrag?.pointerId === event.pointerId) clearCardDragPresentation();
 });
 
@@ -9985,9 +13782,15 @@ app.addEventListener("pointerdown", (event) => {
     startX: event.clientX,
     startY: event.clientY,
     dragging: false,
-    ghost: null
+    ghost: null,
+    pendingX: event.clientX,
+    pendingY: event.clientY
   };
-  cardNode.setPointerCapture?.(event.pointerId);
+  try {
+    cardNode.setPointerCapture?.(event.pointerId);
+  } catch {
+    clearCardDragPresentation();
+  }
 });
 
 app.addEventListener("pointermove", (event) => {
@@ -10001,11 +13804,19 @@ app.addEventListener("pointermove", (event) => {
     }
     session.dragging = true;
     session.ghost = createPointerDragGhost(session.sourceNode);
+    session.destinations = draggingCardSession?.destinations;
   }
   if (!session.dragging) return;
   event.preventDefault();
-  positionPointerDragGhost(session.ghost, event.clientX, event.clientY);
-  updateCardDragDestination(document.elementFromPoint(event.clientX, event.clientY));
+  session.pendingX = event.clientX;
+  session.pendingY = event.clientY;
+  if (pointerCardDragFrame) return;
+  pointerCardDragFrame = requestAnimationFrame(() => {
+    pointerCardDragFrame = 0;
+    if (pointerCardDrag !== session || !session.dragging) return;
+    positionPointerDragGhost(session.ghost, session.pendingX, session.pendingY);
+    updateCardDragDestination(document.elementFromPoint(session.pendingX, session.pendingY));
+  });
 }, { passive: false });
 
 app.addEventListener("pointerup", (event) => {
@@ -10016,7 +13827,10 @@ app.addEventListener("pointerup", (event) => {
     return;
   }
   event.preventDefault();
-  const dropNode = legalDropDestinationNode(document.elementFromPoint(event.clientX, event.clientY), session);
+  const dropNode = legalDropDestinationNode(
+    document.elementFromPoint(event.clientX, event.clientY),
+    draggingCardSession || session
+  );
   const destination = String(dropNode?.dataset.playDestination || "");
   suppressCardClickUntil = Date.now() + 650;
   clearCardDragPresentation();
@@ -10034,6 +13848,26 @@ app.addEventListener("pointercancel", (event) => {
 
 app.addEventListener("click", (event) => {
   try {
+    recordDiagnosticUiBreadcrumb(event.target, "click");
+    const diagnosticControl = event.target.closest?.("button[data-action]");
+    const diagnosticAction = diagnosticControl?.dataset.action || "";
+    if (["stop-after-ui-error", "return-menu-after-ui-error"].includes(diagnosticAction)) {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      void stopGameAfterUiError(
+        new Error(lastDiagnosticRenderIssue || "The game UI could not render the current state."),
+        "game state validation"
+      );
+      return;
+    }
+    if (diagnosticAction.startsWith("bug-report-")) {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      handleBugReportAction(diagnosticAction);
+      return;
+    }
     if (handlePendingChoiceClick(event)) return;
   } catch (error) {
     reportUiException(error, "pending choice click");
@@ -10061,7 +13895,6 @@ function handlePendingChoiceClick(event) {
     "view-choice-card", "close-full-card", "confirm-staged-choice"
   ].includes(action);
   if (!localChoiceUiAction && !tutorialAllowsUiAction(action, { ...(button?.dataset || control.dataset || {}) })) {
-    render();
     return true;
   }
   if (action === "toggle-choice-drawer") {
@@ -10173,16 +14006,9 @@ app.addEventListener("contextmenu", (event) => {
     if (!runeButton || !app.contains(runeButton)) return;
     event.preventDefault();
     event.stopPropagation();
-    const runeId = String(runeButton.dataset.rune || "");
-    if (!runeId || runeButton.dataset.paymentPower !== "true") return;
-    if (!tutorialAllowsUiAction("pay-rune", { rune: runeId, mode: "power" })) {
-      render();
-      return;
-    }
-    dispatchGameCommand(
-      { kind: "togglePaymentRune", runeId, mode: "power" },
-      () => togglePaymentRune(game, runeId, "power")
-    );
+    clearRunePowerHold();
+    if (Date.now() < suppressRunePowerContextMenuUntil) return;
+    payDirectRuneAsPower(runeButton);
     render();
   } catch (error) {
     reportUiException(error, "direct Rune Power payment");
@@ -10203,7 +14029,7 @@ app.addEventListener("click", (event) => {
       return;
     }
     if (appView !== "game") {
-      if (isTextEditingTarget(event.target)) return;
+      if (isTextEditingTarget(event.target) || event.target.closest?.(".deck-image-champion-toggle")) return;
       handleShellClick(event);
       render();
       return;
@@ -10221,7 +14047,6 @@ app.addEventListener("click", (event) => {
     // choice controller above. Suppress unrelated board commands while a
     // decision is open so a bottom drawer behaves as a true focused step.
     if (game.pendingChoice) {
-      render();
       return;
     }
 
@@ -10239,12 +14064,17 @@ app.addEventListener("click", (event) => {
     if (payRunes) paymentRunesScrollLeft = payRunes.scrollLeft;
 
     const { button, cardNode, targetZone } = resolveBoardClickTarget(event.target);
-    if (cardNode && button?.dataset.directPaymentRune !== "true") toggleUiSelectedCard(cardNode.dataset.cardId);
+    if (cardNode && button?.dataset.directPaymentRune !== "true") {
+      const selectedCardId = String(cardNode.dataset.cardId || "");
+      if (!tutorialAllowsUiAction("select-card", { card: selectedCardId })) {
+        return;
+      }
+      toggleUiSelectedCard(selectedCardId);
+    }
 
     if (targetZone) {
       const { zoneAction, card, unit, destination } = targetZone.dataset;
       if (!tutorialAllowsUiAction(zoneAction, { card, unit, destination })) {
-        render();
         return;
       }
       if (zoneAction === "begin-play") {
@@ -10263,7 +14093,7 @@ app.addEventListener("click", (event) => {
     }
 
     if (!button) {
-      render();
+      if (cardNode) render();
       return;
     }
 
@@ -10274,27 +14104,58 @@ app.addEventListener("click", (event) => {
       render();
       return;
     }
-    if (!tutorialAllowsUiAction(action, { ...button.dataset })) {
-      render();
+    if (action === "exit-completed-game") {
+      exitCompletedGame();
       return;
     }
-    if (action === "sideboard-select-main") sideboardSelectedMain = button.dataset.cardNumber;
-    if (action === "sideboard-swap-in") {
+    if (action === "exit-pregame-sideboarding") {
+      if (isOnlineGame()) void onlineLeaveRoom();
+      else {
+        appView = "menu";
+        resetGameUiState();
+        render();
+      }
+      return;
+    }
+    if (!tutorialAllowsUiAction(action, { ...button.dataset })) {
+      return;
+    }
+    if (action === "sideboard-view-card") {
+      sideboardPreviewNumber = sideboardPreviewNumber === button.dataset.cardNumber ? null : button.dataset.cardNumber;
+    }
+    if (action === "sideboard-close-card") sideboardPreviewNumber = null;
+    if (action === "sideboard-move") {
       const match = activeBetweenGamesMatch();
       const playerId = isOnlineGame() ? online.playerId : sideboardPlayerId;
-      const draft = isOnlineGame() ? online.match?.currentDeck : sideboardDrafts[playerId === "p2" ? 1 : 0];
-      if (match?.phase === "sideboarding") swapSideboardCard(draft, sideboardSelectedMain, button.dataset.cardNumber);
-      sideboardSelectedMain = null;
+      const draft = isOnlineGame() ? onlineSideboardDraft : sideboardDrafts[playerId === "p2" ? 1 : 0];
+      if (["initial-sideboarding", "sideboarding"].includes(match?.phase)) {
+        moveSideboardCard(draft, button.dataset.cardNumber, button.dataset.fromZone);
+        sideboardValidationMessages = [];
+      }
     }
-    if (action === "sideboard-cancel-selection") sideboardSelectedMain = null;
+    if (action === "sideboard-reset") {
+      const playerId = isOnlineGame() ? online.playerId : sideboardPlayerId;
+      const index = playerId === "p2" ? 1 : 0;
+      if (isOnlineGame()) onlineSideboardDraft = structuredClone(onlineSideboardBaseline);
+      else sideboardDrafts[index] = structuredClone(sideboardBaselines[index]);
+      sideboardValidationMessages = [];
+    }
     if (action === "sideboard-submit") submitSideboardDraft();
     if (action === "new-game") {
+      if (game.phase === "complete" && !bugReportDecisionResolved()) {
+        resultDismissed = false;
+        bugReportUi.error = locale() === LOCALES.KO
+          ? "새 게임 전에 이 경기의 로그 전송 여부를 선택해 주세요."
+          : "Choose whether to send this game's log before starting a new game.";
+        render();
+        return;
+      }
       if (game.phase === "complete") resultDismissed = true;
       pendingGameExit = "new-game";
     }
     if (action === "review-result") resultDismissed = true;
     if (action === "coach-report") {
-      if (game.phase === "complete" && aiReplay && !aiReplay.report) completeAiReplay();
+      if (game.phase === "complete" && aiReplay) completeAiReplay();
       appView = "analysis";
     }
     if (action === "toggle-log") toggleTabletopSheet("log");
@@ -10344,36 +14205,36 @@ app.addEventListener("click", (event) => {
       const exitKind = pendingGameExit;
       pendingGameExit = null;
       if (exitKind === "new-game") {
-        if (isOnlineGame()) {
+        if (game.phase !== "complete") {
+          const continuation = !isOnlineGame() ? queueNewGameAfterReportDecision() : null;
+          try {
+            dispatchGameCommand(
+              { kind: "surrender", source: "new-game-request" },
+              () => surrender(game, viewerPlayerId())
+            );
+          } catch (error) {
+            if (pendingPostReportAction === continuation) pendingPostReportAction = null;
+            throw error;
+          }
+          if (continuation && game.phase !== "complete" && pendingPostReportAction === continuation) {
+            pendingPostReportAction = null;
+          }
+          continuePendingPostReportActionIfReady();
+        } else if (isOnlineGame()) {
           dispatchGameCommand({ kind: "restartGame" });
         } else {
-          const pair = activeDeckRecords();
-          localMatch = pair.length === 2 && pair.every((deck) => validateDeckRecord(deck).playable)
-            ? createMatchState({ decks: pair, sideboardingEnabled: settings.sideboardingEnabled })
-            : null;
-          game = createGame({
-            interactive: true,
-            randomFirstPlayer: true,
-            manualActionChainPriority: true,
-            enforceChampionLegendMatch: true,
-            format: settings.sideboardingEnabled ? "match" : "duel",
-            decks: pair.length === 2 && pair.every((deck) => validateDeckRecord(deck).playable)
-              ? pair.map(resolveDeckRecord)
-              : undefined
-          });
-          sideboardDrafts = localMatch?.currentDecks.map((deck) => structuredClone(deck)) || [];
-          resetGameUiState();
+          startFreshLocalGame();
         }
       }
       if (exitKind === "surrender") {
         if (isOnlineGame()) dispatchGameCommand({ kind: "surrender" });
-        else {
-          appView = "menu";
-          resetGameUiState();
-        }
+        else dispatchGameCommand({ kind: "surrender" }, () => surrender(game, viewerPlayerId()));
       }
     }
-    if (action === "confirm-online-result") onlineLeaveRoom();
+    if (action === "confirm-online-result") {
+      exitCompletedGame();
+      return;
+    }
     if (action === "pass-showdown") dispatchGameCommand({ kind: "passShowdown" }, () => passShowdown(game, activePlayerId()));
     if (action === "begin-play") {
       requestHandCardPlay(card, destination);
@@ -10429,8 +14290,10 @@ app.addEventListener("click", (event) => {
 app.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && appView === "decks" && deckEditor.transferDialog) {
     event.preventDefault();
-    deckEditor.transferDialog = null;
+    const wasImage = deckEditor.transferDialog.mode === "image";
+    closeDeckTransferDialog();
     render();
+    if (wasImage) app.querySelector('[data-action="deck-image-open"]')?.focus();
     return;
   }
   if (event.key === "Escape" && appView === "decks" && deckEditor.pendingDeleteDeckId) {
@@ -10445,14 +14308,29 @@ app.addEventListener("keydown", (event) => {
     return;
   }
   if (!['Enter', ' '].includes(event.key)) return;
+  const powerRune = event.target.closest?.("button[data-direct-payment-rune='true'][data-rune][data-payment-power='true']");
+  if (event.shiftKey && powerRune && app.contains(powerRune)) {
+    event.preventDefault();
+    event.stopPropagation();
+    payDirectRuneAsPower(powerRune);
+    render();
+    return;
+  }
   const nativeControl = event.target.closest?.("button, a[href], input, select, textarea, [contenteditable='true']");
   if (nativeControl) return;
   const cardNode = event.target.closest?.("[data-card-id][role='button']");
   if (!cardNode || !app.contains(cardNode)) return;
   event.preventDefault();
   if (game.pendingChoice && ["hand", "board"].includes(choiceCardSurface(game.pendingChoice))) {
+    const interaction = tutorialChoiceInteraction(cardNode.dataset.cardId, tutorialUiState());
+    if (isTutorialGame() && !interaction?.allowed) {
+      return;
+    }
     stageChoiceCard(cardNode.dataset.cardId);
   } else {
+    if (!tutorialAllowsUiAction("select-card", { card: cardNode.dataset.cardId })) {
+      return;
+    }
     toggleUiSelectedCard(cardNode.dataset.cardId);
   }
   render();
@@ -10479,13 +14357,34 @@ window.addEventListener("popstate", () => {
   }
   if (!tabletopBackSentinelActive) return;
   tabletopBackSentinelActive = false;
-  dismissTopUiLayer();
+  const dismissed = dismissTopUiLayer();
+  if (dismissed) {
+    render();
+    return;
+  }
+  if (appView === "game" && (game?.phase === "complete" || matchIsBetweenGames())) {
+    exitCompletedGame();
+    return;
+  }
   render();
 });
 
 app.addEventListener("input", (event) => {
   try {
     const target = event.target;
+    if (target instanceof HTMLTextAreaElement && target.dataset.action === "bug-report-description") {
+      bugReportUi.description = target.value;
+      bugReportUi.error = "";
+      const validation = validateGameReportDescription(target.value);
+      const panel = target.closest(".game-bug-report");
+      const count = panel?.querySelector("[data-bug-report-count]");
+      const submit = panel?.querySelector("[data-action='bug-report-submit']");
+      const visibleError = panel?.querySelector(".game-bug-report-error");
+      if (count) count.textContent = `${validation.codePointLength}/10`;
+      if (submit) submit.disabled = !validation.valid || bugReportUi.status === "submitting";
+      visibleError?.remove();
+      return;
+    }
     if (target instanceof HTMLTextAreaElement && target.dataset.action === "deck-transfer-text") {
       if (deckEditor.transferDialog) {
         deckEditor.transferDialog.text = target.value;
@@ -10498,6 +14397,11 @@ app.addEventListener("input", (event) => {
     }
     if (!(target instanceof HTMLInputElement)) return;
     const action = target.dataset.action;
+    if (action === "deck-list-search") {
+      deckEditor.listSearch = target.value;
+      refreshDeckLibraryResults();
+      return;
+    }
     if (action === "choice-search") {
       const panel = target.closest(".choice-panel");
       const normalized = target.value.trim().toLocaleLowerCase(locale() === LOCALES.KO ? "ko-KR" : "en-US");
@@ -10563,7 +14467,36 @@ app.addEventListener("input", (event) => {
 app.addEventListener("change", (event) => {
   try {
     const target = event.target;
+    if (target instanceof HTMLInputElement && target.dataset.action === "deck-image-champion-first") {
+      if (deckEditor.transferDialog?.mode !== "image") return;
+      deckEditor.imageChampionFirst = target.checked;
+      void openDeckImageDialog(deckEditor.transferDialog.deck);
+      render();
+      return;
+    }
     if (!(target instanceof HTMLSelectElement)) return;
+    if (target.dataset.action === "deck-image-champion") {
+      const dialog = deckEditor.transferDialog;
+      if (dialog?.mode !== "image" || (target.value && !dialog.championCandidates.some((card) => card.cardNumber === target.value))) return;
+      deckEditor.imageChampionSelections.set(dialog.deck.id, target.value);
+      void openDeckImageDialog(dialog.deck);
+      render();
+      return;
+    }
+    if (target.dataset.action === "deck-image-sort") {
+      if (deckEditor.transferDialog?.mode !== "image" || !DECK_IMAGE_SORT_OPTIONS.some((option) => option.id === target.value)) return;
+      deckEditor.imageSort = target.value;
+      void openDeckImageDialog(deckEditor.transferDialog.deck);
+      render();
+      return;
+    }
+    if (target.dataset.action === "online-pool" || target.dataset.action === "online-banlist") {
+      if (target.dataset.action === "online-pool") settings.onlinePoolId = normalizeRoomDeckOptions({ poolId: target.value }).poolId;
+      else settings.onlineBanlistEnabled = target.value === "on";
+      saveSettings();
+      render();
+      return;
+    }
     if (target.dataset.action === "replay-speed") {
       replayBrowser.speed = Math.max(0.25, Math.min(4, Number(target.value) || 1));
       restartReplayTimer();
@@ -10634,6 +14567,10 @@ function handleShellClick(event) {
   const button = event.target.closest("button");
   if (!button) return;
   const { action, deck, cardNumber, domain, slot, room, tab, tutorial, mode } = button.dataset;
+  if (diagnosticNavigationBlocked() && [
+    "menu-start", "menu-ai", "menu-multiplayer", "menu-tutorial", "tutorial-select",
+    "online-create", "online-join-room", "online-join-code", "online-submit-deck", "online-ready"
+  ].includes(action)) return;
   if (action === "auth-mode" && ["login", "signup"].includes(mode)) {
     auth.mode = mode;
     auth.panelOpen = true;
@@ -10652,18 +14589,19 @@ function handleShellClick(event) {
   if (action === "auth-logout") void signOutAccount();
   if (action === "menu-home") {
     appView = "menu";
-    deckEditor.transferDialog = null;
+    closeDeckTransferDialog();
     deckEditor.pendingDeleteDeckId = null;
   }
   if (action === "menu-decks") {
     appView = "decks";
     deckEditor.mobileView = "list";
-    deckEditor.transferDialog = null;
+    closeDeckTransferDialog();
     deckEditor.pendingDeleteDeckId = null;
   }
   if (action === "menu-multiplayer") {
     connectDefaultMultiplayer();
   }
+  if (action === "diagnostic-recovery-abandon") abandonRestoredOnlineDiagnosticRecovery();
   if (action === "menu-start") startGameFromMenu();
   if (action === "menu-tutorial") appView = "tutorials";
   if (action === "tutorial-menu-back") appView = "menu";
@@ -10684,16 +14622,17 @@ function handleShellClick(event) {
   if (action === "online-leave") onlineLeaveRoom();
   if (action === "deck-select") {
     deckEditor.transferNotice = null;
-    deckEditor.transferDialog = null;
+    closeDeckTransferDialog();
     deckEditor.pendingDeleteDeckId = null;
     deckEditor.selectedDeckId = deck;
     deckEditor.selectedCardNumber = deckHeroCard(getSelectedDeckRecord())?.cardNumber || null;
     deckEditor.mobileView = "edit";
     deckEditor.mobileTab = "deck";
+    deckEditor.mobileToolsOpen = false;
   }
   if (action === "deck-new") {
     deckEditor.transferNotice = null;
-    deckEditor.transferDialog = null;
+    closeDeckTransferDialog();
     deckEditor.pendingDeleteDeckId = null;
     const record = createNewDeckRecord();
     deckStore.decks.push(record);
@@ -10701,9 +14640,19 @@ function handleShellClick(event) {
     deckEditor.selectedCardNumber = null;
     deckEditor.mobileView = "edit";
     deckEditor.mobileTab = "deck";
+    deckEditor.mobileToolsOpen = false;
+    deckEditor.listSearch = "";
+    deckEditor.listFilter = "personal";
     saveDeckStore();
   }
   if (action === "deck-mobile-list") deckEditor.mobileView = "list";
+  if (action === "deck-toggle-tools") deckEditor.mobileToolsOpen = !deckEditor.mobileToolsOpen;
+  if (action === "deck-list-filter" && ["all", "personal", "default"].includes(button.dataset.filter)) {
+    deckEditor.listFilter = button.dataset.filter;
+    const list = app.querySelector(".deck-slot-grid");
+    if (list) list.scrollTop = 0;
+  }
+  if (action === "deck-list-clear") deckEditor.listSearch = "";
   if (action === "deck-mobile-tab" && ["deck", "runes", "cards", "detail"].includes(tab)) deckEditor.mobileTab = tab;
   if (action === "deck-delete-request") {
     const selected = getSelectedDeckRecord();
@@ -10717,7 +14666,10 @@ function handleShellClick(event) {
   }
   if (action === "deck-import-open") openDeckImportDialog();
   if (action === "deck-export-open") openDeckExportDialog(getSelectedDeckRecord());
-  if (action === "deck-transfer-close") deckEditor.transferDialog = null;
+  if (action === "deck-image-open") void openDeckImageDialog();
+  if (action === "deck-image-retry") void openDeckImageDialog(deckEditor.transferDialog?.deck);
+  if (action === "deck-image-download") downloadDeckImage();
+  if (action === "deck-transfer-close") closeDeckTransferDialog();
   if (action === "deck-import-confirm") importDeckTextValue(deckEditor.transferDialog?.text || "");
   if (action === "deck-export-copy") void copyDeckTransferText();
   if (action === "deck-ai-recommend") void runDeckAiRecommendation();
@@ -10735,7 +14687,7 @@ function handleShellClick(event) {
   }
   if (action === "deck-card-focus") {
     deckEditor.selectedCardNumber = cardNumber;
-    if (window.matchMedia?.("(max-width: 760px)").matches) deckEditor.mobileTab = "detail";
+    if (window.matchMedia?.("(max-width: 1199px)").matches) deckEditor.mobileTab = "detail";
   }
   if (action === "deck-set-legend") {
     mutateSelectedDeck((selected) => {
@@ -10817,15 +14769,25 @@ function coachAnalysisView() {
 
 async function runDeepAiReview() {
   if (!aiReplay || aiDeepReviewRunning) return;
+  const replay = aiReplay;
+  let reviewModel = null;
   aiDeepReviewRunning = true;
   render();
   try {
-    await ensureNeuralAiLoaded();
-    await refineAiReplay(aiReplay, activeCoachModel(), { limit: 5, rollouts: 8, rolloutDepth: 32, neuralModel: neuralAiModel });
-    await persistAiReplay(persistableAiReplay(aiReplay));
+    if (!await ensureNeuralAiLoaded() || replay !== aiReplay) return;
+    reviewModel = await ensureNeuralAiModelForDeepReview();
+    if (!reviewModel || replay !== aiReplay) return;
+    await refineAiReplay(replay, activeCoachModel(), {
+      limit: 5,
+      rollouts: 8,
+      rolloutDepth: 32,
+      neuralModel: reviewModel
+    });
+    await persistCurrentAiReplay(replay);
   } catch (error) {
     reportUiException(error, "deep AI review");
   } finally {
+    disposeNeuralAiReviewModel(reviewModel);
     aiDeepReviewRunning = false;
     render();
   }
@@ -10849,6 +14811,7 @@ function coachDecisionCard(item) {
   `;
 }
 
+diagnosticServerReady = configureDiagnosticServer();
 enableLocalPresentationPreview();
 loadAiCheckpoint();
 loadAiGenerationCatalog();
@@ -10920,6 +14883,7 @@ async function loadAiGenerationCatalog() {
         ...entry,
         generation: Number(entry.generation),
         source: "server",
+        checkpointBaseUrl: result.checkpointBaseUrl,
         trainingDeckIds: Array.isArray(entry.trainingDeckIds) && entry.trainingDeckIds.length
           ? [...entry.trainingDeckIds]
           : [...(aiGenerationDescriptor(entry.generation)?.trainingDeckIds || AI_GENERATIONS[0].trainingDeckIds)]
@@ -10946,50 +14910,215 @@ async function loadAiGenerationCatalog() {
 
 async function ensureNeuralAiLoaded() {
   const generation = selectedAiGenerationDescriptor();
-  if (neuralAiModel && neuralAiSession && neuralAiLoadedGeneration === generation.generation) return true;
+  const descriptorKey = neuralAiDescriptorKey(generation);
+  if (neuralAiCheckpointMetadata
+    && neuralAiLoadedGeneration === generation.generation
+    && neuralAiLoadedDescriptorKey === descriptorKey
+    && aiTurnWorkerConfiguredNeuralKey === descriptorKey) return true;
   if (neuralAiLoadPromise) return neuralAiLoadPromise;
   clearNeuralAiModel();
+  const loadGeneration = neuralAiLoadGeneration;
+  const loadController = new AbortController();
+  // The startup catalog can replace the bundled descriptor with the server
+  // descriptor for the same generation while its checkpoint is loading. That
+  // is not a user selection change and must not strand the AI-start flow in
+  // the menu. A real generation change still invalidates this attempt.
+  const loadIsStale = () => loadGeneration !== neuralAiLoadGeneration
+    || loadController.signal.aborted
+    || Number(selectedAiGenerationDescriptor()?.generation) !== Number(generation.generation);
+  const abandonStaleLoad = () => {
+    if (!loadIsStale()) return false;
+    if (loadGeneration === neuralAiLoadGeneration) {
+      neuralAiLoadState = "idle";
+      neuralAiLoadError = "";
+    }
+    return true;
+  };
+  neuralAiLoadController = loadController;
   neuralAiLoadState = "loading";
   neuralAiLoadError = "";
   render();
-  neuralAiLoadPromise = (async () => {
+  let loadPromise;
+  loadPromise = (async () => {
     try {
       await nextPaint();
-      const checkpoint = generation.source === "server"
-        ? await fetchAiGenerationCheckpoint(generation.generation)
-        : await fetch(new URL(generation.checkpoint, import.meta.url), { cache: "no-cache" }).then(async (response) => {
-          if (!response.ok) throw new Error(`모델 파일을 읽을 수 없습니다 (HTTP ${response.status}).`);
-          return response.json();
-        });
-      if (Number(checkpoint.generation) !== generation.generation) {
-        throw new Error(`선택한 ${generation.generation}세대와 모델 파일의 ${checkpoint.generation}세대가 일치하지 않습니다.`);
+      const checkpointBuffer = await fetchNeuralAiCheckpointBuffer(generation, loadController.signal);
+      if (abandonStaleLoad()) return false;
+      const checkpointMetadata = await configureAiTurnWorkerNeural(
+        checkpointBuffer,
+        descriptorKey,
+        generation.generation
+      );
+      if (abandonStaleLoad()) {
+        disposeAiTurnWorker();
+        return false;
       }
-      const { createNeuralSession, deserializeNeuralModel, estimateNeuralValue } = await import("./ai/neural/model.mjs");
-      neuralAiModel = deserializeNeuralModel(checkpoint);
-      neuralAiSession = createNeuralSession(neuralAiModel);
-      neuralValueEstimator = estimateNeuralValue;
+      if (!aiTurnWorker || aiTurnWorkerConfiguredNeuralKey !== descriptorKey) {
+        throw new Error("AI turn neural Worker lost its configured model.");
+      }
+      // Keep only the small policy/coach profile on the UI thread. Ownership
+      // of the full checkpoint buffer moves to the Worker without a JSON clone;
+      // TensorFlow and its tensors are loaded here only for an actual review.
+      neuralAiCheckpointMetadata = checkpointMetadata;
       neuralAiLoadedGeneration = generation.generation;
+      neuralAiLoadedDescriptorKey = descriptorKey;
       neuralAiLoadState = "ready";
       return true;
     } catch (error) {
-      clearNeuralAiModel();
+      if (abandonStaleLoad()) return false;
+      clearNeuralAiModel({ invalidateLoad: false });
       neuralAiLoadState = "error";
       neuralAiLoadError = error instanceof Error ? error.message : String(error);
       reportUiException(error, "trained AI model load");
       return false;
     } finally {
-      neuralAiLoadPromise = null;
-      render();
+      if (neuralAiLoadPromise === loadPromise) neuralAiLoadPromise = null;
+      if (neuralAiLoadController === loadController) neuralAiLoadController = null;
+      if (loadGeneration === neuralAiLoadGeneration) render();
     }
   })();
-  return neuralAiLoadPromise;
+  neuralAiLoadPromise = loadPromise;
+  return loadPromise;
 }
 
-function clearNeuralAiModel() {
-  neuralAiModel = null;
-  neuralAiSession = null;
-  neuralValueEstimator = null;
+async function ensureNeuralAiModelForDeepReview() {
+  const generation = selectedAiGenerationDescriptor();
+  const descriptorKey = neuralAiDescriptorKey(generation);
+  if (!neuralAiCheckpointMetadata
+    || neuralAiLoadedDescriptorKey !== descriptorKey
+    || aiTurnWorkerConfiguredNeuralKey !== descriptorKey) {
+    if (!await ensureNeuralAiLoaded()) return null;
+    return ensureNeuralAiModelForDeepReview();
+  }
+  if (neuralAiModel && neuralAiModelDescriptorKey === descriptorKey) return neuralAiModel;
+  if (neuralAiReviewLoadPromise && neuralAiReviewLoadDescriptorKey === descriptorKey) {
+    return neuralAiReviewLoadPromise;
+  }
+  if (neuralAiReviewLoadPromise) {
+    await neuralAiReviewLoadPromise.catch(() => null);
+    return ensureNeuralAiModelForDeepReview();
+  }
+
+  disposeNeuralAiReviewModel();
+  const loadGeneration = neuralAiLoadGeneration;
+  const loadController = new AbortController();
+  const loadIsStale = () => loadGeneration !== neuralAiLoadGeneration
+    || loadController.signal.aborted
+    || neuralAiDescriptorKey(selectedAiGenerationDescriptor()) !== descriptorKey
+    || neuralAiLoadedDescriptorKey !== descriptorKey
+    || !neuralAiCheckpointMetadata;
+  neuralAiReviewLoadController = loadController;
+  neuralAiReviewLoadDescriptorKey = descriptorKey;
+  let loadPromise;
+  loadPromise = (async () => {
+    let loadedModel = null;
+    let disposeLoadedModel = null;
+    try {
+      await nextPaint();
+      const checkpoint = await fetchNeuralAiCheckpoint(generation, loadController.signal);
+      if (loadIsStale()) return null;
+      const {
+        deserializeNeuralModel,
+        disposeNeuralModel
+      } = await import("./ai/neural/model.mjs");
+      disposeLoadedModel = disposeNeuralModel;
+      // The stale guard deliberately precedes deserialization so an obsolete
+      // generation never allocates a second set of TensorFlow resources.
+      if (loadIsStale()) return null;
+      loadedModel = deserializeNeuralModel(checkpoint);
+      if (loadIsStale()) {
+        disposeLoadedModel(loadedModel);
+        loadedModel = null;
+        return null;
+      }
+      neuralAiModel = loadedModel;
+      loadedModel = null;
+      neuralAiModelDescriptorKey = descriptorKey;
+      neuralAiModelDisposer = disposeNeuralModel;
+      return neuralAiModel;
+    } catch (error) {
+      if (loadedModel && disposeLoadedModel) disposeLoadedModel(loadedModel);
+      if (loadIsStale() || error?.name === "AbortError") return null;
+      throw error;
+    } finally {
+      if (neuralAiReviewLoadPromise === loadPromise) {
+        neuralAiReviewLoadPromise = null;
+        neuralAiReviewLoadDescriptorKey = "";
+      }
+      if (neuralAiReviewLoadController === loadController) neuralAiReviewLoadController = null;
+    }
+  })();
+  neuralAiReviewLoadPromise = loadPromise;
+  return loadPromise;
+}
+
+async function fetchNeuralAiCheckpoint(generation, signal) {
+  const checkpoint = generation.source === "server"
+    ? await fetchAiGenerationCheckpoint(generation.generation, { signal, baseUrl: generation.checkpointBaseUrl })
+    : await fetch(new URL(generation.checkpoint, import.meta.url), {
+      cache: "no-cache",
+      signal
+    }).then(async (response) => {
+      if (!response.ok) throw new Error(`모델 파일을 읽을 수 없습니다 (HTTP ${response.status}).`);
+      return response.json();
+    });
+  if (Number(checkpoint.generation) !== generation.generation) {
+    throw new Error(`선택한 ${generation.generation}세대와 모델 파일의 ${checkpoint.generation}세대가 일치하지 않습니다.`);
+  }
+  return checkpoint;
+}
+
+async function fetchNeuralAiCheckpointBuffer(generation, signal) {
+  if (generation.source === "server") {
+    return fetchAiGenerationCheckpointBuffer(generation.generation, { signal, baseUrl: generation.checkpointBaseUrl });
+  }
+  const response = await fetch(new URL(generation.checkpoint, import.meta.url), {
+    cache: "no-cache",
+    signal
+  });
+  if (!response.ok) throw new Error(`모델 파일을 읽을 수 없습니다 (HTTP ${response.status}).`);
+  return response.arrayBuffer();
+}
+
+function lightweightNeuralAiCheckpointMetadata(checkpoint) {
+  return {
+    generation: Number(checkpoint?.generation) || 0,
+    gamesTrained: Number(checkpoint?.gamesTrained) || 0,
+    metadata: structuredClone(checkpoint?.metadata || {}),
+    knowledge: structuredClone(checkpoint?.knowledge || {})
+  };
+}
+
+function disposeNeuralAiReviewModel(model = neuralAiModel) {
+  const ownsCurrentModel = Boolean(model && model === neuralAiModel);
+  const disposeModel = ownsCurrentModel ? neuralAiModelDisposer : null;
+  if (ownsCurrentModel) {
+    neuralAiModel = null;
+    neuralAiModelDescriptorKey = null;
+    neuralAiModelDisposer = null;
+  }
+  if (model && disposeModel) {
+    try { disposeModel(model); } catch {}
+  }
+}
+
+function clearNeuralAiModel({ invalidateLoad = true } = {}) {
+  if (invalidateLoad) {
+    neuralAiLoadGeneration += 1;
+    neuralAiLoadPromise = null;
+    neuralAiLoadController?.abort();
+    neuralAiLoadController = null;
+    neuralAiReviewLoadPromise = null;
+    neuralAiReviewLoadController?.abort();
+    neuralAiReviewLoadController = null;
+    neuralAiReviewLoadDescriptorKey = "";
+  }
+  disposeNeuralAiReviewModel();
+  neuralAiCheckpointMetadata = null;
   neuralAiLoadedGeneration = null;
+  neuralAiLoadedDescriptorKey = null;
+  disposeAiTurnWorker();
+  aiTurnWorkerUnavailable = false;
 }
 
 function selectAiGeneration(value) {
@@ -11018,7 +15147,7 @@ function neuralAiStatusText() {
   const korean = locale() === LOCALES.KO;
   const generation = selectedAiGenerationDescriptor().generation;
   if (neuralAiLoadState === "loading") return korean ? `${generation}세대 AI 모델을 불러오는 중입니다.` : `Loading generation ${generation} AI.`;
-  if (neuralAiLoadState === "error") return korean ? `${generation}세대 모델을 불러오지 못해 AI 대전을 시작할 수 없습니다: ${localizedDynamicText(neuralAiLoadError, { fallback: "모델 파일을 불러오지 못했습니다." })}` : `Generation ${generation} could not be loaded, so the AI match cannot start: ${neuralAiLoadError}`;
+  if (neuralAiLoadState === "error") return korean ? `${generation}세대 모델을 불러오지 못해 AI 대전을 시작할 수 없습니다: ${localizedDynamicText(neuralAiLoadError) || "모델 파일을 불러오지 못했습니다."}` : `Generation ${generation} could not be loaded, so the AI match cannot start: ${neuralAiLoadError}`;
   if (neuralAiLoadState === "idle") return korean ? `선택한 ${generation}세대 모델은 AI 대전을 시작할 때 로드됩니다.` : `The selected generation ${generation} model loads when an AI match starts.`;
   return korean
     ? `AI 세대 ${activeAiGeneration()} · 자가대전 ${activeAiGames()}경기 학습 · 순환형 학습 모델 준비됨`
@@ -11026,15 +15155,22 @@ function neuralAiStatusText() {
 }
 
 function activeCoachModel() {
-  return neuralAiModel ? { ...aiModel, ...(neuralAiModel.knowledge || {}), generation: neuralAiModel.generation, gamesTrained: neuralAiModel.gamesTrained } : aiModel;
+  return neuralAiCheckpointMetadata
+    ? {
+      ...aiModel,
+      ...(neuralAiCheckpointMetadata.knowledge || {}),
+      generation: neuralAiCheckpointMetadata.generation,
+      gamesTrained: neuralAiCheckpointMetadata.gamesTrained
+    }
+    : aiModel;
 }
 
 function activeAiGeneration() {
-  return neuralAiModel?.generation ?? aiModel.generation ?? 0;
+  return neuralAiCheckpointMetadata?.generation ?? aiModel.generation ?? 0;
 }
 
 function activeAiGames() {
-  return neuralAiModel?.gamesTrained ?? aiModel.gamesTrained ?? 0;
+  return neuralAiCheckpointMetadata?.gamesTrained ?? aiModel.gamesTrained ?? 0;
 }
 
 // Browser smoke tests use the same production renderers without repeatedly
@@ -11071,7 +15207,7 @@ window.__riftboundCardRenderAudit = (cardNumber) => {
       name: cardName(card),
       text: cardText(card),
       type: cardType(card),
-      image: card.image || null,
+      image: cardArtUrl(card) || null,
       libraryHtml: libraryCard(card, auditDeck),
       detailHtml: deckDetailCard(card, auditDeck),
       modalHtml: fullCardModal(renderedCard)
@@ -11090,6 +15226,37 @@ window.addEventListener("error", (event) => {
 window.addEventListener("unhandledrejection", (event) => {
   reportUiException(event.reason, "unhandled promise");
   if (appView === "game") showUiExceptionOverlay(event.reason, "unhandled promise");
+});
+window.__riftboundUiErrorHandlerReady = true;
+window.addEventListener("pagehide", () => {
+  markResumableOnlineReload();
+  flushGameDiagnosticPersistence();
+  cancelReplayAnalyses();
+  clearCardDragPresentation();
+  clearRuneScrollGesture();
+  clearRunePowerHold();
+});
+window.addEventListener("pointerup", (event) => {
+  if (pointerCardDrag?.pointerId === event.pointerId) clearCardDragPresentation();
+  if (pointerRuneScroll?.pointerId === event.pointerId) clearRuneScrollGesture();
+  if (pointerRunePowerHold?.pointerId === event.pointerId) clearRunePowerHold();
+});
+window.addEventListener("pointercancel", (event) => {
+  if (pointerCardDrag?.pointerId === event.pointerId) clearCardDragPresentation();
+  if (pointerRuneScroll?.pointerId === event.pointerId) clearRuneScrollGesture();
+  if (pointerRunePowerHold?.pointerId === event.pointerId) clearRunePowerHold();
+});
+window.addEventListener("blur", () => {
+  clearCardDragPresentation();
+  clearRuneScrollGesture();
+  clearRunePowerHold();
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "hidden") return;
+  flushGameDiagnosticPersistence();
+  clearCardDragPresentation();
+  clearRuneScrollGesture();
+  clearRunePowerHold();
 });
 
 window.matchMedia?.("(prefers-reduced-motion: reduce)").addEventListener?.("change", (event) => {

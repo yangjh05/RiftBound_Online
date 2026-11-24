@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { readTrajectoryArchive, writeTrajectoryArchive } from "../src/ai/neural/archive.mjs";
 import { createCollectionDescriptor } from "../src/ai/neural/training-resume.mjs";
 import { inspectTrainingPreflight, migrateCompatibleTrainingTrajectory } from "./training-safety.mjs";
+import { migrateEvaluatorBootstrapStructuredEvidenceFingerprints } from "./migrate-compatible-evaluator-bootstrap.mjs";
 
 export async function migrateCompatibleCollection(dataRoot, targetDescriptor, fromEngineFingerprint, options = {}) {
   if (!fromEngineFingerprint) throw new Error("A source engine fingerprint is required for collection migration.");
@@ -52,7 +53,7 @@ export async function migrateCompatibleCollection(dataRoot, targetDescriptor, fr
         continue;
       }
 
-      const prepared = await prepareGameMigration(directory, manifest, sourceCollectionKey, targetDescriptor, workerIndex, gameIndex);
+      const prepared = await prepareGameMigration(directory, manifest, sourceCollectionKey, targetDescriptor, workerIndex, gameIndex, options);
       if (!prepared) {
         skippedGames += 1;
         continue;
@@ -113,7 +114,7 @@ export function requireCompatibleCollectionResume(resume, migration) {
   );
 }
 
-async function prepareGameMigration(directory, manifest, sourceCollectionKey, targetDescriptor, workerIndex, gameIndex) {
+async function prepareGameMigration(directory, manifest, sourceCollectionKey, targetDescriptor, workerIndex, gameIndex, options = {}) {
   const trajectories = [];
   const archives = [];
   for (let trajectoryIndex = 0; trajectoryIndex < manifest.trajectories.length; trajectoryIndex += 1) {
@@ -133,6 +134,8 @@ async function prepareGameMigration(directory, manifest, sourceCollectionKey, ta
       { ...entry.metadata, steps },
       targetDescriptor.engineFingerprint,
       {
+        preserveEquivalentTargets: options.preserveEquivalentTargets === true,
+        verifiedEquivalentSemantics: options.verifiedEquivalentSemantics === true,
         behaviorTemperature: targetDescriptor.temperature,
         learningTargetVersion: targetDescriptor.learningTargetVersion,
         gamma: targetDescriptor.gamma,
@@ -142,6 +145,11 @@ async function prepareGameMigration(directory, manifest, sourceCollectionKey, ta
       }
     );
     if (!migrated) return null;
+    if (options.preserveEquivalentTargets === true) {
+      migrateEvaluatorBootstrapStructuredEvidenceFingerprints(
+        migrated, entry.metadata.engineFingerprint, targetDescriptor.engineFingerprint
+      );
+    }
     const { steps: migratedSteps, ...metadata } = migrated;
     trajectories.push({ ...entry, metadata });
     archives.push(...trajectoryArchives.map((archive, chunkIndex) => ({

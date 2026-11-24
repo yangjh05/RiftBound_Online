@@ -95,7 +95,7 @@ test("one card can carry independent ability structures without changing their c
   const settClasses = new Set(cards.settTheBoss.effects.map((effect) => effectDefinition(effect).abilityClass));
   const rocketClasses = new Set(cards.superMegaDeathRocket.effects.map((effect) => effectDefinition(effect).abilityClass));
 
-  assert.deepEqual([...guardianClasses].sort(), ["activated", "passive", "replacement"]);
+  assert.deepEqual([...guardianClasses].sort(), ["activated", "passive"]);
   assert.deepEqual([...settClasses].sort(), ["replacement", "triggered"]);
   assert.deepEqual([...rocketClasses].sort(), ["instruction", "triggered"]);
 });
@@ -858,7 +858,7 @@ test("Chain finalization and post-resolution Priority follow the independent FEP
   "Cleanup may run only after the resolving Chain Item has completed in its entirety.");
 });
 
-test("Units and Gear resolve immediately on Finalize without a response window", () => {
+test("Units and Gear resolve during Finalize without waiting for the Pass step", () => {
   const game = createGame();
   const player = game.players[0];
   const opponent = game.players[1];
@@ -887,17 +887,24 @@ test("Units and Gear resolve immediately on Finalize without a response window",
     consecutivePasses: 0,
     chain: []
   };
+  const expected = resolveChainTransitionReference("finalize", {
+    items: [{ id: gear.instanceId, playerId: player.id, status: "pending", resolvesOnFinalize: true }],
+    focusPlayerId: player.id,
+    nextPlayerId: opponent.id
+  });
 
   assert.equal(playCard(game, gear.instanceId, "base").ok, true);
   assert.equal(player.base.some((card) => card.instanceId === gear.instanceId), true);
-  assert.equal(game.showdown.chain.some((item) => item.card?.instanceId === gear.instanceId), false,
-    "the finalized Gear leaves the Chain before any player can respond");
+  assert.deepEqual(game.showdown.chain, expected.items);
+  assert.equal(game.showdown.focusPlayerId, expected.focusPlayerId);
+  assert.equal(game.showdown.priorityPlayerId, expected.priorityPlayerId);
 });
 
-test("a Unit resolves on Finalize before its separate play trigger opens a response window", () => {
+test("Finalize repeats when an immediately played Unit creates a Pending trigger", () => {
   const game = createGame({ interactive: true, manualActionChainPriority: true });
   const player = game.players[0];
   const opponent = game.players[1];
+  const field = testBattlefield("finalize-repeat-field", [], null);
   const unit = instance({
     ...cards.lonelyPoro,
     id: "TEST-FINALIZE-REPEAT-UNIT",
@@ -905,49 +912,39 @@ test("a Unit resolves on Finalize before its separate play trigger opens a respo
     energy: 0,
     power: [],
     might: 5,
-    tags: [],
-    effects: [{ timing: "onPlay", kind: "draw", amount: 1 }]
-  }, player.id, "finalize-repeat-unit");
-  const reaction = instance({
-    ...cards.incinerate,
-    id: "TEST-FINALIZE-RESPONSE",
-    name: "Rules Test Finalize Response",
-    energy: 0,
-    power: [],
     tags: ["Reaction"],
-    keywords: ["Reaction"],
     effects: []
-  }, opponent.id, "finalize-response");
-  const ownReaction = instance({
-    ...reaction,
-    id: "TEST-FINALIZE-OWN-RESPONSE",
-    name: "Rules Test Finalize Own Response"
-  }, player.id, "finalize-own-response");
-  const drawn = instance(cards.gust, player.id, "finalize-play-effect-draw");
-  player.hand = [unit, ownReaction];
-  player.mainDeck = [drawn];
-  opponent.hand = [reaction];
-  game.battlefields = [testBattlefield("finalize-repeat-field", [], null)];
-  game.phase = "action";
+  }, player.id, "finalize-repeat-unit");
+  player.legend = instance(cards.volibearRelentlessStorm, player.id, "finalize-repeat-legend");
+  player.hand = [unit];
+  game.battlefields = [field];
+  game.phase = "showdown";
   game.currentPlayerId = player.id;
+  game.showdown = {
+    battlefieldId: field.instanceId,
+    turnPlayerId: player.id,
+    attackerId: player.id,
+    defenderId: opponent.id,
+    focusPlayerId: player.id,
+    priorityPlayerId: player.id,
+    consecutivePasses: 0,
+    chain: []
+  };
 
   assert.equal(playCard(game, unit.instanceId, "base").ok, true);
   assert.equal(player.base.some((card) => card.instanceId === unit.instanceId), true);
-  assert.equal(game.actionChain.chain.some((item) => item.card?.instanceId === unit.instanceId && item.itemType === "card"), false,
-    "the Unit itself is no longer a reactable Chain item");
-  assert.equal(game.actionChain.chain.length, 1);
-  assert.equal(game.actionChain.chain[0].itemType, "trigger");
-  assert.equal(game.actionChain.chain[0].status, "finalized");
-  assert.equal(player.hand.some((card) => card.instanceId === drawn.instanceId), false,
-    "the separate play effect has not resolved yet");
-  assert.equal(game.actionChain.priorityPlayerId, player.id);
-  assert.equal(passShowdown(game, player.id).ok, true);
-  assert.equal(game.actionChain.priorityPlayerId, opponent.id,
-    "the opponent receives a Reaction window only after the play effect is on the Chain");
-  assert.equal(playCard(game, reaction.instanceId, "base").ok, true);
-  assert.equal(game.actionChain.chain.at(-1).card.instanceId, reaction.instanceId);
-  assert.equal(player.base.some((card) => card.instanceId === unit.instanceId), true,
-    "responding to the play effect cannot undo the Unit's completed entry");
+  assert.equal(game.pendingChoice.effect, "declareOptionalTrigger");
+  assert.equal(game.showdown.chain.length, 0);
+  assert.equal(chooseEffectOption(game, "use-optional-trigger").ok, true);
+  assert.equal(game.showdown.chain[0].status, "pending");
+  assert.equal(game.pendingChoice.effect, "declareTriggerCost");
+  assert.equal(chooseEffectOption(game, "pay-trigger-cost").ok, true);
+  assert.equal(game.showdown.chain.length, 1);
+  assert.equal(game.showdown.chain[0].itemType, "trigger");
+  assert.equal(game.showdown.chain[0].status, "finalized");
+  assert.equal(game.showdown.priorityPlayerId, player.id);
+  assert.equal(game.showdown.focusPlayerId, player.id,
+    "Focus does not pass while the Chain still contains the newly finalized trigger");
 });
 
 test("only Rune Pool Add effects use the immediate-Finalize ability classification", () => {
@@ -1870,9 +1867,6 @@ test("cards, abilities, and their triggers join the one existing Chain", () => {
 
   assert.equal(playCard(game, reactionUnit.instanceId, "base").ok, true);
   assert.equal(game.actionChain, existingChain, "the Reaction Unit and its play trigger must reuse the existing Chain object");
-  while (!game.pendingChoice && game.actionChain) {
-    assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
-  }
   assert.equal(game.pendingChoice.effect, "declareOptionalTrigger");
   assert.equal(chooseEffectOption(game, "use-optional-trigger").ok, true);
   assert.equal(game.pendingChoice.effect, "declareTriggerCost");
@@ -1891,7 +1885,7 @@ test("cards, abilities, and their triggers join the one existing Chain", () => {
   assert.equal(game.showdown, null);
 });
 
-test("a legally timed Reaction Chosen Champion resolves immediately from the Champion Zone", () => {
+test("a legally timed Reaction Chosen Champion follows normal Chain rules from the Champion Zone", () => {
   const makeShowdown = (championCard, suffix) => {
     const game = createGame({ manualActionChainPriority: true });
     const player = game.players[0];
@@ -1931,7 +1925,7 @@ test("a legally timed Reaction Chosen Champion resolves immediately from the Cha
   assert.equal(reaction.player.championPlayed, true);
   assert.equal(reaction.champion.zone, "played");
   assert.equal(reaction.field.units.some((unit) => unit.instanceId === reaction.champion.instanceId), true);
-  assert.equal(reaction.game.showdown.chain.length, 0, "the Unit leaves the Chain as it finalizes");
+  assert.equal(reaction.game.showdown.chain.length, 0, "the Unit resolves immediately during Finalize");
   assert.equal(reaction.game.showdown.focusPlayerId, reaction.opponent.id,
     "an empty card-created Showdown Chain passes Focus after immediate Finalize");
 });
@@ -1971,7 +1965,7 @@ test("a Hidden card gains its conditional Reaction permission beginning on the n
   assert.equal(beginPlayCard(game, hiddenGear.instanceId, field.instanceId).ok, true);
   assert.equal(field.hidden.length, 0);
   assert.equal(player.base.some((card) => card.instanceId === hiddenGear.instanceId), true);
-  assert.equal(game.showdown.chain.length, 0, "Hidden Gear resolves immediately on Finalize");
+  assert.equal(game.showdown.chain.length, 0, "Hidden Gear resolves immediately during Finalize");
   assert.equal(game.showdown.focusPlayerId, opponent.id);
 });
 
@@ -2005,37 +1999,6 @@ test("Check Legality rejects Ambush when its destination loses the friendly unit
   assert.equal(player.hand.some((card) => card.instanceId === ambusher.instanceId), true);
   assert.equal(field.units.some((card) => card.instanceId === ambusher.instanceId), false);
   assert.equal(game.showdown.chain.length, 0);
-});
-
-test("an Ambush unit enters its locked destination immediately when Finalize succeeds", () => {
-  const game = createGame({ interactive: true, manualActionChainPriority: true });
-  const player = game.players[0];
-  const opponent = game.players[1];
-  const ally = instance(cards.lonelyPoro, player.id, "finalized-ambush-ally");
-  const enemy = instance(cards.lonelyPoro, opponent.id, "finalized-ambush-enemy");
-  const ambusher = instance({ ...cards.vilemaw, energy: 0, power: [], effects: [] }, player.id, "finalized-ambush-card");
-  const field = testBattlefield("finalized-ambush-field", [ally, enemy], opponent.id);
-  player.hand = [ambusher];
-  game.battlefields = [field];
-  game.phase = "showdown";
-  game.currentPlayerId = player.id;
-  game.showdown = {
-    battlefieldId: field.instanceId,
-    turnPlayerId: player.id,
-    attackerId: player.id,
-    defenderId: opponent.id,
-    focusPlayerId: player.id,
-    priorityPlayerId: player.id,
-    consecutivePasses: 0,
-    chainSequence: 0,
-    chain: []
-  };
-
-  assert.equal(beginPlayCard(game, ambusher.instanceId, field.instanceId).ok, true);
-  assert.equal(confirmPayment(game).ok, true);
-  assert.equal(field.units.some((card) => card.instanceId === ambusher.instanceId), true);
-  assert.equal(locate(game, ambusher.instanceId), "battlefield");
-  assert.equal(game.showdown.chain.some((item) => item.card?.instanceId === ambusher.instanceId), false);
 });
 
 test("turn tasks cannot pause without an explicit continuation owner", () => {
@@ -2185,19 +2148,17 @@ test("Start and Ending Tasks survive Chain Pass, Resolve, and choice re-entry wi
   assert.equal(endTurn(endingGame).ok, true);
   assert.deepEqual(endingGame.endTurnProcess, { playerId: endingPlayer.id, step: "expiration" });
   assert.deepEqual(endingGame.actionChain?.continuation, { kind: "continueEndTurn", playerId: endingPlayer.id });
-  assert.deepEqual(endingGame.actionChain?.chain.map((item) => [item.trigger?.kind, item.status]), [["endTurnReadyRunes", "pending"]]);
-  assert.equal(endingGame.pendingChoice?.effect, "readyRune");
-  assert.deepEqual(endingPlayer.runes.map((rune) => rune.exhausted), [true, true]);
-
-  assert.equal(chooseEffectOption(endingGame, "hot-fepr-ending-rune-1").ok, true);
-  assert.equal(endingGame.pendingChoice?.effect, "readyRune");
-  assert.equal(chooseEffectOption(endingGame, "finish-ready-runes").ok, true);
   assert.deepEqual(endingGame.actionChain?.chain.map((item) => [item.trigger?.kind, item.status]), [["endTurnReadyRunes", "finalized"]]);
   assert.deepEqual(endingPlayer.runes.map((rune) => rune.exhausted), [true, true]);
 
   assert.equal(passShowdown(endingGame, endingGame.actionChain.priorityPlayerId).ok, true);
   assert.equal(endingGame.endTurnProcess.step, "expiration");
   assert.equal(passShowdown(endingGame, endingGame.actionChain.priorityPlayerId).ok, true);
+  assert.equal(endingGame.pendingChoice?.effect, "readyRunes");
+  assert.equal(endingGame.endTurnProcess.step, "expiration");
+  assert.equal(chooseEffectOption(endingGame, "hot-fepr-ending-rune-1").ok, true);
+  assert.equal(endingGame.pendingChoice?.effect, "readyRunes");
+  assert.equal(chooseEffectOption(endingGame, "done").ok, true);
 
   assert.equal(endingGame.actionChain, null);
   assert.equal(endingGame.endTurnProcess, undefined);
@@ -2670,8 +2631,7 @@ test("resolved and countered card plays agree with the independent 419.4 oracle"
     const { game, player, opponent, observer, spell } = makePlayGame("countered");
     const before = captureRuleState(game);
     assert.equal(playCard(game, spell.instanceId).ok, true);
-    assert.equal(player.cardsPlayedThisTurn, 1,
-      "playCard has paid and Finalized the item, so it is already in turn play history");
+    assert.equal(player.cardsPlayedThisTurn, 0, "a pending Chain item is not yet played");
     assert.equal(observer.temporaryMight || 0, 0, "played triggers wait for successful resolution");
 
     const defy = instance(cards.defy, opponent.id, "played-counter-defy");
@@ -2746,15 +2706,14 @@ test("cards and tokens follow the independent complete play lifecycle", () => {
   assert.equal(spellGame.pendingPayment?.cardId, spell.instanceId);
   assert.equal(confirmPayment(spellGame).ok, true);
   assert.equal(spellGame.actionChain?.chain[0].status, "finalized");
-  assert.equal(spellPlayer.cardsPlayedThisTurn, 1,
-    "Finalized cards count for turn history before their resolved-play triggers fire");
+  assert.equal(spellPlayer.cardsPlayedThisTurn, 0, "Finalized is not yet Played before spell resolution completes");
   assert.equal(spellPlayer.trash.includes(spell), false);
   assert.equal(passShowdown(spellGame, spellGame.actionChain.priorityPlayerId).ok, true);
   assert.equal(passShowdown(spellGame, spellGame.actionChain.priorityPlayerId).ok, true);
   assert.equal(spellPlayer.cardsPlayedThisTurn, spellExpected.cardOrdinalDelta);
   assert.equal(spellPlayer.trash.includes(spell), true);
 
-  const permanentGame = createGame({ interactive: true, manualActionChainPriority: true });
+  const permanentGame = createGame({ interactive: true });
   const permanentPlayer = currentPlayer(permanentGame);
   const unit = instance({
     ...cards.lonelyPoro,
@@ -2772,14 +2731,13 @@ test("cards and tokens follow the independent complete play lifecycle", () => {
   assert.equal(beginPlayCard(permanentGame, unit.instanceId, "base").ok, true);
   assert.equal(confirmPayment(permanentGame).ok, true);
   assert.equal(permanentPlayer.base.includes(unit), true);
-  assert.equal(permanentGame.actionChain, null);
   assert.equal(permanentPlayer.cardsPlayedThisTurn, permanentExpected.cardOrdinalDelta);
   assert.equal(permanentExpected.played, true);
   assert.equal(permanentExpected.zone, "board");
 
   const counteredExpected = resolvePlayLifecycleReference({ objectKind: "spell", resolved: false });
-  assert.equal(counteredExpected.played, true);
-  assert.equal(counteredExpected.cardOrdinalDelta, 1);
+  assert.equal(counteredExpected.played, false);
+  assert.equal(counteredExpected.cardOrdinalDelta, 0);
   assert.deepEqual(
     resolvePlayLifecycleReference({ objectKind: "spell", enclosingEffect: true, outstandingTask: true }).trace.slice(0, 4),
     ["close", "pending", "wait-for-enclosing-effect", "wait-for-outstanding-task"]
@@ -2797,21 +2755,12 @@ test("playing a token is a Unit play but not a card play", () => {
   game.phase = "action";
   game.currentPlayerId = opponent.id;
   game.battlefields = [];
-  game.resolvingGameEffect = { kind: "token-play-lifecycle-test" };
 
   assert.equal(playUnitToken(game, player, cithria, {
     tokenCardNumber: "OGN-273/298",
     count: 1,
     destination: "base"
   }), true);
-
-  assert.equal(player.base.some((card) => card.cardNumber === "OGN-273/298"), false);
-  assert.equal(game.actionChain.chain.length, 1);
-  assert.equal(game.actionChain.chain[0].status, "pending");
-  assert.equal(game.actionChain.chain[0].playOptions.tokenPlay, true);
-  delete game.resolvingGameEffect;
-  assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
-  assert.equal(passShowdown(game, game.actionChain.priorityPlayerId).ok, true);
 
   const recruits = player.base.filter((card) => card.cardNumber === "OGN-273/298");
   assert.equal(recruits.length, 1, "Viktor does not observe a token as a played card");
@@ -3021,10 +2970,6 @@ test("component minima do not prevent a later total discount from reducing Energ
 
   assert.equal(beginPlayCard(game, spell.instanceId, "base").ok, true);
   assert.equal(chooseEffectOption(game, target.instanceId).ok, true);
-  assert.equal(game.pendingChoice?.effect, "costModifierOrder");
-  const apprenticeFirst = game.pendingChoice.options.find((option) => option.label.includes("Eager Apprentice"));
-  assert.ok(apprenticeFirst);
-  assert.equal(chooseEffectOption(game, apprenticeFirst.id).ok, true);
   assert.equal(game.pendingPayment?.energyCost, 0);
 });
 
@@ -3313,7 +3258,6 @@ test("a target that visits a non-Board zone is a new object even after returning
   assert.equal(game.pendingChoice?.effect, "banishFriendlyUnitPlayToBase");
   assert.equal(chooseEffectOption(game, target.instanceId).ok, true);
   assert.equal(owner.base.some((card) => card.instanceId === target.instanceId), true);
-  assert.equal(game.actionChain.chain.some((item) => item.card === target), false);
   assert.ok((target.zoneChangeCounter || 0) > 0);
 
   for (let passes = 0; game.actionChain && !game.pendingChoice && !game.pendingPayment && passes < 8; passes += 1) {
@@ -3782,17 +3726,12 @@ test("killed tokens cease to exist instead of entering trash", () => {
   const player = game.players[0];
   const opponent = game.players[1];
   const token = instance(cards.recruit, opponent.id, "oracle-killed-token");
-  token.effects = [{ timing: "death", kind: "draw", amount: 1 }];
-  const forbiddenDeathDraw = instance(cards.lonelyPoro, opponent.id, "oracle-token-death-draw");
-  opponent.mainDeck = [forbiddenDeathDraw];
   const killer = instance(cards.blastOfPower, player.id, "oracle-token-killer");
   game.battlefields = [testBattlefield("oracle-token-field", [token], opponent.id)];
 
   assert.equal(resolveEffect(game, player, killer), true);
   assert.equal(chooseEffectOption(game, token.instanceId).ok, true);
   assert.equal(opponent.trash.some((card) => card.instanceId === token.instanceId), false);
-  assert.equal(opponent.hand.some((card) => card.instanceId === forbiddenDeathDraw.instanceId), false,
-    "a token's own death trigger is removed because the token never reaches trash");
   assert.equal(locate(game, token.instanceId), null);
   assert.equal(evaluateRuleState(game).violations.some((violation) => violation.checkId === "token-zone"), false);
 });

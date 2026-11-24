@@ -30,15 +30,23 @@ import {
 import { resolveLegalAction } from "../src/ai/actions.mjs";
 
 export function applyGameCommand(room, playerId, command) {
+  const authorization = resolveAuthorizedGameCommand(room, playerId, command);
+  if (!authorization.ok) return authorization;
+  return applyResolvedGameCommand(room, playerId, authorization.command);
+}
+
+export function resolveAuthorizedGameCommand(room, playerId, command) {
   if (!room?.game) return reject("Game has not started.");
   if (!playerId) return reject("Unknown player.");
   if (!command || typeof command.kind !== "string") return reject("Invalid command.");
 
   const authorization = authorizeCommand(room, room.game, playerId, command);
   if (!authorization.ok) return authorization;
+  return { ...ok(), command: authorization.command || command };
+}
 
+export function applyResolvedGameCommand(room, playerId, resolvedCommand) {
   const game = room.game;
-  const resolvedCommand = authorization.command || command;
   switch (resolvedCommand.kind) {
     case "rollFirstPlayer":
       return rollFirstPlayer(game, playerId);

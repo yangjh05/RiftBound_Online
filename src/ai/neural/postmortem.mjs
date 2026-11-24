@@ -338,6 +338,8 @@ function buildPostmortemCorrectionSteps(candidate, teacher, review) {
     selectedIndex: teacher.selectedIndex,
     legalCount: parent.legalCount,
     originalLegalCount: parent.originalLegalCount,
+    actionManifestVersion: 2,
+    originalLegalActionKeys: parent.originalLegalActionKeys || parent.legalActionKeys,
     selectedActionKey: actionKey(teacher.action),
     behaviorActionKey: actionKey(candidate.selectedAction),
     recommendedActionKey: actionKey(teacher.action),

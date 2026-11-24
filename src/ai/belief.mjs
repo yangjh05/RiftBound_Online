@@ -1,6 +1,7 @@
 import { cards, decklists } from "../cards.mjs";
 import { isInherentReaction } from "../rules/keywords.mjs";
 import { observeGame } from "./observation.mjs";
+import { deckInventoryCards } from "./deck-inventory.mjs";
 
 const CARD_BY_NUMBER = new Map(Object.values(cards).map((card) => [card.cardNumber, card]));
 
@@ -29,7 +30,10 @@ export function inferOpponentDeckBelief(game, viewerId, model = {}) {
     probability: weights[index] / total,
     profile: item.profile
   })).sort((left, right) => right.probability - left.probability);
-  const cardProbabilities = conditionCardsOnResponsePasses(
+  const cardProbabilities = observation.opponent.handVisible
+    ? [...new Set(observation.opponent.hand.map((card) => card.cardNumber))]
+      .map((cardNumber) => ({ cardNumber, probability: 1 }))
+    : conditionCardsOnResponsePasses(
     aggregateRemainingCards(posterior, observed, observation.opponent.handCount),
     responseEvidence,
     observation.turnSequence
@@ -90,12 +94,22 @@ function logPosterior(profile, observed, model) {
 
 function aggregateRemainingCards(posterior, observed, handCount) {
   const scores = new Map();
+  if (handCount <= 0) return [];
+  const observedCount = [...observed.values()].reduce((sum, count) => sum + count, 0);
   for (const candidate of posterior) {
+    const enumeratedRemaining = Object.entries(candidate.profile.cardCounts || {})
+      .reduce((sum, [cardNumber, copies]) => sum + Math.max(0, copies - (observed.get(cardNumber) || 0)), 0);
+    // Profiles may describe only tracked cards; the unlisted portion still
+    // occupies draws in the finite population.
+    const deckRemaining = Math.max(enumeratedRemaining, (candidate.profile.mainSize || 0) - observedCount);
     for (const [cardNumber, copies] of Object.entries(candidate.profile.cardCounts || {})) {
       const remaining = Math.max(0, copies - (observed.get(cardNumber) || 0));
       if (!remaining) continue;
-      const deckRemaining = Math.max(1, candidate.profile.mainSize - [...observed.values()].reduce((sum, value) => sum + value, 0));
-      const chanceInHand = 1 - ((deckRemaining - remaining) / deckRemaining) ** Math.max(1, handCount);
+      let miss = 1;
+      for (let draw = 0; draw < Math.min(deckRemaining, handCount); draw += 1) {
+        miss *= Math.max(0, deckRemaining - remaining - draw) / (deckRemaining - draw);
+      }
+      const chanceInHand = 1 - miss;
       scores.set(cardNumber, (scores.get(cardNumber) || 0) + candidate.probability * chanceInHand);
     }
   }
@@ -106,14 +120,7 @@ function aggregateRemainingCards(posterior, observed, handCount) {
 function observedOpponentCards(observation) {
   const counts = new Map();
   const opponentId = observation.opponent.id;
-  const observedCards = [
-    ...observation.opponent.base,
-    ...observation.opponent.trash,
-    ...observation.opponent.banished,
-    ...observation.opponent.hand,
-    ...(observation.chainCards || []).filter((card) => card.controllerId === opponentId || card.ownerId === opponentId),
-    ...observation.battlefields.flatMap((field) => field.units.filter((card) => card.controllerId === opponentId))
-  ];
+  const observedCards = deckInventoryCards(observation, opponentId);
   for (const card of observedCards) if (card.cardNumber) counts.set(card.cardNumber, (counts.get(card.cardNumber) || 0) + 1);
   return counts;
 }

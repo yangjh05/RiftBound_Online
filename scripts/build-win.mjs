@@ -13,9 +13,7 @@ const require = createRequire(import.meta.url);
 const { manifestSignaturePayload } = require("../electron/updater.cjs");
 const distDir = path.join(root, "dist");
 const portableExe = path.join(distDir, "Riftbound Online.exe");
-const builderBin = process.platform === "win32"
-  ? path.join(root, "node_modules", ".bin", "electron-builder.cmd")
-  : path.join(root, "node_modules", ".bin", "electron-builder");
+const builderCli = require.resolve("electron-builder/out/cli/cli.js");
 
 const signingKey = await loadSigningKey();
 const buildInfo = await prepareBuildInfo();
@@ -114,13 +112,14 @@ async function removeWithRetry(target) {
 }
 
 function runBuilder() {
-  return new Promise((resolve) => {
-    const child = spawn(builderBin, ["--win", "portable"], {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [builderCli, "--win", "portable"], {
       cwd: root,
       stdio: "inherit",
       shell: false
     });
-    child.on("close", resolve);
+    child.once("error", reject);
+    child.once("close", (code) => resolve(code ?? 1));
   });
 }
 

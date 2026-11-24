@@ -123,6 +123,37 @@ This runs:
 
 Install the E2E browser once on a new development machine with `npm run test:e2e:install`.
 
+## Inspect submitted bug reports
+
+Game reproduction reports are stored under `data/bug-reports` by default. Set
+`RIFTBOUND_BUG_REPORT_DATA_DIR` to move that private data and set a long random
+`RIFTBOUND_BUG_REPORT_ADMIN_TOKEN` before exposing the administrator API.
+The store accepts at most 1,000 reports and 2 GiB by default. When either quota
+is full, it preserves every existing report and rejects new submissions with
+HTTP 507. Override the limits with `RIFTBOUND_BUG_REPORT_MAX_COUNT` and
+`RIFTBOUND_BUG_REPORT_MAX_TOTAL_BYTES`. Automatic removal of the oldest reports
+is disabled by default; enable `RIFTBOUND_BUG_REPORT_PRUNE_ON_QUOTA=true` only
+when that retention tradeoff is intentional.
+
+The anonymous submission limiter keeps at most 2,048 address buckets by
+default; change this with `RIFTBOUND_BUG_REPORT_RATE_LIMIT_MAX_ENTRIES`.
+`X-Forwarded-For` is ignored unless
+`RIFTBOUND_BUG_REPORT_TRUST_PROXY=true`, which should be enabled only when a
+trusted reverse proxy connects to the server over loopback. The built-in
+Tailscale Funnel restart enables this setting in its server process when the
+variable is unset; `--no-tunnel` restarts and explicit environment values are
+left unchanged.
+
+```powershell
+npm run bug-reports
+npm run bug-reports -- --id <report-id>
+```
+
+The protected HTTP equivalents are `GET /api/admin/bug-reports` and
+`GET /api/admin/bug-reports/<report-id>` with the administrator token in the
+`Authorization: Bearer ...` header. Report contents can include both players'
+game state, so do not publish the report directory or administrator token.
+
 ## Train the AI
 
 ```powershell
