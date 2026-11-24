@@ -439,7 +439,7 @@ function loadGallerySnapshot(filePath) {
 function latestLocalRulesDate() {
   const rulesDir = path.join(ROOT, "spec", "rules");
   const dates = fs.readdirSync(rulesDir)
-    .map((fileName) => fileName.match(/^core-rules(?:-catalog)?-(\d{4}-\d{2}-\d{2})\.json$/)?.[1])
+    .map((fileName) => fileName.match(/^core-rules-(\d{4}-\d{2}-\d{2})\.json$/)?.[1])
     .filter(Boolean)
     .sort();
   return dates.at(-1) || null;

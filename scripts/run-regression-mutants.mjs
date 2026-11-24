@@ -126,15 +126,13 @@ const engineMutants = [
   },
   {
     id: "main-deck-recycle-goes-to-actor",
-    search: `    if (isTokenCard(card)) continue;
-    const owner = game.players.find((candidate) => candidate.id === card.ownerId) || player;`,
-    replacement: `    if (isTokenCard(card)) continue;
-    const owner = player;`,
+    search: "    const owner = game.players.find((candidate) => candidate.id === card.ownerId) || player;",
+    replacement: "    const owner = player;",
     testName: "Main Deck recycling uses each card owner and recycled tokens cease to exist"
   },
   {
     id: "main-deck-recycled-token-persists",
-    search: "    if (isTokenCard(card)) continue;",
+    search: "    if (card.isToken) continue;",
     replacement: "    if (false) continue;",
     testName: "Main Deck recycling uses each card owner and recycled tokens cease to exist"
   },
@@ -168,21 +166,21 @@ const engineMutants = [
   },
   {
     id: "damage-ignores-prevent",
-    search: `    const validBaseDamage = consumeDamagePrevention(
-      game,
-      target,
-      baseDamageAmount(game, source, target, baseAmount, options),
-      origin
-    );`,
-    replacement: "    const validBaseDamage = baseDamageAmount(game, source, target, baseAmount, options);",
+    search: `  const validBaseDamage = consumeDamagePrevention(
+    game,
+    target,
+    baseDamageAmount(game, source, target, baseAmount, options),
+    origin
+  );`,
+    replacement: "  const validBaseDamage = baseDamageAmount(game, source, target, baseAmount, options);",
     testName: "Prevent applies only to its declared source and retains an unspent remainder"
   },
   {
     id: "bonus-damage-revives-invalid-deal",
-    search: `    amount = validBaseDamage > 0
-      ? validBaseDamage + bonusDamageAmount(game, player, source, target, options)
-      : 0;`,
-    replacement: "    amount = validBaseDamage + bonusDamageAmount(game, player, source, target, options);",
+    search: `  let amount = validBaseDamage > 0
+    ? validBaseDamage + bonusDamageAmount(game, player, source, target, options)
+    : 0;`,
+    replacement: "  let amount = validBaseDamage + bonusDamageAmount(game, player, source, target, options);",
     testName: "Bonus Damage is added only after the underlying Deal action remains valid"
   },
   {
@@ -205,19 +203,13 @@ const engineMutants = [
   },
   {
     id: "combat-healing-is-not-one-simultaneous-heal-event",
-    search: "  healUnits(game, liveParticipants, { reason: \"combat-special-cleanup\" });",
-    replacement: "  for (const unit of liveParticipants) unit.damage = 0;",
+    search: "  healUnits(game, allUnits(game), { reason: \"combat-special-cleanup\" });",
+    replacement: "  for (const unit of allUnits(game)) unit.damage = 0;",
     testName: "combat special cleanup heals an aura survivor before the next normal cleanup"
   },
   {
     id: "combat-result-not-recorded",
-    search: `    const combatResult = recordCombatResultEvent(
-      game,
-      battlefield,
-      process,
-      Boolean(process.resultAttackersRemain),
-      Boolean(process.resultDefendersRemain)
-    );`,
+    search: "  const combatResult = recordCombatResultEvent(game, battlefield, process, attackersRemain, defendersRemain);",
     replacement: "  const combatResult = { unitResults: {} }; // Mutant: omit the required combat result event.",
     testName: "combat special cleanup heals an aura survivor before the next normal cleanup"
   },
@@ -241,10 +233,8 @@ const engineMutants = [
   },
   {
     id: "effect-move-forces-exhausted-state",
-    search: `  removeUnitFromSource(location);
-  if (options.readyAfterMove) readyUnitWithEffects(game, player, source, unit);`,
-    replacement: `  removeUnitFromSource(location);
-  unit.exhausted = true;`,
+    search: "  if (options.readyAfterMove) readyUnitWithEffects(game, player, source, unit);",
+    replacement: "  unit.exhausted = true;",
     testName: "effect Moves use the shared movement event and send controlled units to their controller's base"
   },
   {
@@ -486,13 +476,13 @@ const engineMutants = [
   },
   {
     id: "attachment-effect-text-not-appended",
-    search: "      .filter((effect) => effect?.textSection === \"effect\")",
+    search: "      .filter((effect) => effect.textSection === \"effect\")",
     replacement: "      .filter((effect) => false)",
     testName: "attached Rules Text is inactive while Effect Text is appended to the Top-Most card"
   },
   {
     id: "numeric-keyword-first-instance-only",
-    search: "const printed = card?.attachedToId ? 0 : printedKeywordValue(card, keyword, fallback);",
+    search: "const printed = printedKeywordValue(card, keyword, fallback);",
     replacement: "const printed = keywordListHas(card?.keywords, keyword) ? fallback : 0;",
     testName: "numeric keyword values from separate sources are summed"
   },
@@ -544,9 +534,9 @@ const engineMutants = [
   },
   {
     id: "accelerate-uses-first-domain-on-multi-domain-card",
-    search: "  if (domains.length > 1) return { domain: \"Any\", allowedDomains: domains, amount: 1 };",
-    replacement: "  if (domains.length > 1) return { domain: domains[0], amount: 1 };",
-    testName: "Accelerate derives one matching Power from Domain identity instead of reminder text"
+    search: "  return { domain: domains.length === 1 ? domains[0] : \"Any\", amount: 1 };",
+    replacement: "  return { domain: domains[0] || \"Any\", amount: 1 };",
+    testName: "Accelerate derives exactly one Power from Domain identity instead of reminder text"
   },
   {
     id: "deathknell-goes-to-owner-instead-of-last-controller",
@@ -800,7 +790,6 @@ const engineMutants = [
   for (const item of pending) {
     if (item.playOptions?.playProcess) delete item.playOptions.playProcess.privateLogSnapshot;
     item.status = "finalized";
-    recordFinalizedCardPlay(game, item);
     requestCleanup(game, "pending-item-finalized", { itemId: item.id, itemType: item.itemType });
   }
   log(game, \`${"${pending.length}"} chain item${"${pending.length === 1 ? \"\" : \"s\"}"} finalized.\`);
@@ -812,7 +801,6 @@ const engineMutants = [
   for (const item of pending) {
     if (item.playOptions?.playProcess) delete item.playOptions.playProcess.privateLogSnapshot;
     item.status = "pending";
-    recordFinalizedCardPlay(game, item);
     requestCleanup(game, "pending-item-finalized", { itemId: item.id, itemType: item.itemType });
   }
   log(game, \`${"${pending.length}"} chain item${"${pending.length === 1 ? \"\" : \"s\"}"} finalized.\`);
@@ -875,7 +863,6 @@ const engineMutants = [
   for (const item of pending) {
     if (item.playOptions?.playProcess) delete item.playOptions.playProcess.privateLogSnapshot;
     item.status = "finalized";
-    recordFinalizedCardPlay(game, item);
     requestCleanup(game, "pending-item-finalized", { itemId: item.id, itemType: item.itemType });
   }
   log(game, \`${"${pending.length}"} chain item${"${pending.length === 1 ? \"\" : \"s\"}"} finalized.\`);
@@ -887,7 +874,6 @@ const engineMutants = [
   for (const item of pending) {
     if (item.playOptions?.playProcess) delete item.playOptions.playProcess.privateLogSnapshot;
     item.status = "pending";
-    recordFinalizedCardPlay(game, item);
     requestCleanup(game, "pending-item-finalized", { itemId: item.id, itemType: item.itemType });
   }
   log(game, \`${"${pending.length}"} chain item${"${pending.length === 1 ? \"\" : \"s\"}"} finalized.\`);
@@ -896,8 +882,7 @@ const engineMutants = [
   },
   {
     id: "permanent-waits-for-pass-after-finalize",
-    search: `if (item.itemType === "card") return isTokenCard(item.card)
-    || cardHasType(item.card, "unit") || cardHasType(item.card, "gear");`,
+    search: `if (item.itemType === "card") return isTokenCard(item.card) || ["unit", "gear"].includes(item.card?.type);`,
     replacement: `if (item.itemType === "card") return isTokenCard(item.card);`,
     testName: "Units and Gear resolve immediately on Finalize without a response window",
     testFile: "tests/rules-conformance.test.mjs"
@@ -1253,7 +1238,7 @@ const engineMutants = [
   },
   {
     id: "cleanup-unattached-gear-not-recalled",
-    search: "      if (!cardHasType(permanent, \"gear\") || cardHasType(permanent, \"unit\")) continue;",
+    search: "      if (permanent.type !== \"gear\") continue;",
     replacement: "      if (true) continue;",
     testName: "cleanup recalls unattached Gear and board objects from the wrong controller's base"
   },

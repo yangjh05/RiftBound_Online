@@ -4,17 +4,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const DEFAULT_RULES_VERSION = "2026-03-30";
+const DEFAULT_OUTPUT = path.join(ROOT, "spec", "rules", "core-rules-catalog-2026-03-30.json");
 const RULE_LINE = /^\s*(\d{3}(?:(?:\.\d+)|(?:\.[a-z]))*)\.\s+(.*)$/;
 const IGNORED_LINES = [/^Riftbound Core Rules$/i, /^Last Updated:/i];
 
 const args = parseArgs(process.argv.slice(2));
-const rulesVersion = String(args.version || DEFAULT_RULES_VERSION);
-const defaultOutput = path.join(ROOT, "spec", "rules", `core-rules-catalog-${rulesVersion}.json`);
 const input = path.resolve(args.input || "");
-const output = path.resolve(args.output || defaultOutput);
+const output = path.resolve(args.output || DEFAULT_OUTPUT);
 if (!args.input || !fs.existsSync(input)) {
-  console.error("Usage: node scripts/build-core-rules-catalog.mjs --input <clean-pages.json> [--version <YYYY-MM-DD>] [--url <official-pdf>] [--sha256 <hash>] [--output <catalog.json>]");
+  console.error("Usage: node scripts/build-core-rules-catalog.mjs --input <clean-pages.json> [--output <catalog.json>]");
   process.exit(1);
 }
 
@@ -35,13 +33,13 @@ if (duplicates.length || ids.size !== clauses.length) {
 const normalizedText = clauses.map((clause) => `${clause.id}\t${clause.text}`).join("\n");
 const catalog = {
   schemaVersion: 1,
-  rulesVersion,
+  rulesVersion: "2026-03-30",
   source: {
     authority: "Riot Games / Riftbound",
     title: "Riftbound Core Rules",
-    url: args.url || "https://cmsassets.rgpub.io/sanity/files/dsfx7636/news_live/861747d1d4d505b7c14d73aba9749d1c3a209a67.pdf",
+    url: "https://cmsassets.rgpub.io/sanity/files/dsfx7636/news_live/861747d1d4d505b7c14d73aba9749d1c3a209a67.pdf",
     rulesHub: "https://playriftbound.com/en-us/rules-hub/",
-    sha256: String(args.sha256 || "3733EAFFA8B412CE37458D62E7CD22AA93D59F0A6925241BCE5B0B5FD5ED1878").toUpperCase(),
+    sha256: "3733EAFFA8B412CE37458D62E7CD22AA93D59F0A6925241BCE5B0B5FD5ED1878",
     pageCount: pages.length,
     normalizedTextSha256: crypto.createHash("sha256").update(normalizedText).digest("hex").toUpperCase()
   },

@@ -1,5 +1,3 @@
-import { cardHasType } from "../src/cards/shared.mjs";
-
 const UNIT_CHOICES = new Set([
   "buffUnit", "damageUnit", "killUnit", "modifyMight", "readyUnit", "readyUnitAny",
   "stunUnit", "returnUnitToHand", "returnUnitToBase", "saveFriendlyUnitThisTurn",
@@ -23,13 +21,13 @@ export function validateSemanticChoice(game, choice) {
     const card = findCard(game, option.cardId);
     if (!card) { errors.push(`missing option card ${option.cardId}`); continue; }
     if (option.card?.instanceId && option.card.instanceId !== card.instanceId) errors.push(`stale option card ${option.cardId}`);
-    if (UNIT_CHOICES.has(choice.effect) && !cardHasType(card, "unit")) errors.push(`${choice.effect} offered non-unit ${card.name}`);
-    if (GEAR_CHOICES.has(choice.effect) && !cardHasType(card, "gear")) errors.push(`${choice.effect} offered non-gear ${card.name}`);
+    if (UNIT_CHOICES.has(choice.effect) && card.type !== "unit") errors.push(`${choice.effect} offered non-unit ${card.name}`);
+    if (GEAR_CHOICES.has(choice.effect) && card.type !== "gear") errors.push(`${choice.effect} offered non-gear ${card.name}`);
     if (FRIENDLY_CHOICES.has(choice.effect) && card.controllerId !== player?.id && card.ownerId !== player?.id) errors.push(`${choice.effect} offered non-friendly ${card.name}`);
     if (ENEMY_CHOICES.has(choice.effect) && card.controllerId === player?.id) errors.push(`${choice.effect} offered friendly ${card.name}`);
     if (choice.effect === "returnTrashUnitToHand") {
       const expected = choice.data?.cardType || "unit";
-      if (!cardHasType(card, expected) || !player?.trash.some((entry) => entry.instanceId === card.instanceId)) errors.push(`trash return offered invalid ${card.name}`);
+      if (card.type !== expected || !player?.trash.some((entry) => entry.instanceId === card.instanceId)) errors.push(`trash return offered invalid ${card.name}`);
     }
     if (choice.effect === "playTrashUnit" && !player?.trash.some((entry) => entry.instanceId === card.instanceId)) errors.push(`trash play offered card outside trash: ${card.name}`);
   }
@@ -69,13 +67,6 @@ export function validateResolutionContract(game, contract, result) {
     && game.pendingChoice.data?.targetId === contract.targetId
     && game.pendingChoice.data?.originalChoice?.effect === contract.effect;
   if (deferredByDeflect) return;
-  const deferredEffectPlays = game.pendingChoice?.effect === "effectPlayDestination"
-    ? [
-        game.pendingChoice.data?.effectPlayRequest,
-        ...(game.pendingChoice.data?.queuedEffectPlays || [])
-      ]
-    : [];
-  if (deferredEffectPlays.some((request) => request?.playedCard?.instanceId === contract.targetId)) return;
   const target = findCard(game, contract.targetId);
   const afterZone = locateCard(game, contract.targetId);
   const fail = (message) => { throw new Error(`Semantic resolution violation for ${contract.sourceName || "unknown source"} ${contract.effect}: ${message}; data=${JSON.stringify(contract.choiceData || {})}`); };
@@ -109,7 +100,7 @@ export function validateResolutionContract(game, contract, result) {
 }
 
 function damageCanBePrevented(game, choice, target) {
-  const origin = cardHasType(choice.card, "spell") ? "spell" : "ability";
+  const origin = choice.card?.type === "spell" ? "spell" : "ability";
   if ((game.preventSpellAbilityDamageUntilTurnSequence ?? -1) >= (game.turnSequence || 0)) return true;
   if (hasEffect(target, "static", "preventDamageAfterSecondMove") && (target.movesThisTurn || 0) >= 2) return true;
   const currentTurn = game.turnSequence || 0;

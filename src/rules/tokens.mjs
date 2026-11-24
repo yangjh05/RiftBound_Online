@@ -128,7 +128,6 @@ export const OFFICIAL_TOKEN_DEFINITIONS = Object.freeze({
         kind: "addPower",
         amount: 1,
         domain: "Any",
-        resourceKind: "gold",
         abilityKeywords: ["Reaction"],
         exhaust: true,
         killSelfCost: true,

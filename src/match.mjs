@@ -27,9 +27,6 @@ export function recordMatchGame(match, { winnerId = null, firstPlayerId = null, 
   if (!match || match.phase !== "playing") return failure("The match is not playing a game.");
   const isDraw = !winnerId;
   if (winnerId && !["p1", "p2"].includes(winnerId)) return failure("Unknown game winner.");
-  if (isDraw && !["p1", "p2"].includes(firstPlayerId)) {
-    return failure("The previous play order is required after a drawn game.");
-  }
   if (winnerId) match.wins[winnerId] += 1;
   match.previousBattlefields = {
     p1: battlefields.p1 || null,
@@ -50,25 +47,28 @@ export function recordMatchGame(match, { winnerId = null, firstPlayerId = null, 
     return { ok: true, complete: true };
   }
 
-  match.phase = match.sideboardingEnabled ? "sideboarding" : "between-games";
+  match.phase = match.sideboardingEnabled && !isDraw ? "sideboarding" : "between-games";
   match.submissions = { p1: false, p2: false };
-  // A Battlefield used in a drawn game remains available, but is not forced as
-  // the next selection. Only Battlefields from games with a winner are spent.
-  match.lockedBattlefields = null;
+  match.lockedBattlefields = isDraw ? { ...match.previousBattlefields } : null;
   match.firstPlayerChooserId = winnerId ? opponentId(winnerId) : null;
   match.nextFirstPlayerId = isDraw ? firstPlayerId : null;
   return { ok: true, complete: false };
 }
 
-export function submitSideboardConfiguration(match, playerId, deck, cardByNumber) {
+export function submitSideboardConfiguration(match, playerId, deck, cardByNumber, firstPlayerId = null) {
   if (!match || !["sideboarding", "between-games"].includes(match.phase)) return failure("The match is not between games.");
   const index = playerId === "p1" ? 0 : playerId === "p2" ? 1 : -1;
   if (index < 0) return failure("Unknown player.");
+  if (match.phase === "between-games" && !sameDeck(deck, match.currentDecks[index])) return failure("Sideboarding is not allowed after a drawn game.");
   const validation = validateSideboardConfiguration(match.registeredDecks[index], deck, cardByNumber);
   if (!validation.playable) return failure(validation.messages.join(" "));
+  if (match.firstPlayerChooserId === playerId) {
+    if (!["p1", "p2"].includes(firstPlayerId)) return failure("The previous game loser must choose who plays first.");
+    match.nextFirstPlayerId = firstPlayerId;
+  }
   match.currentDecks[index] = cloneDeck(deck);
   match.submissions[playerId] = true;
-  if (match.submissions.p1 && match.submissions.p2) match.phase = "ready-next-game";
+  if (match.submissions.p1 && match.submissions.p2 && match.nextFirstPlayerId) match.phase = "ready-next-game";
   return { ok: true, ready: match.phase === "ready-next-game" };
 }
 
@@ -81,8 +81,7 @@ export function beginNextMatchGame(match) {
     ok: true,
     decks: match.currentDecks.map(cloneDeck),
     firstPlayerId: match.nextFirstPlayerId,
-    firstPlayerChooserId: match.firstPlayerChooserId,
-    lockedBattlefields: null,
+    lockedBattlefields: match.lockedBattlefields ? { ...match.lockedBattlefields } : null,
     unavailableBattlefields: structuredClone(match.usedBattlefields)
   };
 }
@@ -106,6 +105,20 @@ export function resetMatchDecks(match) {
 
 function cloneDeck(deck) {
   return structuredClone(deck || {});
+}
+
+function sameDeck(left, right) {
+  return JSON.stringify(cloneComparableDeck(left)) === JSON.stringify(cloneComparableDeck(right));
+}
+
+function cloneComparableDeck(deck) {
+  return {
+    legend: deck?.legend || "",
+    battlefields: [...(deck?.battlefields || [])].sort(),
+    main: sortedEntries(deck?.main),
+    sideboard: sortedEntries(deck?.sideboard),
+    runes: sortedEntries(deck?.runes)
+  };
 }
 
 function sameList(left = [], right = []) {

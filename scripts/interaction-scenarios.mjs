@@ -80,10 +80,6 @@ function runScenario({ moverCard, payloadCard, destinationMode, withObserver, wi
   if (!operation || operation.status !== "completed") fail(`move operation did not complete (${operation?.status || "missing"})`);
   const destinationShowdownActive = game.phase === "showdown"
     && game.showdown?.battlefieldId === destination.instanceId;
-  const destinationStagedEvent = (game.stagedEvents || [])
-    .find((event) => event.battlefieldId === destination.instanceId);
-  const destinationShowdownStaged = destinationStagedEvent?.type === "showdown"
-    || destinationStagedEvent?.type === "combat";
   const relocatedDefenderField = game.battlefields.find((field) =>
     field.units.some((unit) => unit.instanceId === defender.instanceId));
   const nestedMoveShowdownActive = destinationMode === "enemy"
@@ -92,16 +88,11 @@ function runScenario({ moverCard, payloadCard, destinationMode, withObserver, wi
     && relocatedDefenderField
     && game.phase === "showdown"
     && game.showdown?.battlefieldId === relocatedDefenderField.instanceId;
-  if (!destinationShowdownActive && !destinationShowdownStaged && !nestedMoveShowdownActive) {
+  if (!destinationShowdownActive && !nestedMoveShowdownActive) {
     fail(`movement showdown did not begin (expected=${destination.instanceId}, phase=${game.phase}, showdown=${game.showdown?.battlefieldId || "none"}, staged=${game.stagedEvents?.length || 0}, pending=${game.pendingChoice?.effect || "none"}, units=${destination.units.map((unit) => unit.name).join("/")}, control=${destination.controlledBy}, winner=${game.winnerId || "none"}, log=${game.log.slice(-6).join(" | ")})`);
   }
-  const destinationStillHasEnemy = destination.units.some((unit) => unit.controllerId === opponent.id);
-  if (destinationShowdownActive && game.showdown.combat !== destinationStillHasEnemy) {
-    fail(destinationStillHasEnemy ? "occupied enemy destination did not begin combat" : "cleared enemy destination did not begin a non-combat showdown");
-  }
-  if (destinationShowdownStaged && destinationStagedEvent.type !== (destinationStillHasEnemy ? "combat" : "showdown")) {
-    fail(destinationStillHasEnemy ? "occupied enemy destination did not stage combat" : "cleared enemy destination did not stage a non-combat showdown");
-  }
+  if (destinationShowdownActive && destinationMode === "enemy" && game.showdown.combat !== true) fail("enemy destination did not begin combat");
+  if (destinationShowdownActive && destinationMode !== "enemy" && game.showdown.combat !== false) fail("empty opposing destination did not begin a non-combat showdown");
 
   function fail(message) {
     throw new Error(`${moverCard.name} × ${payloadCard.name} × ${destinationMode} × observer=${withObserver} × sourceEffect=${withSourceEffect}: ${message}`);

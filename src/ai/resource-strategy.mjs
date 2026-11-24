@@ -201,19 +201,10 @@ function publicCardAffordability(game, player, card) {
   const requirements = powerRequirements(card);
   const sources = resourceSources(game, player, card).filter((source) => source.ready);
   const readyRunes = player.runes.filter((rune) => !rune.exhausted);
-  const energyPool = player.runePool?.energy;
-  const pooledEnergy = Array.isArray(energyPool)
-    ? energyPool.filter((resource) => resourceRestrictionAllows(game, resource?.restriction, card)).length
-    : Number.isInteger(energyPool) && energyPool >= 0 ? energyPool : 0;
+  const pooledEnergy = player.runePool?.energy?.length || 0;
   const powerResources = [
     ...player.runes.map((rune) => ({ domain: rune.domain || "Any", usesReadyRune: !rune.exhausted })),
-    ...(player.runePool?.power || [])
-      .filter((resource) => resourceRestrictionAllows(game, resource?.restriction, card))
-      .map((resource) => ({
-        domain: resource.domain || "Any",
-        restriction: resource.restriction ?? null,
-        usesReadyRune: false
-      })),
+    ...(player.runePool?.power || []).map((resource) => ({ domain: resource.domain || "Any", usesReadyRune: false })),
     ...sources.flatMap((source) => source.power.map((resource) => ({ ...resource, usesReadyRune: false })))
   ];
   const powerMatch = matchPower(powerResources, requirements);
@@ -256,7 +247,7 @@ function resourceSources(game, player, paidCard = null) {
       const reaction = specs.every((spec) => (spec.abilityKeywords || []).some((keyword) => String(keyword).toLowerCase() === "reaction"));
       const destructive = specs.some((spec) => spec.killSelfCost || spec.recycleSelfCost || spec.killFriendlyPermanentCost
         || spec.discardCost || spec.recycleTrashCost || spec.energyCost || spec.powerCost);
-      const compatible = specs.every((spec) => resourceRestrictionAllows(game, spec.restriction, paidCard));
+      const compatible = specs.every((spec) => resourceRestrictionAllows(spec.restriction, paidCard));
       const requiresUnavailableCondition = specs.some((spec) => spec.requiresLegion);
       const exhausts = specs.some((spec) => spec.exhaust || spec.exhaustSelf);
       return {
@@ -267,7 +258,7 @@ function resourceSources(game, player, paidCard = null) {
         energy: specs.filter((spec) => spec.kind === "addEnergy").reduce((sum, spec) => sum + Math.max(0, Number(spec.amount) || 0), 0),
         power: specs.filter((spec) => spec.kind === "addPower").flatMap((spec) => Array.from(
           { length: Math.max(0, Number(spec.amount) || 0) },
-          () => ({ domain: spec.domain || "Any", restriction: spec.restriction ?? null })
+          () => ({ domain: spec.domain || "Any" })
         ))
       };
     });
@@ -339,17 +330,11 @@ function matchPower(resources, requirements) {
   return { matched, readyRunesUsed };
 }
 
-function resourceRestrictionAllows(game, restriction, paidCard) {
+function resourceRestrictionAllows(restriction, paidCard) {
   if (!restriction) return true;
-  if (restriction === "showdown") return game?.phase === "showdown";
-  if (restriction === "spell") return cardIncludesType(paidCard, "spell");
-  if (restriction === "unitOrUnitAbility") return cardIncludesType(paidCard, "unit");
-  if (restriction === "gear") return cardIncludesType(paidCard, "gear");
-  return false;
-}
-
-function cardIncludesType(card, type) {
-  return Boolean(card && (card.type === type || (card.types || []).includes(type)));
+  if (restriction === "spell") return paidCard?.type === "spell";
+  if (restriction === "showdown") return true;
+  return true;
 }
 
 function opponentThreat(game, opponent, playerId) {

@@ -16,12 +16,6 @@ const requestPath = path.resolve(requestArgument);
 const resultPath = path.resolve(resultArgument);
 let stageFinished = false;
 
-process.once("beforeExit", () => {
-  // A stage must never look successful unless it atomically committed a result.
-  // The parent can safely resume committed game files after this non-zero exit.
-  if (!stageFinished && !process.exitCode) process.exitCode = 1;
-});
-
 const send = (message) => {
   if (typeof process.send === "function" && process.connected) {
     process.send(message);

@@ -6251,7 +6251,7 @@ const definitions = [
           "abilityKeywords": [
             "Action"
           ],
-          "effectRequiresOwnTurn": true
+          "requiresOwnTurn": true
         }
       ]
     }

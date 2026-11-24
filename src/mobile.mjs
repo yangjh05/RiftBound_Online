@@ -33,8 +33,6 @@ function clickFirst(actions) {
 }
 
 NativeApp.addListener("backButton", () => {
-  if (typeof window.__riftboundDismissTopUiLayer === "function" && window.__riftboundDismissTopUiLayer()) return;
-
   for (const [containerSelector, action] of DISMISS_TARGETS) {
     if (document.querySelector(containerSelector) && clickFirst([action])) return;
   }

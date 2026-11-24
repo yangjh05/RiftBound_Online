@@ -21,12 +21,10 @@ import {
   hideCard,
   legalActivatedAbilityOptions,
   legalPaymentPoolEnergyOptions,
-  legalPaymentPoolPowerOptions,
   moveUnit,
   moveUnits,
   passShowdown,
   paymentConfirmationLegality,
-  paymentResumeLegality,
   rollFirstPlayer,
   selectBattlefield,
   selectCard,
@@ -47,7 +45,7 @@ import {
   gameLogVisibleToViewer,
   handCountVisibleToViewer
 } from "./rules/visibility.mjs";
-import { cards, cardHasType, DOMAINS, makeRune, rawDecklists, RUNE_COLORS, runeCardsForDomain } from "./cards.mjs";
+import { cards, DOMAINS, makeRune, rawDecklists, RUNE_COLORS, runeCardsForDomain } from "./cards.mjs";
 import {
   DECK_RULES,
   cardCount as deckCardCount,
@@ -127,19 +125,6 @@ import { detectEffectAnimations, EFFECT_ANIMATION_DURATION_MS } from "./ui/effec
 import { collectChainTargetIds } from "./ui/chain-targets.mjs";
 import { pendingDecisionVisibleToViewer } from "./ui/game-visibility.mjs";
 import { battlefieldDisplayName } from "./ui/battlefield-labels.mjs";
-import { fanCardStyle, tabletopSeatView, topDiscardCard } from "./ui/tabletop-view.mjs";
-import {
-  buildBurnOutDrawTransfers,
-  buildPrivateDeckTransfers,
-  buildPrivateHandBoardTransfers,
-  buildPrivateHandChainTransfers,
-  buildPrivateHiddenChainTransfers,
-  buildTabletopTransfers,
-  clearTabletopStateMotions,
-  TABLETOP_DRAW_STAGGER_MS,
-  TABLETOP_TRANSFER_DURATION_MS,
-  TABLETOP_TRANSFER_EASING
-} from "./ui/tabletop-motion.mjs";
 import {
   advanceTutorialAfterCommand,
   createTutorialGame,
@@ -188,8 +173,6 @@ online.match = null;
 online.lastRefresh = 0;
 online.refreshTimer = null;
 let onlineSelectedCardId = null;
-let onlineSnapshotRevision = 0;
-let deferredOnlineRenderTimer = null;
 let deckEditor = {
   selectedDeckId: deckStore.activeDeckIds[0] || deckStore.decks[0]?.id,
   pendingDeleteDeckId: null,
@@ -214,24 +197,13 @@ let handOpen = false;
 let chainZoneCollapsed = false;
 let inspectedChainItemId = null;
 let inspectedChainTargetIds = new Set();
-let chainTreePresentationItems = [];
 let graveyardOpenPlayerId = null;
 let banishedOpenPlayerId = null;
 let intelOpenPlayerId = null;
 let fullCardOpen = false;
 let fullCardPreviewCard = null;
-let inspectorPreviewCard = null;
 let attachmentsOpenCardId = null;
 let inspectorOpen = false;
-let stagedChoiceKey = null;
-let stagedChoiceOptionId = null;
-let choiceDrawerCollapsed = false;
-let draggingCardSession = null;
-let pointerCardDrag = null;
-let cardDragRenderPending = false;
-let pointerRuneScroll = null;
-let suppressCardClickUntil = 0;
-let suppressRuneClickUntil = 0;
 let pendingGameExit = null;
 let paymentRunesScrollLeft = 0;
 let handScrollLeft = 0;
@@ -257,6 +229,7 @@ let localMatch = null;
 let sideboardDrafts = [];
 let sideboardPlayerId = "p1";
 let sideboardSelectedMain = null;
+let sideboardFirstPlayerId = null;
 let aiMode = false;
 let aiHumanPlayerId = null;
 let aiPlayerId = null;
@@ -289,9 +262,6 @@ let replayBrowser = {
 };
 const app = document.querySelector("#app");
 let reportingUiException = false;
-const modalFocusOpeners = new Map();
-let tabletopBackSentinelActive = false;
-let suppressTabletopPopstate = false;
 
 function syncVisualViewport() {
   const viewport = window.visualViewport;
@@ -441,1482 +411,12 @@ function localizedCommandFailure(message) {
 }
 
 function render() {
-  if (draggingCardSession || pointerCardDrag) {
-    cardDragRenderPending = true;
-    return;
-  }
-  cardDragRenderPending = false;
-  clearRuneScrollGesture();
-  const previousGeometry = captureTabletopGeometry();
-  const previousFocus = captureFocusState();
-  const previousModalKey = topUiModalKey();
   try {
     renderApp();
-    syncModalAccessibility();
-    restoreFocusAfterRender(previousFocus, previousModalKey);
-    syncTabletopBackSentinel();
-    runTabletopTransferAnimations(uiMotion.transfers, previousGeometry);
   } catch (error) {
     reportUiException(error, "render");
     showUiExceptionOverlay(error, "render");
   }
-}
-
-const FOCUS_DATA_KEYS = [
-  "action", "card", "cardId", "player", "destination", "choice", "rune", "mode", "ability",
-  "chainItemId", "unit", "battlefield", "target", "effect", "power", "energy", "alphaTarget"
-];
-
-function focusableElements(scope = app) {
-  if (!scope?.querySelectorAll) return [];
-  return [...scope.querySelectorAll("button, input, select, textarea, a[href], [tabindex]")].filter((node) => {
-    if (!(node instanceof HTMLElement) || node.disabled || node.closest("[inert]")) return false;
-    if (node.tabIndex < 0 && !node.matches("[data-ui-modal]")) return false;
-    const style = window.getComputedStyle(node);
-    const rect = node.getBoundingClientRect();
-    return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
-  });
-}
-
-function captureFocusState() {
-  const node = document.activeElement;
-  if (!(node instanceof HTMLElement) || !app?.contains(node)) return null;
-  const data = {};
-  for (const key of FOCUS_DATA_KEYS) {
-    if (node.dataset?.[key] != null) data[key] = String(node.dataset[key]);
-  }
-  const seat = node.closest("[data-player-id]");
-  const zone = node.closest("[data-zone]");
-  return {
-    tag: node.tagName,
-    type: node.getAttribute("type") || "",
-    id: node.id || "",
-    name: node.getAttribute("name") || "",
-    data,
-    seatId: seat?.dataset.playerId || "",
-    zone: zone?.dataset.zone || "",
-    selectionStart: typeof node.selectionStart === "number" ? node.selectionStart : null,
-    selectionEnd: typeof node.selectionEnd === "number" ? node.selectionEnd : null
-  };
-}
-
-function focusStateMatches(node, state) {
-  if (!(node instanceof HTMLElement) || !state || node.tagName !== state.tag) return false;
-  if (state.id && node.id === state.id) return true;
-  if (state.type && node.getAttribute("type") !== state.type) return false;
-  if (state.name && node.getAttribute("name") !== state.name) return false;
-  const entries = Object.entries(state.data || {});
-  if (!entries.length) return false;
-  if (!entries.every(([key, value]) => String(node.dataset?.[key] ?? "") === value)) return false;
-  const seat = node.closest("[data-player-id]")?.dataset.playerId || "";
-  const zone = node.closest("[data-zone]")?.dataset.zone || "";
-  if (state.seatId && state.seatId !== seat) return false;
-  if (state.zone && state.zone !== zone) return false;
-  return true;
-}
-
-function restoreFocusState(state, scope = app) {
-  if (!state) return false;
-  const candidate = focusableElements(scope).find((node) => focusStateMatches(node, state));
-  if (!candidate) return false;
-  candidate.focus({ preventScroll: true });
-  if (state.selectionStart != null && typeof candidate.setSelectionRange === "function") {
-    try {
-      candidate.setSelectionRange(state.selectionStart, state.selectionEnd ?? state.selectionStart);
-    } catch {
-      // Number/range inputs do not expose a text selection range.
-    }
-  }
-  return true;
-}
-
-function topUiModal() {
-  const modals = [...(app?.querySelectorAll?.("[data-ui-modal]") || [])].filter((node) => tabletopRect(node));
-  return modals
-    .map((node, index) => ({
-      node,
-      index,
-      zIndex: Number.parseInt(window.getComputedStyle(node).zIndex, 10) || 0
-    }))
-    .sort((left, right) => left.zIndex - right.zIndex || left.index - right.index)
-    .at(-1)?.node || null;
-}
-
-function topUiModalKey() {
-  const modal = topUiModal();
-  return modal?.dataset.modalKey || modal?.id || "";
-}
-
-function focusModalInitial(modal) {
-  if (!(modal instanceof HTMLElement)) return;
-  const preferred = focusableElements(modal).find((node) => node.hasAttribute("data-primary-focus"))
-    || focusableElements(modal)[0]
-    || modal;
-  preferred.focus({ preventScroll: true });
-}
-
-function restoreFocusAfterRender(previousFocus, previousModalKey) {
-  const modal = topUiModal();
-  const currentModalKey = modal?.dataset.modalKey || modal?.id || "";
-  if (modal && currentModalKey !== previousModalKey && !modalFocusOpeners.has(currentModalKey)) {
-    if (previousFocus) modalFocusOpeners.set(currentModalKey, previousFocus);
-    focusModalInitial(modal);
-    return;
-  }
-  if (previousModalKey && previousModalKey !== currentModalKey && modalFocusOpeners.has(previousModalKey)) {
-    const opener = modalFocusOpeners.get(previousModalKey);
-    modalFocusOpeners.delete(previousModalKey);
-    if (restoreFocusState(opener, modal || app)) return;
-  }
-  if (modal && currentModalKey !== previousModalKey) {
-    focusModalInitial(modal);
-    return;
-  }
-  if (modal) {
-    if (!restoreFocusState(previousFocus, modal)) focusModalInitial(modal);
-    return;
-  }
-  if (previousModalKey && modalFocusOpeners.has(previousModalKey)) {
-    const opener = modalFocusOpeners.get(previousModalKey);
-    modalFocusOpeners.delete(previousModalKey);
-    if (restoreFocusState(opener)) return;
-  }
-  restoreFocusState(previousFocus);
-}
-
-function setUiInert(node, inert) {
-  if (!(node instanceof HTMLElement)) return;
-  if (inert) {
-    node.setAttribute("inert", "");
-    node.setAttribute("aria-hidden", "true");
-    node.dataset.uiInert = "true";
-    return;
-  }
-  if (node.dataset.uiInert !== "true") return;
-  node.removeAttribute("inert");
-  node.removeAttribute("aria-hidden");
-  delete node.dataset.uiInert;
-}
-
-function syncModalAccessibility() {
-  for (const node of app?.querySelectorAll?.("[data-ui-inert]") || []) setUiInert(node, false);
-  const modal = topUiModal();
-  if (!modal) return;
-  const topbar = app.querySelector(".tabletop-topbar");
-  setUiInert(topbar, true);
-  const layout = modal.closest(".tabletop-layout") || app.querySelector(".tabletop-layout");
-  const overlay = layout?.querySelector(":scope > .tabletop-overlay-root");
-  for (const child of layout?.children || []) {
-    if (child === overlay || child === modal || child.contains(modal)) continue;
-    setUiInert(child, true);
-  }
-  for (const child of overlay?.children || []) {
-    if (child === modal || child.contains(modal)) continue;
-    setUiInert(child, true);
-  }
-}
-
-function trapModalTab(event, modal) {
-  const items = focusableElements(modal).filter((node) => node !== modal);
-  if (!items.length) {
-    event.preventDefault();
-    modal.focus({ preventScroll: true });
-    return;
-  }
-  const first = items[0];
-  const last = items.at(-1);
-  if (!modal.contains(document.activeElement)) {
-    event.preventDefault();
-    (event.shiftKey ? last : first).focus({ preventScroll: true });
-    return;
-  }
-  if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault();
-    first.focus({ preventScroll: true });
-  } else if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault();
-    last.focus({ preventScroll: true });
-  }
-}
-
-function hasTabletopUiLayer() {
-  if (appView !== "game") return false;
-  if (replayMode) return true;
-  if (app?.querySelector?.(".phase-unavailable")) return false;
-  return Boolean(topUiModal() || fullCardOpen || pendingGameExit || (resultRevealReady && game?.phase === "complete" && !resultDismissed)
-    || graveyardOpenPlayerId || banishedOpenPlayerId || intelOpenPlayerId || logOpen || inspectorOpen
-    || attachmentsOpenCardId || inspectedChainItemId || handOpen || moveSelection.size);
-}
-
-function syncTabletopBackSentinel() {
-  const shouldGuard = hasTabletopUiLayer();
-  if (shouldGuard && !tabletopBackSentinelActive) {
-    try {
-      window.history.pushState({ ...(window.history.state || {}), riftboundUiLayer: true }, "", window.location.href);
-      tabletopBackSentinelActive = true;
-    } catch (error) {
-      reportUiException(error, "UI history guard");
-    }
-    return;
-  }
-  if (!shouldGuard && tabletopBackSentinelActive) {
-    suppressTabletopPopstate = true;
-    tabletopBackSentinelActive = false;
-    try {
-      window.history.back();
-    } catch (error) {
-      suppressTabletopPopstate = false;
-      reportUiException(error, "UI history release");
-    }
-  }
-}
-
-function normalizedDomZone(zone) {
-  return {
-    "main-deck": "mainDeck",
-    "rune-deck": "runeDeck"
-  }[zone] || String(zone || "");
-}
-
-const TABLETOP_CARD_ASPECT_RATIO = 5 / 7;
-
-function motionLocationKey(location, { includeLocation = true } = {}) {
-  if (!location) return "";
-  return [
-    String(location.playerId || ""),
-    normalizedDomZone(location.zone),
-    includeLocation ? String(location.locationId || "") : ""
-  ].join("|");
-}
-
-function tabletopRect(node) {
-  if (!(node instanceof Element)) return null;
-  const rect = node.getBoundingClientRect();
-  const style = window.getComputedStyle(node);
-  if (rect.width < 2 || rect.height < 2 || style.display === "none" || style.visibility === "hidden") return null;
-  return {
-    top: rect.top,
-    right: rect.right,
-    bottom: rect.bottom,
-    left: rect.left,
-    width: rect.width,
-    height: rect.height
-  };
-}
-
-function tabletopCardNodePriority(node) {
-  if (node.closest(".tabletop-overlay-root")) return -1;
-  if (node.matches("[data-hand-card]")) return 100;
-  if (node.matches(".unit-token, .base-token, .nonunit-token")) return 95;
-  if (node.matches("[data-rune-card], .rune-card-chip")) return 90;
-  if (node.matches(".identity-button, .physical-identity-card")) return 80;
-  if (node.matches(".chain-zone-item")) return 70;
-  if (node.matches(".image-card")) return 50;
-  return 20;
-}
-
-function tabletopDomLocation(node) {
-  if (!(node instanceof Element)) return null;
-  const seat = node.closest("[data-player-id]");
-  const zoneNode = node.matches("[data-zone]") ? node : node.closest("[data-zone]");
-  return {
-    playerId: node.dataset.motionPlayerId || node.dataset.playerId || seat?.dataset.playerId || "",
-    zone: normalizedDomZone(node.dataset.motionZone || node.dataset.zone || zoneNode?.dataset.zone),
-    locationId: node.dataset.motionLocationId
-      || node.dataset.locationId
-      || node.dataset.battlefieldId
-      || zoneNode?.dataset.locationId
-      || zoneNode?.dataset.battlefieldId
-      || ""
-  };
-}
-
-function tabletopNodeMatchesLocation(node, location) {
-  if (!location) return false;
-  const nodeLocation = tabletopDomLocation(node);
-  if (!nodeLocation || nodeLocation.zone !== normalizedDomZone(location.zone)) return false;
-  if (location.playerId && nodeLocation.playerId && String(location.playerId) !== String(nodeLocation.playerId)) return false;
-  if (location.locationId && nodeLocation.locationId && String(location.locationId) !== String(nodeLocation.locationId)) return false;
-  return true;
-}
-
-function tabletopCardSurfaceRect(rect) {
-  if (!rect) return null;
-  const width = Number(rect.width);
-  const height = Number(rect.height);
-  const left = Number(rect.left);
-  const top = Number(rect.top);
-  if (![width, height, left, top].every(Number.isFinite) || width < 2 || height < 2) return null;
-  const centerX = left + width / 2;
-  const centerY = top + height / 2;
-  let cardWidth = width;
-  let cardHeight = height;
-  if (cardWidth / cardHeight > TABLETOP_CARD_ASPECT_RATIO) cardWidth = cardHeight * TABLETOP_CARD_ASPECT_RATIO;
-  else cardHeight = cardWidth / TABLETOP_CARD_ASPECT_RATIO;
-  const cardLeft = centerX - cardWidth / 2;
-  const cardTop = centerY - cardHeight / 2;
-  return {
-    top: cardTop,
-    right: cardLeft + cardWidth,
-    bottom: cardTop + cardHeight,
-    left: cardLeft,
-    width: cardWidth,
-    height: cardHeight
-  };
-}
-
-function captureTabletopGeometry() {
-  const geometry = { cardRects: new Map(), zoneRects: new Map(), anchorRects: new Map() };
-  const root = app?.querySelector?.(".tabletop-layout");
-  if (!root) return geometry;
-
-  for (const node of root.querySelectorAll("[data-card-id]")) {
-    const id = String(node.dataset.cardId || "");
-    if (!id || node.closest(".tabletop-overlay-root")) continue;
-    const priority = tabletopCardNodePriority(node);
-    const rect = priority >= 0 ? tabletopRect(node) : null;
-    const previous = geometry.cardRects.get(id);
-    if (!rect || (previous && previous.priority >= priority)) continue;
-    geometry.cardRects.set(id, { rect, priority });
-  }
-
-  for (const node of root.querySelectorAll("[data-zone]")) {
-    if (node.closest(".tabletop-overlay-root")) continue;
-    const rect = tabletopRect(node);
-    if (!rect) continue;
-    const location = tabletopDomLocation(node);
-    if (!location?.zone) continue;
-    geometry.zoneRects.set(motionLocationKey(location, { includeLocation: false }), rect);
-    if (location.locationId) geometry.zoneRects.set(motionLocationKey(location), rect);
-  }
-
-  for (const node of root.querySelectorAll("[data-motion-anchor]")) {
-    if (node.closest(".tabletop-overlay-root")) continue;
-    const rect = tabletopRect(node);
-    const location = tabletopDomLocation(node);
-    if (!rect || !location?.zone) continue;
-    geometry.anchorRects.set(motionLocationKey(location, { includeLocation: false }), rect);
-    if (location.locationId) geometry.anchorRects.set(motionLocationKey(location), rect);
-    const cardId = String(node.dataset.motionCardId || "");
-    if (!cardId) continue;
-    const priority = 120;
-    const previous = geometry.cardRects.get(cardId);
-    if (!previous || previous.priority < priority) geometry.cardRects.set(cardId, { rect, priority });
-  }
-  return geometry;
-}
-
-function geometryRectForTransfer(geometry, transfer, endpoint) {
-  const location = transfer?.[endpoint];
-  if (!location || !geometry) return null;
-  const zone = normalizedDomZone(location.zone);
-  const preferAnchor = ["chain", "trash", "banished", "mainDeck", "runeDeck"].includes(zone);
-  const endpointCardId = endpoint === "from" ? transfer.fromCardId || transfer.id : transfer.toCardId || transfer.id;
-  const cardRect = geometry.cardRects?.get(endpointCardId)?.rect || null;
-  const anchorRect = geometry.anchorRects?.get(motionLocationKey(location))
-    || geometry.anchorRects?.get(motionLocationKey(location, { includeLocation: false }))
-    || geometry.anchorRects?.get(motionLocationKey({ ...location, playerId: "" }))
-    || geometry.anchorRects?.get(motionLocationKey({ ...location, playerId: "" }, { includeLocation: false }))
-    || null;
-  const zoneRect = geometry.zoneRects?.get(motionLocationKey(location))
-    || geometry.zoneRects?.get(motionLocationKey(location, { includeLocation: false }))
-    || geometry.zoneRects?.get(motionLocationKey({ ...location, playerId: "" }))
-    || geometry.zoneRects?.get(motionLocationKey({ ...location, playerId: "" }, { includeLocation: false }))
-    || null;
-  const preferredRect = zone === "chain"
-    ? cardRect || anchorRect || zoneRect
-    : preferAnchor
-      ? anchorRect || cardRect || zoneRect
-      : cardRect || anchorRect || zoneRect;
-  return tabletopCardSurfaceRect(preferredRect);
-}
-
-function tabletopMotionReduced() {
-  return Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
-}
-
-function presentationMotionDuration(duration) {
-  return tabletopMotionReduced() ? Math.min(40, Math.max(1, Number(duration) || 1)) : duration;
-}
-
-function tabletopTransferRotations(transfer) {
-  return {
-    start: transfer?.from?.exhausted ? 90 : 0,
-    end: transfer?.to?.exhausted ? 90 : 0
-  };
-}
-
-function createTabletopFlight(transfer, start) {
-  const flight = document.createElement("div");
-  flight.className = `tabletop-card-flight transfer-${transfer.kind} ${transfer.faceVisible ? "face-up" : "face-down"}`;
-  flight.setAttribute("aria-hidden", "true");
-  flight.style.left = `${start.left}px`;
-  flight.style.top = `${start.top}px`;
-  flight.style.width = `${start.width}px`;
-  flight.style.height = `${start.height}px`;
-  flight.style.aspectRatio = String(TABLETOP_CARD_ASPECT_RATIO);
-  if (transfer.faceVisible && transfer.image) {
-    const image = document.createElement("img");
-    image.src = transfer.image;
-    image.alt = "";
-    flight.appendChild(image);
-  } else if (transfer.faceVisible && transfer.name) {
-    const label = document.createElement("span");
-    label.className = "flight-card-name";
-    label.textContent = transfer.name;
-    flight.appendChild(label);
-  } else {
-    const back = document.createElement("span");
-    back.className = "flight-card-back";
-    back.textContent = "R";
-    flight.appendChild(back);
-  }
-  return flight;
-}
-
-function runTabletopTransferAnimations(transfers, previousGeometry) {
-  if (!Array.isArray(transfers) || !transfers.length || !app?.querySelector?.(".tabletop-layout")) return;
-  const currentGeometry = captureTabletopGeometry();
-  const reduced = tabletopMotionReduced();
-  let drawIndex = 0;
-  let layer = null;
-
-  for (const transfer of transfers) {
-    if (["exhaust", "ready"].includes(transfer?.kind)) continue;
-    const start = geometryRectForTransfer(previousGeometry, transfer, "from");
-    const end = geometryRectForTransfer(currentGeometry, transfer, "to");
-    if (!start || !end) continue;
-    const dx = (end.left + end.width / 2) - (start.left + start.width / 2);
-    const dy = (end.top + end.height / 2) - (start.top + start.height / 2);
-    const distance = Math.hypot(dx, dy);
-    if (distance < 3 && Math.abs(end.width - start.width) < 2 && Math.abs(end.height - start.height) < 2) continue;
-    const destinationCardId = String(transfer?.toCardId || transfer?.id || "");
-    const destinationCardNode = destinationCardId ? [...app.querySelectorAll("[data-card-id]")]
-      .filter((node) => String(node.dataset.cardId || "") === destinationCardId
-        && tabletopCardNodePriority(node) >= 0
-        && tabletopRect(node))
-      .sort((left, right) => tabletopCardNodePriority(right) - tabletopCardNodePriority(left))[0] || null : null;
-    const destinationAnchors = [...app.querySelectorAll("[data-motion-anchor]")]
-      .filter((node) => !node.closest(".tabletop-overlay-root") && tabletopRect(node));
-    const destinationAnchorNode = (destinationCardId
-      ? destinationAnchors.find((node) => String(node.dataset.motionCardId || "") === destinationCardId)
-      : null)
-      || destinationAnchors.find((node) => tabletopNodeMatchesLocation(node, transfer?.to))
-      || null;
-    const destinationZoneNode = [...app.querySelectorAll("[data-zone]")]
-      .find((node) => !node.closest(".tabletop-overlay-root")
-        && tabletopRect(node)
-        && tabletopNodeMatchesLocation(node, transfer?.to))
-      || null;
-    const destinationVisualNode = destinationAnchorNode || destinationCardNode;
-    const destinationNode = destinationVisualNode || destinationZoneNode;
-    const delay = transfer.kind === "draw" ? drawIndex++ * TABLETOP_DRAW_STAGGER_MS : 0;
-    const revealDestination = () => {
-      destinationVisualNode?.classList.remove("tabletop-transfer-pending");
-      if (!destinationNode) return;
-      destinationNode.classList.add("tabletop-transfer-arrival", `arrival-${transfer.kind}`);
-      window.setTimeout(() => destinationNode.classList.remove("tabletop-transfer-arrival", `arrival-${transfer.kind}`), 360);
-    };
-    if (reduced) {
-      revealDestination();
-      continue;
-    }
-    destinationVisualNode?.classList.add("tabletop-transfer-pending");
-
-    if (!layer) {
-      layer = document.createElement("div");
-      layer.className = "tabletop-card-flight-layer";
-      document.body.appendChild(layer);
-    }
-    const flight = createTabletopFlight(transfer, start);
-    layer.appendChild(flight);
-    const scale = Math.min(4, Math.max(0.18, end.width / Math.max(1, start.width)));
-    const rotations = tabletopTransferRotations(transfer);
-    const fadeEnd = ["burn", "discard", "defeat", "resolve", "flow", "banish", "recycle"].includes(transfer.kind) ? 0.2 : 0.94;
-    const animation = flight.animate([
-      {
-        transform: `translate3d(0,0,0) scale(1) rotate(${rotations.start}deg)`,
-        opacity: 0.96
-      },
-      {
-        transform: `translate3d(${dx}px,${dy}px,0) scale(${scale}) rotate(${rotations.end}deg)`,
-        opacity: fadeEnd
-      }
-    ], {
-      duration: TABLETOP_TRANSFER_DURATION_MS,
-      delay,
-      easing: TABLETOP_TRANSFER_EASING,
-      fill: "forwards"
-    });
-    let cleaned = false;
-    const cleanup = (arrive = true) => {
-      if (cleaned) return;
-      cleaned = true;
-      flight.remove();
-      if (arrive) revealDestination();
-      else destinationVisualNode?.classList.remove("tabletop-transfer-pending");
-      if (layer && !layer.childElementCount) layer.remove();
-    };
-    animation.addEventListener("finish", () => cleanup(true), { once: true });
-    animation.addEventListener("cancel", () => cleanup(false), { once: true });
-    window.setTimeout(() => cleanup(true), delay + TABLETOP_TRANSFER_DURATION_MS + 180);
-  }
-}
-
-function renderPowerCostIssue(power, label) {
-  if (!Array.isArray(power)) return `${label} is invalid.`;
-  for (const [index, requirement] of power.entries()) {
-    if (!requirement || typeof requirement !== "object" || Array.isArray(requirement)) return `${label}[${index}] is invalid.`;
-    if (typeof requirement.domain !== "string" || !requirement.domain) return `${label}[${index}] domain is invalid.`;
-    if (!Number.isInteger(requirement.amount) || requirement.amount < 0) return `${label}[${index}] amount is invalid.`;
-    if (requirement.allowedDomains != null
-      && (!Array.isArray(requirement.allowedDomains) || requirement.allowedDomains.some((domain) => typeof domain !== "string" || !domain))) {
-      return `${label}[${index}] allowed domains are invalid.`;
-    }
-  }
-  return "";
-}
-
-function renderObjectListIssue(value, label, { allowNull = false } = {}) {
-  if (!Array.isArray(value)) return `${label} is invalid.`;
-  for (const [index, item] of value.entries()) {
-    if (allowNull && item == null) continue;
-    if (!item || typeof item !== "object" || Array.isArray(item)) return `${label}[${index}] is invalid.`;
-  }
-  return "";
-}
-
-function renderStringListIssue(value, label) {
-  if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || !item)) return `${label} is invalid.`;
-  return "";
-}
-
-const TARGET_RECORD_KEYS = [
-  "declaredTargets", "declaredPlayTargets", "playResolutionTargets", "declaredTargetIdentities",
-  "declaredChoices", "declaredPlayChoices", "playResolutionChoices", "allocations"
-];
-const TARGET_REFERENCE_KEYS = [
-  "targetId", "cardId", "unitId", "battlefieldId", "destinationId"
-];
-
-function renderTargetCarrierIssue(value, label) {
-  if (value == null) return "";
-  if (typeof value !== "object" || Array.isArray(value)) return `${label} is invalid.`;
-  for (const key of TARGET_REFERENCE_KEYS) {
-    if (value[key] != null && (typeof value[key] !== "string" || !value[key])) return `${label} ${key} is invalid.`;
-  }
-  for (const key of TARGET_RECORD_KEYS) {
-    if (value[key] == null) continue;
-    const issue = renderObjectListIssue(value[key], `${label} ${key}`);
-    if (issue) return issue;
-    for (const [index, record] of value[key].entries()) {
-      for (const referenceKey of TARGET_REFERENCE_KEYS) {
-        if (record[referenceKey] != null && (typeof record[referenceKey] !== "string" || !record[referenceKey])) {
-          return `${label} ${key}[${index}] ${referenceKey} is invalid.`;
-        }
-      }
-    }
-  }
-  if (value.targetIds != null) {
-    const issue = renderStringListIssue(value.targetIds, `${label} targetIds`);
-    if (issue) return issue;
-  }
-  return "";
-}
-
-function renderNestedRepeatableFieldsIssue(value, label, seen = new Set()) {
-  if (!value || typeof value !== "object" || seen.has(value)) return "";
-  seen.add(value);
-  if (Array.isArray(value)) {
-    for (const [index, item] of value.entries()) {
-      const issue = renderNestedRepeatableFieldsIssue(item, `${label}[${index}]`, seen);
-      if (issue) return issue;
-    }
-    return "";
-  }
-  for (const key of TARGET_REFERENCE_KEYS) {
-    if (value[key] != null && (typeof value[key] !== "string" || !value[key])) return `${label} ${key} is invalid.`;
-  }
-  for (const key of [
-    "abilityKeywords", "allowedDomains", "cardTypes", "keywords", "names",
-    "sourceCardTypes", "targetIds", "targetTags", "tags"
-  ]) {
-    if (value[key] == null) continue;
-    const issue = renderStringListIssue(value[key], `${label} ${key}`);
-    if (issue) return issue;
-  }
-  for (const key of ["costPower", "replacementPower", "additionalPowerCost"]) {
-    if (value[key] == null) continue;
-    const issue = renderPowerCostIssue(value[key], `${label} ${key}`);
-    if (issue) return issue;
-  }
-  if (value.additionalPower != null) {
-    const issue = renderPowerCostIssue(
-      Array.isArray(value.additionalPower) ? value.additionalPower : [value.additionalPower],
-      `${label} additionalPower`
-    );
-    if (issue) return issue;
-  }
-  if (value.costOptions != null) {
-    const optionsIssue = renderObjectListIssue(value.costOptions, `${label} costOptions`);
-    if (optionsIssue) return optionsIssue;
-    for (const [index, option] of value.costOptions.entries()) {
-      if (option.power == null) continue;
-      const powerIssue = renderPowerCostIssue(option.power, `${label} costOptions[${index}] power`);
-      if (powerIssue) return powerIssue;
-    }
-  }
-  if (value.specs != null) {
-    const issue = renderObjectListIssue(value.specs, `${label} specs`);
-    if (issue) return issue;
-  }
-  for (const [key, nested] of Object.entries(value)) {
-    if (!nested || typeof nested !== "object") continue;
-    const issue = renderNestedRepeatableFieldsIssue(nested, `${label} ${key}`, seen);
-    if (issue) return issue;
-  }
-  return "";
-}
-
-function collectAuthoritativeCardIds(card, label, ids) {
-  if (!card) return "";
-  if (ids.has(card.instanceId)) return `${label} duplicates card identifier ${card.instanceId}.`;
-  ids.add(card.instanceId);
-  for (const [index, attachment] of (card.attachments || []).entries()) {
-    const issue = collectAuthoritativeCardIds(attachment, `${label} attachment[${index}]`, ids);
-    if (issue) return issue;
-  }
-  return "";
-}
-
-function renderCardIssue(card, label) {
-  if (!card || typeof card !== "object" || Array.isArray(card)
-    || typeof card.instanceId !== "string" || !card.instanceId
-    || typeof card.name !== "string" || !card.name) return `${label} has an invalid card.`;
-  if (card.text != null && typeof card.text !== "string") return `${label} text is invalid.`;
-  if (card.translations != null) {
-    if (typeof card.translations !== "object" || Array.isArray(card.translations)) return `${label} translations are invalid.`;
-    for (const [language, translation] of Object.entries(card.translations)) {
-      if (!translation || typeof translation !== "object" || Array.isArray(translation)) return `${label} ${language} translation is invalid.`;
-      for (const key of ["name", "text"]) {
-        if (translation[key] != null && typeof translation[key] !== "string") return `${label} ${language} translation ${key} is invalid.`;
-      }
-    }
-  }
-  for (const key of [
-    "attachments", "effects", "appendedEffects", "copiedEffectTextEffects", "keywords", "types", "tags", "domains", "power",
-    "temporaryKeywords", "appendedKeywords", "copiedEffectTextKeywords", "damagePreventions",
-    "declaredPlayTargets", "playResolutionTargets", "declaredTargetIdentities",
-    "declaredPlayChoices", "playResolutionChoices", "paidOptionalPowerEffects"
-  ]) {
-    if (card[key] != null && !Array.isArray(card[key])) return `${label} ${key} is invalid.`;
-  }
-  for (const key of ["keywords", "types", "tags", "domains", "temporaryKeywords", "appendedKeywords", "copiedEffectTextKeywords"]) {
-    if (card[key] == null) continue;
-    const issue = renderStringListIssue(card[key], `${label} ${key}`);
-    if (issue) return issue;
-  }
-  for (const key of ["effects", "appendedEffects", "copiedEffectTextEffects", "damagePreventions", "declaredPlayTargets", "playResolutionTargets", "declaredTargetIdentities", "declaredPlayChoices", "playResolutionChoices", "paidOptionalPowerEffects"]) {
-    if (card[key] == null) continue;
-    const issue = renderObjectListIssue(card[key], `${label} ${key}`, {
-      allowNull: ["effects", "appendedEffects", "copiedEffectTextEffects"].includes(key)
-    });
-    if (issue) return issue;
-  }
-  const carrierIssue = renderTargetCarrierIssue(card, label);
-  if (carrierIssue) return carrierIssue;
-  for (const key of ["effects", "appendedEffects", "copiedEffectTextEffects"]) {
-    for (const [index, effect] of (card[key] || []).entries()) {
-      const issue = renderNestedRepeatableFieldsIssue(effect, `${label} ${key}[${index}]`);
-      if (issue) return issue;
-    }
-  }
-  const powerIssue = renderPowerCostIssue(card.power || [], `${label} power`);
-  if (powerIssue) return powerIssue;
-  if (card.additionalCost != null) {
-    if (typeof card.additionalCost !== "object" || Array.isArray(card.additionalCost)) return `${label} additionalCost is invalid.`;
-    const additionalCostIssue = renderNestedRepeatableFieldsIssue(card.additionalCost, `${label} additionalCost`);
-    if (additionalCostIssue) return additionalCostIssue;
-  }
-  for (const [index, attachment] of (card.attachments || []).entries()) {
-    const issue = renderCardIssue(attachment, `${label} attachment[${index}]`);
-    if (issue) return issue;
-  }
-  return "";
-}
-
-function renderCardListIssue(list, label) {
-  if (!Array.isArray(list)) return `${label} is unavailable.`;
-  for (const [index, card] of list.entries()) {
-    const issue = renderCardIssue(card, `${label}[${index}]`);
-    if (issue) return issue;
-  }
-  return "";
-}
-
-function renderContinuationIssue(continuation, label, depth = 0) {
-  if (continuation == null) return "";
-  if (!continuation || typeof continuation !== "object" || Array.isArray(continuation)
-    || typeof continuation.kind !== "string" || !continuation.kind) return `${label} is invalid.`;
-  if (depth > 8) return `${label} nesting is invalid.`;
-  if (continuation.kind === "triggerContinuationSequence" || continuation.continuations != null) {
-    if (!Array.isArray(continuation.continuations)) return `${label} continuations are invalid.`;
-    for (const [index, nested] of continuation.continuations.entries()) {
-      const issue = renderContinuationIssue(nested, `${label} continuations[${index}]`, depth + 1);
-      if (issue) return issue;
-    }
-  }
-  return "";
-}
-
-function renderTriggerIssue(trigger, label, playerIds) {
-  if (!trigger || typeof trigger !== "object" || Array.isArray(trigger)) return `${label} is invalid.`;
-  if (!playerIds.has(trigger.playerId)) return `${label} player is invalid.`;
-  if (typeof trigger.kind !== "string" || !trigger.kind) return `${label} kind is invalid.`;
-  for (const key of ["id", "sourceCardId"]) {
-    if (trigger[key] != null && (typeof trigger[key] !== "string" || !trigger[key])) return `${label} ${key} is invalid.`;
-  }
-  if (trigger.sourceCardSnapshot != null) {
-    const sourceIssue = renderCardIssue(trigger.sourceCardSnapshot, `${label} sourceCardSnapshot`);
-    if (sourceIssue) return sourceIssue;
-  }
-  const triggerIssue = renderTargetCarrierIssue(trigger, label);
-  if (triggerIssue) return triggerIssue;
-  const dataIssue = renderTargetCarrierIssue(trigger.data, `${label} data`);
-  if (dataIssue) return dataIssue;
-  const nestedIssue = renderNestedRepeatableFieldsIssue(trigger.data, `${label} data`);
-  if (nestedIssue) return nestedIssue;
-  return "";
-}
-
-function renderTriggerBatchIssue(batch, label, playerIds) {
-  if (!batch || typeof batch !== "object" || Array.isArray(batch) || !Array.isArray(batch.triggers)) return `${label} is invalid.`;
-  if (batch.mode != null && !["queue", "showdownChain", "actionChain"].includes(batch.mode)) return `${label} mode is invalid.`;
-  for (const [index, trigger] of batch.triggers.entries()) {
-    const issue = renderTriggerIssue(trigger, `${label} triggers[${index}]`, playerIds);
-    if (issue) return issue;
-  }
-  return renderContinuationIssue(batch.continuation, `${label} continuation`);
-}
-
-function renderPendingAsyncStateIssue(pending, label, playerIds) {
-  if (pending.effectSequenceContinuation != null) {
-    const continuation = pending.effectSequenceContinuation;
-    if (!continuation || typeof continuation !== "object" || Array.isArray(continuation)
-      || !playerIds.has(continuation.playerId)
-      || typeof continuation.finishSpell !== "boolean") return `${label} effectSequenceContinuation is invalid.`;
-    const cardIssue = renderCardIssue(continuation.card, `${label} effectSequenceContinuation card`);
-    if (cardIssue) return cardIssue;
-    const specsIssue = renderObjectListIssue(continuation.specs, `${label} effectSequenceContinuation specs`);
-    if (specsIssue) return specsIssue;
-    for (const [index, spec] of continuation.specs.entries()) {
-      const nestedIssue = renderNestedRepeatableFieldsIssue(spec, `${label} effectSequenceContinuation specs[${index}]`);
-      if (nestedIssue) return nestedIssue;
-    }
-  }
-  if (pending.gameEffectResolution != null) {
-    const resolution = pending.gameEffectResolution;
-    const context = resolution?.context;
-    if (!resolution || typeof resolution !== "object" || Array.isArray(resolution)
-      || !context || typeof context !== "object" || Array.isArray(context)
-      || ![null, "action", "showdown"].includes(context.chainKind)
-      || typeof context.finalized !== "boolean"
-      || !Array.isArray(context.pendingTriggerBatches)) return `${label} gameEffectResolution is invalid.`;
-    for (const [index, batch] of context.pendingTriggerBatches.entries()) {
-      const issue = renderTriggerBatchIssue(batch, `${label} gameEffectResolution pendingTriggerBatches[${index}]`, playerIds);
-      if (issue) return issue;
-    }
-  }
-  return "";
-}
-
-const DIVINE_JUDGMENT_DATA_CATEGORIES = ["units", "gear", "runes", "hand"];
-
-function renderDivineJudgmentDataIssue(choice, label, playerIds) {
-  if (!["divineJudgmentKeep", "divineJudgmentRuneOrder"].includes(choice.effect)) return "";
-  const data = choice.data;
-  if (!data || typeof data !== "object" || Array.isArray(data)) return `${label} Divine Judgment data is invalid.`;
-  const seatIssue = renderStringListIssue(data.playerIds, `${label} Divine Judgment playerIds`);
-  if (seatIssue) return seatIssue;
-  if (data.playerIds.length !== playerIds.size
-    || new Set(data.playerIds).size !== playerIds.size
-    || data.playerIds.some((playerId) => !playerIds.has(playerId))) {
-    return `${label} Divine Judgment playerIds are invalid.`;
-  }
-  if (!Number.isInteger(data.playerIndex) || data.playerIndex < 0 || data.playerIndex > data.playerIds.length) {
-    return `${label} Divine Judgment playerIndex is invalid.`;
-  }
-  if (!Number.isInteger(data.categoryIndex)
-    || data.categoryIndex < 0
-    || data.categoryIndex >= DIVINE_JUDGMENT_DATA_CATEGORIES.length) {
-    return `${label} Divine Judgment categoryIndex is invalid.`;
-  }
-  if (typeof data.finishSpell !== "boolean" || typeof data.fromShowdownChain !== "boolean") {
-    return `${label} Divine Judgment continuation flags are invalid.`;
-  }
-  const selectedIssue = renderStringListIssue(data.selectedIds, `${label} Divine Judgment selectedIds`);
-  if (selectedIssue) return selectedIssue;
-  if (!data.kept || typeof data.kept !== "object" || Array.isArray(data.kept)) {
-    return `${label} Divine Judgment kept state is invalid.`;
-  }
-  for (const [playerId, kept] of Object.entries(data.kept)) {
-    if (!playerIds.has(playerId) || !kept || typeof kept !== "object" || Array.isArray(kept)) {
-      return `${label} Divine Judgment kept state for ${playerId} is invalid.`;
-    }
-    for (const category of DIVINE_JUDGMENT_DATA_CATEGORIES) {
-      if (kept[category] == null) continue;
-      const issue = renderStringListIssue(kept[category], `${label} Divine Judgment kept ${playerId} ${category}`);
-      if (issue) return issue;
-    }
-  }
-  if (choice.effect === "divineJudgmentKeep") {
-    if (data.playerIndex >= data.playerIds.length || data.playerIds[data.playerIndex] !== choice.playerId) {
-      return `${label} Divine Judgment keep player is invalid.`;
-    }
-    return "";
-  }
-  if (!Number.isInteger(data.runeOrderPlayerIndex)
-    || data.runeOrderPlayerIndex < 0
-    || data.runeOrderPlayerIndex >= data.playerIds.length
-    || data.playerIds[data.runeOrderPlayerIndex] !== choice.playerId) {
-    return `${label} Divine Judgment Rune order player is invalid.`;
-  }
-  const orderIssue = renderStringListIssue(data.selectedRuneOrderIds, `${label} Divine Judgment selectedRuneOrderIds`);
-  if (orderIssue) return orderIssue;
-  if (!data.runeRecycleOrder || typeof data.runeRecycleOrder !== "object" || Array.isArray(data.runeRecycleOrder)) {
-    return `${label} Divine Judgment runeRecycleOrder is invalid.`;
-  }
-  for (const [playerId, runeIds] of Object.entries(data.runeRecycleOrder)) {
-    if (!playerIds.has(playerId)) return `${label} Divine Judgment runeRecycleOrder player is invalid.`;
-    const issue = renderStringListIssue(runeIds, `${label} Divine Judgment runeRecycleOrder ${playerId}`);
-    if (issue) return issue;
-  }
-  return "";
-}
-
-function renderChainStateIssue(state, label, playerIds) {
-  if (state == null) return "";
-  if (typeof state !== "object" || Array.isArray(state) || !Array.isArray(state.chain)) return `${label} is invalid.`;
-  for (const key of ["playerId", "priorityPlayerId", "turnPlayerId", "attackerId", "defenderId", "focusPlayerId"]) {
-    if (state[key] != null && !playerIds.has(state[key])) return `${label} ${key} is invalid.`;
-  }
-  const continuationIssue = renderContinuationIssue(state.continuation, `${label} continuation`);
-  if (continuationIssue) return continuationIssue;
-  const itemIds = new Set();
-  for (const [index, item] of state.chain.entries()) {
-    if (!item || typeof item !== "object" || Array.isArray(item)) return `${label} item ${index} is invalid.`;
-    if (typeof item.id !== "string" || !item.id) return `${label} item ${index} id is invalid.`;
-    if (itemIds.has(item.id)) return `${label} item ${index} duplicates an item id.`;
-    itemIds.add(item.id);
-    if (!playerIds.has(item.playerId)) return `${label} item ${index} player is invalid.`;
-    if (!['card', 'activated', 'trigger'].includes(item.itemType)) return `${label} item ${index} type is invalid.`;
-    if (!['pending', 'finalized'].includes(item.status)) return `${label} item ${index} status is invalid.`;
-    const cardIssue = renderCardIssue(item.card, `${label} item ${index} card`);
-    if (cardIssue) return cardIssue;
-    const itemIssue = renderTargetCarrierIssue(item, `${label} item ${index}`);
-    if (itemIssue) return itemIssue;
-    const dataIssue = renderTargetCarrierIssue(item.data, `${label} item ${index} data`);
-    if (dataIssue) return dataIssue;
-    const optionsIssue = renderTargetCarrierIssue(item.playOptions, `${label} item ${index} playOptions`);
-    if (optionsIssue) return optionsIssue;
-    // Older saved/replay chain records did not persist the default destination.
-    // It is optional for rendering, but any supplied value still has to be safe.
-    if (item.itemType === "card" && item.destination != null
-      && (typeof item.destination !== "string" || !item.destination)) {
-      return `${label} item ${index} destination is invalid.`;
-    }
-    if (item.itemType === "trigger" && item.trigger == null) return `${label} item ${index} trigger is unavailable.`;
-    if (item.trigger != null) {
-      const triggerIssue = renderTriggerIssue(item.trigger, `${label} item ${index} trigger`, playerIds);
-      if (triggerIssue) return triggerIssue;
-      if (item.itemType === "trigger" && item.trigger.playerId !== item.playerId) return `${label} item ${index} trigger player is inconsistent.`;
-    }
-    if (item.itemType === "activated" && item.specs == null) return `${label} item ${index} specs are unavailable.`;
-    if (item.specs != null) {
-      const specsIssue = renderObjectListIssue(item.specs, `${label} item ${index} specs`);
-      if (specsIssue) return specsIssue;
-      for (const [specIndex, spec] of item.specs.entries()) {
-        const nestedIssue = renderNestedRepeatableFieldsIssue(spec, `${label} item ${index} specs[${specIndex}]`);
-        if (nestedIssue) return nestedIssue;
-      }
-    }
-  }
-  return "";
-}
-
-function renderChoiceOptionIssue(option, label, playerIds) {
-  if (!option || typeof option !== "object" || Array.isArray(option)
-    || typeof option.id !== "string" || !option.id) return `${label} is invalid.`;
-  if (option.label != null && typeof option.label !== "string") return `${label} label is invalid.`;
-  for (const key of ["cardId", "destinationId", "destination"]) {
-    if (option[key] != null && (typeof option[key] !== "string" || !option[key])) return `${label} ${key} is invalid.`;
-  }
-  if (option.cardIds != null) {
-    const idsIssue = renderStringListIssue(option.cardIds, `${label} cardIds`);
-    if (idsIssue) return idsIssue;
-  }
-  if (option.playerId != null && !playerIds.has(option.playerId)) return `${label} player is invalid.`;
-  if (option.disabled != null && typeof option.disabled !== "boolean") return `${label} disabled state is invalid.`;
-  if (option.amount != null && (!Number.isFinite(option.amount) || option.amount < 0)) return `${label} amount is invalid.`;
-  if (option.card != null) {
-    const cardIssue = renderCardIssue(option.card, `${label} card`);
-    if (cardIssue) return cardIssue;
-  }
-  return "";
-}
-
-function renderChoiceStateIssue(choice, label, playerIds, battlefieldIds, depth = 0) {
-  if (!choice || typeof choice !== "object" || Array.isArray(choice)) return `${label} is invalid.`;
-  if (depth > 2) return `${label} nesting is invalid.`;
-  if (!Array.isArray(choice.options)) return `${label} options are unavailable.`;
-  if (!playerIds.has(choice.playerId)) return `${label} player is invalid.`;
-  if (typeof choice.effect !== "string" || !choice.effect) return `${label} effect is invalid.`;
-  if (choice.id != null && (typeof choice.id !== "string" || !choice.id)) return `${label} id is invalid.`;
-  if (choice.optional != null && typeof choice.optional !== "boolean") return `${label} optional state is invalid.`;
-  const optionIds = new Set();
-  for (const [index, option] of choice.options.entries()) {
-    const optionIssue = renderChoiceOptionIssue(option, `${label} option ${index}`, playerIds);
-    if (optionIssue) return optionIssue;
-    if (optionIds.has(option.id)) return `${label} option ${index} duplicates an option id.`;
-    optionIds.add(option.id);
-  }
-  if (choice.optional !== true && !choice.options.some((option) => !option.disabled)) return `${label} has no enabled option.`;
-  const pseudoCardAllowed = ["stagedEvent", "triggerOrder"].includes(choice.effect);
-  if (!choice.card || typeof choice.card !== "object" || Array.isArray(choice.card)
-    || typeof choice.card.name !== "string" || !choice.card.name) return `${label} card is unavailable.`;
-  if (!pseudoCardAllowed || choice.card.instanceId != null) {
-    const cardIssue = renderCardIssue(choice.card, `${label} card`);
-    if (cardIssue) return cardIssue;
-  }
-  const asyncIssue = renderPendingAsyncStateIssue(choice, label, playerIds);
-  if (asyncIssue) return asyncIssue;
-  return renderChoiceDataIssue(choice, label, playerIds, battlefieldIds, depth);
-}
-
-function renderChoiceDataIssue(choice, label, playerIds, battlefieldIds, depth = 0) {
-  const data = choice.data;
-  if (data != null && (typeof data !== "object" || Array.isArray(data))) return `${label} data is invalid.`;
-  if (!data) {
-    if (["triggerOrder", "combatDamage", "acknowledgeReveal", "payDeflect", "divineJudgmentKeep", "divineJudgmentRuneOrder"].includes(choice.effect)) return `${label} data is unavailable.`;
-    return "";
-  }
-  const divineJudgmentIssue = renderDivineJudgmentDataIssue(choice, label, playerIds);
-  if (divineJudgmentIssue) return divineJudgmentIssue;
-  if (choice.effect === "combatDamage" && !Array.isArray(data.targetInfos)) return `${label} targetInfos are unavailable.`;
-  if (choice.effect === "acknowledgeReveal" && !Array.isArray(data.revealedCards)) return `${label} revealedCards are unavailable.`;
-  if (data.revealedCards != null) {
-    const issue = renderCardListIssue(data.revealedCards, `${label} revealedCards`);
-    if (issue) return issue;
-  }
-  for (const key of ["targetInfos", "allocations", "declaredTargets", "declaredChoices"]) {
-    if (data[key] == null) continue;
-    const issue = renderObjectListIssue(data[key], `${label} ${key}`);
-    if (issue) return issue;
-  }
-  for (const key of ["remainingTriggers", "triggers", "selectedCards", "declarationSteps", "copySourceKeywords"]) {
-    if (data[key] == null) continue;
-    const issue = renderObjectListIssue(data[key], `${label} ${key}`);
-    if (issue) return issue;
-    for (const [index, item] of data[key].entries()) {
-      const carrierIssue = renderTargetCarrierIssue(item, `${label} ${key}[${index}]`);
-      if (carrierIssue) return carrierIssue;
-      const nestedIssue = renderNestedRepeatableFieldsIssue(item, `${label} ${key}[${index}]`);
-      if (nestedIssue) return nestedIssue;
-    }
-  }
-  for (const key of ["remainingTriggers", "triggers"]) {
-    for (const [index, trigger] of (data[key] || []).entries()) {
-      const issue = renderTriggerIssue(trigger, `${label} ${key}[${index}]`, playerIds);
-      if (issue) return issue;
-    }
-  }
-  for (const key of [
-    "selectedRuneIds", "targetIds", "chosenIds", "allowedIds", "selectedIds", "keptIds",
-    "remainingPlayerIds", "selectedForCurrentStep", "deflectTargetIds", "movedIds",
-    "selectedRuneOrderIds", "discardedIds", "recycleIds", "revealedIds", "orderedKeepIds",
-    "recycledIds", "playerIds"
-  ]) {
-    if (data[key] == null) continue;
-    const issue = renderStringListIssue(data[key], `${label} ${key}`);
-    if (issue) return issue;
-  }
-  for (const playerId of [...(data.playerIds || []), ...(data.remainingPlayerIds || [])]) {
-    if (!playerIds.has(playerId)) return `${label} player list is invalid.`;
-  }
-  if (data.deflectPowerCost != null) {
-    const issue = renderPowerCostIssue(data.deflectPowerCost, `${label} deflectPowerCost`);
-    if (issue) return issue;
-  }
-  const state = data.triggerOrderState;
-  if (state != null || choice.effect === "triggerOrder") {
-    if (!state || typeof state !== "object" || Array.isArray(state) || !Array.isArray(state.groups)) return `${label} triggerOrderState is invalid.`;
-    const stateContinuationIssue = renderContinuationIssue(state.continuation, `${label} triggerOrderState continuation`);
-    if (stateContinuationIssue) return stateContinuationIssue;
-    if (!Number.isInteger(state.groupIndex) || state.groupIndex < 0 || state.groupIndex >= state.groups.length) return `${label} triggerOrderState groupIndex is invalid.`;
-    for (const [index, group] of state.groups.entries()) {
-      if (!group || typeof group !== "object" || Array.isArray(group)) return `${label} trigger group ${index} is invalid.`;
-      for (const key of ["triggers", "orderedTriggers"]) {
-        const issue = renderObjectListIssue(group[key], `${label} trigger group ${index} ${key}`);
-        if (issue) return issue;
-        for (const [triggerIndex, trigger] of group[key].entries()) {
-          const triggerIssue = renderTriggerIssue(trigger, `${label} trigger group ${index} ${key}[${triggerIndex}]`, playerIds);
-          if (triggerIssue) return triggerIssue;
-        }
-      }
-      if (!playerIds.has(group.playerId)) return `${label} trigger group ${index} player is invalid.`;
-    }
-  }
-  if (choice.effect === "combatDamage") {
-    if (!battlefieldIds.has(data.battlefieldId)) return `${label} battlefield is invalid.`;
-    for (const key of ["attackerId", "defenderId", "assigningPlayerId", "targetPlayerId"]) {
-      if (!playerIds.has(data[key])) return `${label} ${key} is invalid.`;
-    }
-    if (!["attacker", "defender"].includes(data.role)) return `${label} combat role is invalid.`;
-    for (const key of ["attackerTotal", "defenderTotal"]) {
-      if (!Number.isFinite(data[key]) || data[key] < 0) return `${label} ${key} is invalid.`;
-    }
-    if (!Number.isFinite(data.remaining) || data.remaining <= 0) return `${label} remaining damage is invalid.`;
-    const assignmentsIssue = renderObjectListIssue(data.assignments, `${label} assignments`);
-    if (assignmentsIssue) return assignmentsIssue;
-    for (const [index, assignment] of data.assignments.entries()) {
-      if (typeof assignment.targetId !== "string" || !assignment.targetId
-        || !Number.isFinite(assignment.amount) || assignment.amount <= 0
-        || !playerIds.has(assignment.assigningPlayerId)
-        || !["attacker", "defender"].includes(assignment.role)) return `${label} assignments[${index}] is invalid.`;
-    }
-    for (const [index, info] of (data.targetInfos || []).entries()) {
-      if (typeof info.cardId !== "string" || !info.cardId) return `${label} targetInfos[${index}] cardId is invalid.`;
-    }
-  }
-  if (choice.effect === "payDeflect") {
-    if (typeof data.targetId !== "string" || !data.targetId) return `${label} Deflect target is invalid.`;
-    if (!Number.isFinite(data.amount) || data.amount <= 0) return `${label} Deflect amount is invalid.`;
-    const selectedIssue = renderStringListIssue(data.selectedRuneIds, `${label} selectedRuneIds`);
-    if (selectedIssue) return selectedIssue;
-    const originalChoiceIssue = renderChoiceStateIssue(
-      data.originalChoice,
-      `${label} original choice`,
-      playerIds,
-      battlefieldIds,
-      depth + 1
-    );
-    if (originalChoiceIssue) return originalChoiceIssue;
-    const originalOptionIssue = renderChoiceOptionIssue(data.originalOption, `${label} original option`, playerIds);
-    if (originalOptionIssue) return originalOptionIssue;
-  }
-  const continuationIssue = renderContinuationIssue(data.continuation, `${label} continuation`);
-  if (continuationIssue) return continuationIssue;
-  return "";
-}
-
-function renderPaymentIssue(payment, playerIds) {
-  if (!payment || typeof payment !== "object" || Array.isArray(payment)) return "Payment state is invalid.";
-  if (!playerIds.has(payment.playerId)) return "Payment player is invalid.";
-  for (const key of ["cardId", "cardName", "source"]) {
-    if (typeof payment[key] !== "string" || !payment[key]) return `Payment ${key} is invalid.`;
-  }
-  if (payment.destination != null && (typeof payment.destination !== "string" || !payment.destination)) return "Payment destination is invalid.";
-  const asyncIssue = renderPendingAsyncStateIssue(payment, "Payment", playerIds);
-  if (asyncIssue) return asyncIssue;
-  for (const key of ["energyCost", "xpCost", "recycleTrashCost", "discardCost"]) {
-    if (payment[key] != null && (!Number.isFinite(payment[key]) || payment[key] < 0)) return `Payment ${key} is invalid.`;
-  }
-  const requiredLists = [
-    "basePowerCost", "powerCost", "energyRuneIds", "powerRuneIds", "poolEnergyIds", "poolPowerIds",
-    "optionalPowerEffects", "declaredTargets", "declaredChoices", "deflectTargetIds"
-  ];
-  for (const key of requiredLists) {
-    if (!Array.isArray(payment[key])) return `Payment ${key} is unavailable.`;
-  }
-  for (const key of ["declaredTargetIdentities", "recycleTrashCardIds", "discardCardIds"]) {
-    if (payment[key] != null && !Array.isArray(payment[key])) return `Payment ${key} is invalid.`;
-  }
-  for (const key of ["energyRuneIds", "powerRuneIds", "poolEnergyIds", "poolPowerIds", "deflectTargetIds", "recycleTrashCardIds", "discardCardIds"]) {
-    if (payment[key] == null) continue;
-    const issue = renderStringListIssue(payment[key], `Payment ${key}`);
-    if (issue) return issue;
-  }
-  const carrierIssue = renderTargetCarrierIssue(payment, "Payment");
-  if (carrierIssue) return carrierIssue;
-  const basePowerIssue = renderPowerCostIssue(payment.basePowerCost, "Payment basePowerCost");
-  if (basePowerIssue) return basePowerIssue;
-  const powerIssue = renderPowerCostIssue(payment.powerCost, "Payment powerCost");
-  if (powerIssue) return powerIssue;
-  for (const [index, effect] of payment.optionalPowerEffects.entries()) {
-    if (!effect || typeof effect !== "object" || Array.isArray(effect) || typeof effect.id !== "string" || !effect.id) return `Payment optionalPowerEffects[${index}] is invalid.`;
-    const requirementsIssue = renderPowerCostIssue(effect.requirements || [], `Payment optionalPowerEffects[${index}] requirements`);
-    if (requirementsIssue) return requirementsIssue;
-    const nestedIssue = renderNestedRepeatableFieldsIssue(effect, `Payment optionalPowerEffects[${index}]`);
-    if (nestedIssue) return nestedIssue;
-  }
-  if (payment.costContext != null) {
-    const context = payment.costContext;
-    if (typeof context !== "object" || Array.isArray(context)) return "Payment costContext is invalid.";
-    const additionalPowerIssue = renderPowerCostIssue(context.additionalPower || [], "Payment costContext additionalPower");
-    if (additionalPowerIssue) return additionalPowerIssue;
-    if (context.replacementPowerCost != null) {
-      const replacementIssue = renderPowerCostIssue(context.replacementPowerCost, "Payment costContext replacementPowerCost");
-      if (replacementIssue) return replacementIssue;
-    }
-    if (context.replacementEnergyCost != null
-      && (!Number.isFinite(context.replacementEnergyCost) || context.replacementEnergyCost < 0)) return "Payment costContext replacementEnergyCost is invalid.";
-    const contextCarrierIssue = renderTargetCarrierIssue(context, "Payment costContext");
-    if (contextCarrierIssue) return contextCarrierIssue;
-  }
-  if (payment.playProcess != null) {
-    const process = payment.playProcess;
-    if (!process || typeof process !== "object" || Array.isArray(process)
-      || typeof process.chainItemId !== "string" || !process.chainItemId) return "Payment playProcess is invalid.";
-    const cardIssue = renderCardIssue(process.card, "Payment playProcess card");
-    if (cardIssue) return cardIssue;
-  }
-  if (payment.source === "activatedAbility" || payment.activatedAbility != null) {
-    const state = payment.activatedAbility;
-    if (!state || typeof state !== "object" || Array.isArray(state)) return "Payment activatedAbility is invalid.";
-    const sourceIssue = renderCardIssue(state.sourceCard, "Payment activatedAbility sourceCard");
-    if (sourceIssue) return sourceIssue;
-    const specsIssue = renderObjectListIssue(state.specs, "Payment activatedAbility specs");
-    if (specsIssue) return specsIssue;
-    for (const [index, spec] of state.specs.entries()) {
-      const nestedIssue = renderNestedRepeatableFieldsIssue(spec, `Payment activatedAbility specs[${index}]`);
-      if (nestedIssue) return nestedIssue;
-    }
-  }
-  if (payment.source === "triggeredAbility" || payment.triggeredAbility != null) {
-    const state = payment.triggeredAbility;
-    if (!state || typeof state !== "object" || Array.isArray(state)) return "Payment triggeredAbility is invalid.";
-    const sourceIssue = renderCardIssue(state.sourceCard, "Payment triggeredAbility sourceCard");
-    if (sourceIssue) return sourceIssue;
-    const triggerIssue = renderTriggerIssue(state.trigger, "Payment triggeredAbility trigger", playerIds);
-    if (triggerIssue) return triggerIssue;
-    if (!Array.isArray(state.triggers)) return "Payment triggeredAbility triggers are invalid.";
-    for (const [index, trigger] of state.triggers.entries()) {
-      const issue = renderTriggerIssue(trigger, `Payment triggeredAbility triggers[${index}]`, playerIds);
-      if (issue) return issue;
-    }
-    if (!state.descriptor || typeof state.descriptor !== "object" || Array.isArray(state.descriptor)) return "Payment triggeredAbility descriptor is invalid.";
-    const descriptorIssue = renderNestedRepeatableFieldsIssue(state.descriptor, "Payment triggeredAbility descriptor");
-    if (descriptorIssue) return descriptorIssue;
-    if (!["queue", "showdownChain", "actionChain"].includes(state.mode)) return "Payment triggeredAbility mode is invalid.";
-    const continuationIssue = renderContinuationIssue(state.continuation, "Payment triggeredAbility continuation");
-    if (continuationIssue) return continuationIssue;
-  }
-  if (payment.source === "effectEnergy" || payment.effectPayment != null) {
-    const state = payment.effectPayment;
-    if (!state || typeof state !== "object" || Array.isArray(state)
-      || !["playUnitTokenOptionalReady", "repeatSpell", "showdownPredictDrawSpell", "counterUnlessPayDecision"].includes(state.kind)) {
-      return "Payment effectPayment is invalid.";
-    }
-    const sourceIssue = renderCardIssue(state.sourceCard, "Payment effectPayment sourceCard");
-    if (sourceIssue) return sourceIssue;
-    if (state.sourcePlayerId != null && !playerIds.has(state.sourcePlayerId)) return "Payment effectPayment source player is invalid.";
-    if (state.kind === "repeatSpell") {
-      if (!state.repeatSpec || typeof state.repeatSpec !== "object" || Array.isArray(state.repeatSpec)
-        || typeof state.repeatSpec.kind !== "string" || !state.repeatSpec.kind) {
-        return "Payment repeatSpell repeatSpec is invalid.";
-      }
-      const repeatSpecIssue = renderNestedRepeatableFieldsIssue(state.repeatSpec, "Payment repeatSpell repeatSpec");
-      if (repeatSpecIssue) return repeatSpecIssue;
-    }
-  }
-  if (payment.source === "effectPlay" || payment.effectPlay != null) {
-    const state = payment.effectPlay;
-    if (!state || typeof state !== "object" || Array.isArray(state)
-      || typeof state.chainItemId !== "string" || !state.chainItemId) return "Payment effectPlay is invalid.";
-    const cardIssue = renderCardIssue(state.card, "Payment effectPlay card");
-    if (cardIssue) return cardIssue;
-  }
-  if (payment.source === "weaponmaster" || payment.weaponmaster != null) {
-    const state = payment.weaponmaster;
-    if (!state || typeof state !== "object" || Array.isArray(state)
-      || typeof state.gearId !== "string" || !state.gearId) return "Payment weaponmaster is invalid.";
-  }
-  return "";
-}
-
-function gameUiRenderIssue(candidate) {
-  if (!candidate || typeof candidate !== "object") return "Game state is missing.";
-  if (!Array.isArray(candidate.players) || candidate.players.length !== 2) return "Exactly two player seats are required.";
-  if (!Array.isArray(candidate.battlefields)) return "Battlefield state is unavailable.";
-  for (const key of [
-    "operations", "lifecycleEvents", "ruleTaskTrace", "cleanupRequestTrace", "attachmentEvents",
-    "empowerEvents", "damageEvents", "discardEvents", "exhaustEvents", "readyEvents", "banishEvents",
-    "revealEvents", "combatResultEvents", "killEvents", "healEvents", "moveEvents", "channelEvents",
-    "burnEvents", "drawEvents", "delayedAbilities", "damageKillFollowups",
-    "cleanupPendingTriggerBatches", "postCombatDamageTriggerBatches"
-  ]) {
-    if (candidate[key] != null && !Array.isArray(candidate[key])) return `${key} is invalid.`;
-  }
-  if (candidate.log != null && (!Array.isArray(candidate.log) || candidate.log.some((entry) => typeof entry !== "string"))) return "Game history is invalid.";
-  if (candidate.revealedIntel != null && !Array.isArray(candidate.revealedIntel)) return "Revealed intel is invalid.";
-  if (candidate.scoreEvents != null && !Array.isArray(candidate.scoreEvents)) return "Score events are invalid.";
-  if (candidate.effectFlash != null) {
-    if (typeof candidate.effectFlash !== "object" || Array.isArray(candidate.effectFlash)) return "Effect flash is invalid.";
-    if (candidate.effectFlash.sourceId != null
-      && (typeof candidate.effectFlash.sourceId !== "string" || !candidate.effectFlash.sourceId)) return "Effect flash source is invalid.";
-    if (candidate.effectFlash.message != null && typeof candidate.effectFlash.message !== "string") return "Effect flash message is invalid.";
-    if (candidate.effectFlash.stamp != null && !Number.isFinite(candidate.effectFlash.stamp)) return "Effect flash stamp is invalid.";
-    if (candidate.effectFlash.targetIds != null) {
-      const issue = renderStringListIssue(candidate.effectFlash.targetIds, "Effect flash targets");
-      if (issue) return issue;
-    }
-  }
-  const requiredPlayerLists = ["mainDeck", "runeDeck", "hand", "base", "runes", "trash", "availableChampions", "availableBattlefields"];
-  const authoritativeCardIds = new Set();
-  for (const player of candidate.players) {
-    if (!player || typeof player !== "object" || Array.isArray(player) || typeof player.id !== "string" || !player.id) return "A player seat is invalid.";
-    for (const key of requiredPlayerLists) {
-      const issue = renderCardListIssue(player[key], `${player.id} ${key}`);
-      if (issue) return issue;
-      for (const [index, card] of player[key].entries()) {
-        const idIssue = collectAuthoritativeCardIds(card, `${player.id} ${key}[${index}]`, authoritativeCardIds);
-        if (idIssue) return idIssue;
-      }
-    }
-    for (const key of ["banished"]) {
-      if (player[key] == null) continue;
-      const issue = renderCardListIssue(player[key], `${player.id} ${key}`);
-      if (issue) return issue;
-      for (const [index, card] of player[key].entries()) {
-        const idIssue = collectAuthoritativeCardIds(card, `${player.id} ${key}[${index}]`, authoritativeCardIds);
-        if (idIssue) return idIssue;
-      }
-    }
-    if (player.runePool != null) {
-      if (typeof player.runePool !== "object" || Array.isArray(player.runePool)) return `${player.id} Rune pool is invalid.`;
-      const energy = player.runePool.energy;
-      if (energy != null && !Array.isArray(energy)
-        && !(Number.isInteger(energy) && energy >= 0 && energy <= 1000)) return `${player.id} Rune pool energy is invalid.`;
-      if (Array.isArray(energy)) {
-        const energyIds = new Set();
-        for (const [index, resource] of energy.entries()) {
-          if (!resource || typeof resource !== "object" || Array.isArray(resource) || typeof resource.id !== "string" || !resource.id) return `${player.id} Rune pool energy[${index}] is invalid.`;
-          if (energyIds.has(resource.id)) return `${player.id} Rune pool energy[${index}] duplicates a resource id.`;
-          energyIds.add(resource.id);
-          if (resource.domains != null) {
-            const issue = renderStringListIssue(resource.domains, `${player.id} Rune pool energy[${index}] domains`);
-            if (issue) return issue;
-          }
-        }
-      }
-      if (player.runePool.power != null && !Array.isArray(player.runePool.power)) return `${player.id} Rune pool power is invalid.`;
-      if (Array.isArray(player.runePool.power)) {
-        const powerIds = new Set();
-        for (const [index, resource] of player.runePool.power.entries()) {
-          if (typeof resource === "string" && resource) continue;
-          if (!resource || typeof resource !== "object" || Array.isArray(resource)
-            || typeof resource.id !== "string" || !resource.id
-            || typeof resource.domain !== "string" || !resource.domain) return `${player.id} Rune pool power[${index}] is invalid.`;
-          if (resource.instanceId != null && (typeof resource.instanceId !== "string" || !resource.instanceId)) return `${player.id} Rune pool power[${index}] instanceId is invalid.`;
-          if (powerIds.has(resource.id)) return `${player.id} Rune pool power[${index}] duplicates a resource id.`;
-          powerIds.add(resource.id);
-        }
-      }
-    }
-    for (const [key, card] of [["legend", player.legend], ["champion", player.champion]]) {
-      if (!card) continue;
-      const issue = renderCardIssue(card, `${player.id} ${key}`);
-      if (issue) return issue;
-      if (key === "legend" || card.zone === "champion") {
-        const idIssue = collectAuthoritativeCardIds(card, `${player.id} ${key}`, authoritativeCardIds);
-        if (idIssue) return idIssue;
-      }
-    }
-  }
-  const playerIds = new Set(candidate.players.map((player) => player.id));
-  if (playerIds.size !== candidate.players.length) return "Player seat identifiers must be unique.";
-  if (!playerIds.has("p1") || !playerIds.has("p2")) return "Player seats must be p1 and p2.";
-  for (const [index, intel] of (candidate.revealedIntel || []).entries()) {
-    if (!intel || typeof intel !== "object" || Array.isArray(intel)
-      || !playerIds.has(intel.viewerId) || !playerIds.has(intel.ownerId)
-      || !Number.isInteger(intel.expiresAtTurnSequence) || intel.expiresAtTurnSequence < 0
-      || (intel.sourceCardId != null && (typeof intel.sourceCardId !== "string" || !intel.sourceCardId))
-      || (intel.sourceName != null && typeof intel.sourceName !== "string")) return `Revealed intel ${index} is invalid.`;
-  }
-  if (!Array.isArray(candidate.turnOrder)
-    || candidate.turnOrder.length !== candidate.players.length
-    || new Set(candidate.turnOrder).size !== candidate.players.length
-    || candidate.turnOrder.some((playerId) => !playerIds.has(playerId))) {
-    return "Turn order is invalid.";
-  }
-  if (!playerIds.has(candidate.currentPlayerId)) return "Current player is invalid.";
-  for (const key of ["firstPlayerId", "turnPlayerId", "surrenderedPlayerId", "authoritativeActorId"]) {
-    if (candidate[key] != null && !playerIds.has(candidate[key])) return `${key} is invalid.`;
-  }
-  if (candidate.phase === "complete" && !playerIds.has(candidate.winnerId)) return "Winner is invalid.";
-  if (candidate.aiDeclinedIntents != null) {
-    const declined = candidate.aiDeclinedIntents;
-    if (!declined || typeof declined !== "object" || Array.isArray(declined)
-      || !Number.isInteger(declined.turnSequence)
-      || !Array.isArray(declined.keys)
-      || declined.keys.some((key) => typeof key !== "string" || !key)) {
-      return "AI declined intents are invalid.";
-    }
-  }
-  if (["mulligan", "action", "showdown"].includes(candidate.phase)
-    && !candidate.tutorial
-    && candidate.battlefields.length < 2) {
-    return "At least two active battlefields are required.";
-  }
-  const battlefieldIds = new Set();
-  for (const field of candidate.battlefields) {
-    const fieldIssue = renderCardIssue(field, "Battlefield");
-    if (fieldIssue) return fieldIssue;
-    const fieldIdIssue = collectAuthoritativeCardIds(field, `Battlefield ${field.instanceId}`, authoritativeCardIds);
-    if (fieldIdIssue) return fieldIdIssue;
-    if (battlefieldIds.has(field.instanceId)) return "Battlefield identifiers must be unique.";
-    battlefieldIds.add(field.instanceId);
-    if (field.controlledBy != null && !playerIds.has(field.controlledBy)) return `${field.instanceId} controller is invalid.`;
-    const unitIssue = renderCardListIssue(field.units, `${field.instanceId} units`);
-    if (unitIssue) return unitIssue;
-    for (const [index, unit] of field.units.entries()) {
-      const idIssue = collectAuthoritativeCardIds(unit, `${field.instanceId} units[${index}]`, authoritativeCardIds);
-      if (idIssue) return idIssue;
-    }
-    if (field.units.some((unit) => !playerIds.has(unit.controllerId))) return `${field.instanceId} has a unit with an invalid controller.`;
-    if (!Array.isArray(field.hidden)) return `${field.instanceId} hidden zone is invalid.`;
-    for (const [index, item] of (field.hidden || []).entries()) {
-      if (!item || typeof item !== "object") return `${field.instanceId} hidden[${index}] is invalid.`;
-      const issue = renderCardIssue(item.card, `${field.instanceId} hidden[${index}]`);
-      if (issue) return issue;
-      const idIssue = collectAuthoritativeCardIds(item.card, `${field.instanceId} hidden[${index}]`, authoritativeCardIds);
-      if (idIssue) return idIssue;
-      if (!playerIds.has(hiddenCardControllerId(item))) return `${field.instanceId} hidden[${index}] has an invalid controller.`;
-    }
-  }
-  if (candidate.stagedEvents != null && !Array.isArray(candidate.stagedEvents)) return "Staged events are invalid.";
-  for (const [index, event] of (candidate.stagedEvents || []).entries()) {
-    if (!event || typeof event !== "object" || Array.isArray(event)
-      || typeof event.id !== "string" || !event.id
-      || typeof event.type !== "string" || !event.type
-      || !battlefieldIds.has(event.battlefieldId)
-      || !playerIds.has(event.attackerId)
-      || (event.defenderId != null && !playerIds.has(event.defenderId))) {
-      return `Staged event ${index} is invalid.`;
-    }
-  }
-  if (candidate.actionChain && candidate.showdown) return "Action and showdown chains cannot coexist.";
-  if (candidate.actionChain && !["action", "complete"].includes(candidate.phase)) return "Action chain phase is invalid.";
-  if (candidate.showdown && !["showdown", "complete"].includes(candidate.phase)) return "Showdown phase is invalid.";
-  if (candidate.phase === "showdown" && !candidate.showdown) return "Showdown state is unavailable.";
-  const actionChainIssue = renderChainStateIssue(candidate.actionChain, "Action chain", playerIds);
-  if (actionChainIssue) return actionChainIssue;
-  if (candidate.actionChain) {
-    if (!playerIds.has(candidate.actionChain.priorityPlayerId) || !playerIds.has(candidate.actionChain.turnPlayerId)) return "Action chain players are invalid.";
-    if (!Array.isArray(candidate.actionChain.playerIds)
-      || candidate.actionChain.playerIds.length !== candidate.players.length
-      || new Set(candidate.actionChain.playerIds).size !== candidate.players.length
-      || candidate.actionChain.playerIds.some((playerId) => !playerIds.has(playerId))) {
-      return "Action chain seats are invalid.";
-    }
-  }
-  const showdownIssue = renderChainStateIssue(candidate.showdown, "Showdown chain", playerIds);
-  if (showdownIssue) return showdownIssue;
-  if (candidate.showdown) {
-    if (!battlefieldIds.has(candidate.showdown.battlefieldId)) return "Showdown battlefield is invalid.";
-    for (const key of ["attackerId", "defenderId", "priorityPlayerId", "focusPlayerId", "turnPlayerId"]) {
-      if (!playerIds.has(candidate.showdown[key])) return `Showdown ${key} is invalid.`;
-    }
-  }
-  if (candidate.triggerQueue != null) {
-    if (!Array.isArray(candidate.triggerQueue)) return "Trigger queue is invalid.";
-    for (const [index, trigger] of candidate.triggerQueue.entries()) {
-      const issue = renderTriggerIssue(trigger, `Trigger queue[${index}]`, playerIds);
-      if (issue) return issue;
-    }
-  }
-  const queueContinuationIssue = renderContinuationIssue(candidate.triggerQueueContinuation, "Trigger queue continuation");
-  if (queueContinuationIssue) return queueContinuationIssue;
-  if (candidate.deferredTriggerContinuations != null) {
-    if (!Array.isArray(candidate.deferredTriggerContinuations)) return "Deferred trigger continuations are invalid.";
-    for (const [index, continuation] of candidate.deferredTriggerContinuations.entries()) {
-      const issue = renderContinuationIssue(continuation, `Deferred trigger continuations[${index}]`);
-      if (issue) return issue;
-    }
-  }
-  if (candidate.phase === "first-player") {
-    const decision = candidate.firstPlayerDecision;
-    if (!decision || typeof decision !== "object" || Array.isArray(decision)) return "Play-order decision is invalid.";
-    if (!["roll", "designated", "preset"].includes(decision.method)) return "Play-order method is invalid.";
-    if (decision.method === "roll") {
-      if (!decision.rolls || typeof decision.rolls !== "object" || Array.isArray(decision.rolls)
-        || [...playerIds].some((playerId) => !Object.prototype.hasOwnProperty.call(decision.rolls, playerId))) {
-        return "Play-order rolls are invalid.";
-      }
-      for (const playerId of playerIds) {
-        const roll = decision.rolls[playerId];
-        if (roll != null && (!Number.isInteger(roll) || roll < 1 || roll > 6)) return "A play-order roll is invalid.";
-      }
-      if (decision.status === "rolling" && !playerIds.has(decision.rollerId)) return "Play-order roller is invalid.";
-      if (decision.status === "choosing" && (!playerIds.has(decision.chooserId) || !playerIds.has(decision.winnerId))) return "Play-order chooser is invalid.";
-      if (!["rolling", "choosing"].includes(decision.status)) return "Play-order status is invalid.";
-    } else if (decision.method === "designated") {
-      if (decision.status !== "choosing"
-        || !playerIds.has(decision.chooserId)
-        || decision.winnerId !== decision.chooserId
-        || candidate.firstPlayerId != null) return "Designated play-order chooser is invalid.";
-    } else if (decision.status !== "ready" || !playerIds.has(candidate.firstPlayerId)) {
-      return "Preset first player is invalid.";
-    }
-    if (candidate.players.some((player) => !player.legend)) return "First-player legends are unavailable.";
-    if (candidate.officialMatchSetup) {
-      if (candidate.players.some((player) => !player.champion)) return "First-player champions are unavailable.";
-      if (candidate.battlefields.length < 2) return "First-player Battlefields are unavailable.";
-      if (candidate.players.some((player) => player.hand.length !== 0)) return "Opening hands were drawn before play order was chosen.";
-    }
-  }
-  if (candidate.phase === "champion-select") {
-    if (!playerIds.has(candidate.championSelectPlayerId)) return "Champion selector is invalid.";
-    if (candidate.players.some((player) => !player.legend)) return "Champion-select legends are unavailable.";
-    if (candidate.players.some((player) => !Array.isArray(player.availableChampions))) return "Champion choices are unavailable.";
-  }
-  if (candidate.phase === "battlefield-select") {
-    if (!playerIds.has(candidate.setupPlayerId)) return "Battlefield selector is invalid.";
-    if (candidate.players.some((player) => !player.legend || !player.champion)) return "Battlefield-select identities are unavailable.";
-    if (candidate.players.some((player) => !Array.isArray(player.availableBattlefields))) return "Battlefield choices are unavailable.";
-  }
-  if (candidate.phase === "mulligan") {
-    if (!candidate.mulligan || !playerIds.has(candidate.mulligan.playerId)) return "Mulligan player is invalid.";
-    if (candidate.mulligan.selectedCardIds != null && !Array.isArray(candidate.mulligan.selectedCardIds)) return "Mulligan selection is invalid.";
-  }
-  if (candidate.pendingPayment != null && candidate.pendingChoice != null) return "Choice and payment states cannot coexist.";
-  if (candidate.pendingPayment != null) {
-    const currentPaymentIssue = renderPaymentIssue(candidate.pendingPayment, playerIds);
-    const resumeLegality = candidate.pendingPayment
-      && typeof candidate.pendingPayment === "object"
-      && !Array.isArray(candidate.pendingPayment)
-      ? paymentResumeLegality(candidate, candidate.pendingPayment)
-      : { ok: true };
-    const paymentIssue = currentPaymentIssue || (resumeLegality.ok ? "" : resumeLegality.message);
-    const canRenderRecoveryPayment = candidate.pendingPayment
-      && typeof candidate.pendingPayment === "object"
-      && !Array.isArray(candidate.pendingPayment)
-      && (!playerIds.has(candidate.pendingPayment.playerId)
-        || (!currentPaymentIssue && !resumeLegality.ok));
-    if (paymentIssue && !canRenderRecoveryPayment) return paymentIssue;
-  }
-  if (candidate.pendingChoice != null) {
-    const choiceIssue = renderChoiceStateIssue(candidate.pendingChoice, "Choice", playerIds, battlefieldIds);
-    if (choiceIssue) return choiceIssue;
-  }
-  return "";
-}
-
-function unavailableGameView(issue) {
-  const korean = locale() === LOCALES.KO;
-  return `
-    <main class="layout tabletop-layout phase-unavailable">
-      <section class="tabletop-state-unavailable" role="status" aria-live="polite">
-        <span>${korean ? "게임 상태 동기화" : "Game state sync"}</span>
-        <h1>${korean ? "화면에 필요한 상태를 기다리고 있습니다" : "Waiting for a complete game state"}</h1>
-        <p>${escapeHtml(issue)}</p>
-        <div class="actions inline">
-          ${replayMode ? `<button data-action="replay-exit">${korean ? "리플레이 목록" : "Replay list"}</button>` : ""}
-          <button data-action="return-menu">${korean ? "메인 메뉴" : "Main menu"}</button>
-        </div>
-      </section>
-    </main>
-  `;
 }
 
 function renderApp() {
@@ -1958,12 +458,6 @@ function renderApp() {
     restoreScrollState(scrollState);
     return;
   }
-  const renderIssue = gameUiRenderIssue(game);
-  if (renderIssue) {
-    app.innerHTML = unavailableGameView(renderIssue);
-    restoreScrollState(scrollState);
-    return;
-  }
   if (lastInteractionPhase && lastInteractionPhase !== game.phase) {
     game.selectedCardId = null;
     onlineSelectedCardId = null;
@@ -1975,30 +469,13 @@ function renderApp() {
   lastInteractionPhase = game.phase;
   const nextViewerPlayerId = viewerPlayerId();
   if (lastViewerPlayerId && lastViewerPlayerId !== nextViewerPlayerId) {
-    clearViewerTransientPresentation();
     game.selectedCardId = null;
     onlineSelectedCardId = null;
     handOpen = false;
     attachmentsOpenCardId = null;
-    inspectorPreviewCard = null;
-    inspectedChainItemId = null;
-    inspectedChainTargetIds.clear();
     moveSelection.clear();
   }
   lastViewerPlayerId = nextViewerPlayerId;
-  sanitizeViewerUiState();
-  const pendingChoiceVisible = !replayMode && decisionVisibleToViewer(game.pendingChoice, nextViewerPlayerId);
-  syncStagedChoiceUi(pendingChoiceVisible ? game.pendingChoice : null);
-  const blockingDecisionVisible = !replayMode && (
-    decisionVisibleToViewer(game.pendingPayment, nextViewerPlayerId)
-    || pendingChoiceVisible
-  );
-  const chainDecisionVisible = Boolean(
-    pendingChoiceVisible && pendingChoiceSharesChainSurface(game.pendingChoice)
-  );
-  // Standalone choices own the interaction surface. A choice that belongs to
-  // the live Chain must still allow its source/target card to remain readable.
-  if (pendingChoiceVisible && !chainDecisionVisible) closeTabletopSheets("inspector");
   const player = viewerPlayer();
   if (viewerCanAct()) uiLegalActions = enumerateLegalActions(game, nextViewerPlayerId);
   pruneMoveSelection();
@@ -2006,18 +483,10 @@ function renderApp() {
   if (uiMotion.feedback) rememberRealtimeFeedback(uiMotion.feedback);
   const presentationUpdate = updateGamePresentation();
   const interaction = interactionStatus();
-  const utilitySheetOpen = Boolean(graveyardOpenPlayerId || banishedOpenPlayerId || intelOpenPlayerId || logOpen);
-  const inspectorCard = inspectedCard();
-  const inspectorVisible = Boolean(
-    inspectorOpen
-    && inspectorCard
-    && (!pendingChoiceVisible || chainDecisionVisible)
-    && !utilitySheetOpen
-  );
   window.__riftboundGame = game;
   window.__riftboundRender = render;
   app.innerHTML = `
-    <header class="topbar tabletop-topbar">
+    <header class="topbar">
       <div class="titlebox status-${interaction.tone}" aria-live="polite">
         <p class="status-kicker">${interaction.label}</p>
         <h1>${interaction.title}</h1>
@@ -2035,19 +504,16 @@ function renderApp() {
              <button class="secondary" data-action="new-game" title="${t("newGame", locale())}">${t("newGame", locale())}</button>`}
       </div>
     </header>
-    <main class="layout tabletop-layout phase-${game.phase} ${isTutorialGame() ? "tutorial-active" : ""} ${inspectorVisible ? "inspector-open" : ""} ${decisionVisibleToViewer(game.pendingPayment, nextViewerPlayerId) ? "payment-active" : ""} ${activeImpact ? `impact-active impact-${activeImpact.kind}` : ""} ${staticImpactPreview ? "preview-impact" : ""}">
+    <main class="layout phase-${game.phase} ${isTutorialGame() ? "tutorial-active" : ""} ${inspectorOpen ? "inspector-open" : ""} ${activeImpact ? `impact-active impact-${activeImpact.kind}` : ""} ${staticImpactPreview ? "preview-impact" : ""}">
       ${game.phase === "first-player" ? firstPlayerPanel() : game.phase === "champion-select" ? championSelectPanel() : game.phase === "battlefield-select" ? setupPanel() : game.phase === "mulligan" ? mulliganPanel() : gamePanel(player)}
-      <div class="tabletop-overlay-root">
-        ${["first-player", "champion-select", "battlefield-select", "mulligan"].includes(game.phase) ? "" : gameFloatingPanels()}
-        ${tutorialPanel()}
-        ${cinematicImpactOverlay()}
-        ${inspectorVisible && !["first-player", "champion-select", "mulligan"].includes(game.phase) ? inspector(inspectorCard) : ""}
-        ${pendingGameExit ? gameExitConfirmModal() : ""}
-        ${isTutorialGame() ? "" : gameResultModal()}
-        ${fullCardOpen ? fullCardModal(fullCardPreviewCard || inspectorCard) : ""}
-        ${!blockingDecisionVisible && logOpen ? logDrawer() : ""}
-        ${replayMode ? replayPlaybackControls() : ""}
-      </div>
+      ${tutorialPanel()}
+      ${cinematicImpactOverlay()}
+      ${["first-player", "champion-select", "mulligan"].includes(game.phase) ? "" : inspector(uiSelectedCard())}
+      ${pendingGameExit ? gameExitConfirmModal() : ""}
+      ${isTutorialGame() ? "" : gameResultModal()}
+      ${fullCardOpen ? fullCardModal(fullCardPreviewCard || uiSelectedCard()) : ""}
+      ${logOpen ? logDrawer() : ""}
+      ${replayMode ? replayPlaybackControls() : ""}
     </main>
   `;
   applyTutorialTargets();
@@ -2542,8 +1008,6 @@ async function openAiSpectatorReplay(id) {
   try {
     const result = await fetchAiSpectatorReplay(id);
     if (!Array.isArray(result.replay?.frames) || !result.replay.frames.length) throw new Error("Replay has no frames.");
-    const invalidFrameIndex = result.replay.frames.findIndex((frame) => replayFrameRenderIssue(frame));
-    if (invalidFrameIndex >= 0) throw new Error(`Replay frame ${invalidFrameIndex} is invalid: ${replayFrameRenderIssue(result.replay.frames[invalidFrameIndex])}`);
     clearOnlineSeat();
     aiMode = false;
     aiReplay = null;
@@ -2568,15 +1032,8 @@ async function openAiSpectatorReplay(id) {
   }
 }
 
-function replayFrameRenderIssue(frame) {
-  if (!frame || typeof frame !== "object" || Array.isArray(frame)) return "Frame is missing.";
-  if (!frame.game || typeof frame.game !== "object" || Array.isArray(frame.game)) return "Game state is missing.";
-  return gameUiRenderIssue(frame.game);
-}
-
 function leaveReplayBrowser() {
   pauseReplayPlayback();
-  clearViewerTransientPresentation();
   replayMode = false;
   replayBrowser.current = null;
   appView = "menu";
@@ -2584,7 +1041,6 @@ function leaveReplayBrowser() {
 
 function exitReplayToList() {
   pauseReplayPlayback();
-  clearViewerTransientPresentation();
   replayMode = false;
   replayBrowser.current = null;
   appView = "replays";
@@ -2627,7 +1083,7 @@ function replayActionDescription(frame) {
   const actorName = actor ? playerName(actor) : (frame.actorId || "AI");
   const action = frame.action;
   const cardId = action.cardId || action.unitId || action.sourceCardId;
-  const card = cardVisibleToCurrentViewer(cardId) ? findVisibleCard(cardId) : null;
+  const card = findVisibleCard(cardId);
   const target = card ? cardName(card) : "";
   const koreanLabels = {
     confirmFirstPlayer: "선공 확정", rollFirstPlayer: "선공 주사위", chooseFirstPlayer: "선공 선택",
@@ -2654,7 +1110,6 @@ function replayActionDescription(frame) {
 function handleReplayGameClick(event) {
   const button = event.target.closest("button");
   const action = button?.dataset.action;
-  if (action === "return-menu") return leaveReplayBrowser();
   if (action === "replay-exit") return exitReplayToList();
   if (action === "replay-first") { pauseReplayPlayback(); return applyReplayFrame(0); }
   if (action === "replay-prev") { pauseReplayPlayback(); return applyReplayFrame(replayBrowser.frameIndex - 1); }
@@ -2672,25 +1127,14 @@ function handleReplayGameClick(event) {
     game.selectedCardId = null;
     return;
   }
-  if (action === "toggle-log") { toggleTabletopSheet("log"); return; }
+  if (action === "toggle-log") { logOpen = !logOpen; return; }
   if (action === "toggle-hand") { handOpen = !handOpen; return; }
-  if (action === "toggle-inspector") { toggleTabletopSheet("inspector"); return; }
-  if (action === "toggle-graveyard") { toggleTabletopSheet("graveyard", button.dataset.player); return; }
-  if (action === "toggle-banished") { toggleTabletopSheet("banished", button.dataset.player); return; }
-  if (action === "toggle-intel") { toggleTabletopSheet("intel", button.dataset.player); return; }
+  if (action === "toggle-graveyard") { graveyardOpenPlayerId = graveyardOpenPlayerId === button.dataset.player ? null : button.dataset.player; return; }
+  if (action === "toggle-banished") { banishedOpenPlayerId = banishedOpenPlayerId === button.dataset.player ? null : button.dataset.player; return; }
   if (action === "close-graveyard") { graveyardOpenPlayerId = null; return; }
   if (action === "close-banished") { banishedOpenPlayerId = null; return; }
-  if (action === "close-intel") { intelOpenPlayerId = null; return; }
   if (action === "close-full-card") { fullCardOpen = false; fullCardPreviewCard = null; return; }
-  if (action === "view-full-card") { fullCardPreviewCard = inspectedCard(); fullCardOpen = Boolean(fullCardPreviewCard); return; }
-  if (action === "view-chain-card") { fullCardPreviewCard = chainPreviewCard(button.dataset.cardId); fullCardOpen = Boolean(fullCardPreviewCard); return; }
-  if (action === "toggle-attachments") { attachmentsOpenCardId = attachmentsOpenCardId === button.dataset.card ? null : button.dataset.card; return; }
-  if (action === "toggle-chain-zone") { chainZoneCollapsed = !chainZoneCollapsed; return; }
-  if (action === "inspect-chain-effect") {
-    toggleInspectedChainItem(button.dataset.chainItemId);
-    return;
-  }
-  if (action === "focus-chain-target") { focusChainTarget(button.dataset.cardId); return; }
+  if (action === "view-full-card") { fullCardPreviewCard = uiSelectedCard(); fullCardOpen = Boolean(fullCardPreviewCard); return; }
   const cardNode = event.target.closest("[data-card-id]");
   if (cardNode) setUiSelectedCard(cardNode.dataset.cardId);
 }
@@ -2699,29 +1143,20 @@ function applyReplayFrame(requestedIndex) {
   const frames = replayBrowser.current?.frames || [];
   if (!frames.length) return;
   const previousIndex = replayBrowser.frameIndex;
-  const numericIndex = Number(requestedIndex);
-  const index = Math.max(0, Math.min(frames.length - 1, Number.isFinite(numericIndex) ? Math.trunc(numericIndex) : 0));
-  const frameIssue = replayFrameRenderIssue(frames[index]);
-  if (frameIssue) {
-    pauseReplayPlayback();
-    replayBrowser.error = locale() === LOCALES.KO
-      ? `리플레이 프레임을 표시할 수 없습니다: ${frameIssue}`
-      : `Could not display replay frame: ${frameIssue}`;
-    replayMode = false;
-    appView = "replays";
-    return;
-  }
-  const continuousForwardStep = index === previousIndex + 1;
-  if (!continuousForwardStep) clearViewerTransientPresentation();
+  const index = Math.max(0, Math.min(frames.length - 1, Math.trunc(requestedIndex)));
   replayBrowser.frameIndex = index;
   game = structuredClone(frames[index].game);
   game.selectedCardId = null;
   fullCardOpen = false;
   fullCardPreviewCard = null;
-  inspectorPreviewCard = null;
   attachmentsOpenCardId = null;
   graveyardOpenPlayerId = null;
   banishedOpenPlayerId = null;
+  if (index <= previousIndex) {
+    previousUiSnapshot = null;
+    clearEffectAnimations();
+    resetPresentationState(presentationState);
+  }
 }
 
 function scheduleReplayPlayback() {
@@ -2731,15 +1166,11 @@ function scheduleReplayPlayback() {
     replayBrowser.playing = false;
     return;
   }
-  const drawCount = uiMotion.transfers.filter((transfer) => transfer?.kind === "draw").length;
-  const motionFloor = uiMotion.transfers.length
-    ? TABLETOP_TRANSFER_DURATION_MS + Math.max(0, drawCount - 1) * TABLETOP_DRAW_STAGGER_MS + 180
-    : 0;
   replayBrowser.timer = window.setTimeout(() => {
     replayBrowser.timer = null;
     applyReplayFrame(replayBrowser.frameIndex + 1);
     render();
-  }, Math.max(180, 1200 / replayBrowser.speed, motionFloor));
+  }, Math.max(180, 1200 / replayBrowser.speed));
 }
 
 function pauseReplayPlayback() {
@@ -3740,8 +2171,6 @@ function saveOnlineSeat() {
 
 function clearOnlineSeat() {
   closeOnlineEvents();
-  if (deferredOnlineRenderTimer) clearTimeout(deferredOnlineRenderTimer);
-  deferredOnlineRenderTimer = null;
   onlineSelectedCardId = null;
   online.mode = "offline";
   online.roomId = "";
@@ -3860,8 +2289,7 @@ function connectOnlineEvents() {
       saveOnlineSeat();
       if (snapshot.game) {
         game = snapshot.game;
-        onlineSnapshotRevision += 1;
-        if (!gameUiRenderIssue(game)) restoreOnlineSelection(selectedBeforeSnapshot);
+        restoreOnlineSelection(selectedBeforeSnapshot);
         appView = "game";
       }
       online.error = "";
@@ -3895,36 +2323,14 @@ function restoreOnlineSelection(preferredCardId) {
   }
 }
 
-function setUiSelectedCard(cardId, { openInspector = true } = {}) {
+function setUiSelectedCard(cardId) {
   actionRejection = null;
   const before = game.selectedCardId;
   selectCard(game, cardId);
   if (game.selectedCardId !== before || game.selectedCardId === cardId) {
-    inspectorPreviewCard = null;
-    inspectedChainItemId = null;
-    inspectedChainTargetIds.clear();
     if (isOnlineGame()) onlineSelectedCardId = game.selectedCardId;
-    if (openInspector && game.selectedCardId === cardId) {
-      inspectorOpen = true;
-      closeTabletopSheets("inspector");
-    }
+    inspectorOpen = true;
   }
-}
-
-function toggleUiSelectedCard(cardId) {
-  const utilityOpen = Boolean(graveyardOpenPlayerId || banishedOpenPlayerId || intelOpenPlayerId || logOpen);
-  if (cardId && game.selectedCardId === cardId && inspectorOpen && !utilityOpen) {
-    game.selectedCardId = null;
-    onlineSelectedCardId = null;
-    inspectorOpen = false;
-    inspectorPreviewCard = null;
-    inspectedChainItemId = null;
-    inspectedChainTargetIds.clear();
-    attachmentsOpenCardId = null;
-    actionRejection = null;
-    return;
-  }
-  setUiSelectedCard(cardId, { openInspector: true });
 }
 
 function isStaleRoomError(message) {
@@ -4114,7 +2520,7 @@ function filteredDeckCards() {
   return ALL_CARDS.filter((card) => {
     if (!cardAllowedInPool(card, deckEditor.poolId)) return false;
     if (deckEditor.packId !== "all" && packForCard(card)?.id !== deckEditor.packId) return false;
-    if (deckEditor.type !== "all" && !cardHasType(card, deckEditor.type)) return false;
+    if (deckEditor.type !== "all" && card.type !== deckEditor.type) return false;
     if (deckEditor.domain !== "all" && !(card.domains || []).includes(deckEditor.domain)) return false;
     if (deckEditor.maxEnergy !== "all" && Number(card.energy ?? 0) > Number(deckEditor.maxEnergy)) return false;
     return !query || cardSearchText(card, locale()).toLowerCase().includes(query);
@@ -4152,13 +2558,8 @@ function registeredNameCount(deck, name) {
   ), 0);
 }
 
-function uiCardEffects(card) {
-  if (!Array.isArray(card?.effects)) return [];
-  return card.effects.filter((effect) => effect && typeof effect === "object");
-}
-
 function cardAllowsUnlimitedCopies(card) {
-  return uiCardEffects(card).some((effect) => effect.timing === "static" && effect.kind === "unlimitedDeckCopies");
+  return Boolean(card?.effects?.some((effect) => effect?.timing === "static" && effect.kind === "unlimitedDeckCopies"));
 }
 
 function runeDeckCount(deck) {
@@ -4271,26 +2672,23 @@ function resetGameUiState() {
   intelOpenPlayerId = null;
   fullCardOpen = false;
   fullCardPreviewCard = null;
-  inspectorPreviewCard = null;
   attachmentsOpenCardId = null;
   inspectorOpen = false;
-  stagedChoiceKey = null;
-  stagedChoiceOptionId = null;
-  choiceDrawerCollapsed = false;
-  draggingCardSession = null;
-  pointerCardDrag = null;
-  cardDragRenderPending = false;
-  pointerRuneScroll = null;
-  suppressCardClickUntil = 0;
-  suppressRuneClickUntil = 0;
   pendingGameExit = null;
   lastViewerPlayerId = null;
   lastInteractionPhase = null;
   paymentRunesScrollLeft = 0;
   handScrollLeft = 0;
-  clearViewerTransientPresentation();
+  previousUiSnapshot = null;
+  clearEffectAnimations();
+  resetPresentationState(presentationState);
+  activeImpact = null;
   resultRevealReady = true;
   resultDismissed = false;
+  if (impactDismissTimer) clearTimeout(impactDismissTimer);
+  impactDismissTimer = null;
+  clearRealtimeFeedback();
+  actionRejection = null;
   moveSelection.clear();
 }
 
@@ -4314,6 +2712,7 @@ function recordLocalGameIfComplete() {
   sideboardDrafts = localMatch.currentDecks.map((deck) => structuredClone(deck));
   sideboardPlayerId = "p1";
   sideboardSelectedMain = null;
+  sideboardFirstPlayerId = localMatch.nextFirstPlayerId || null;
   resultDismissed = true;
 }
 
@@ -4327,10 +2726,8 @@ function sideboardingView() {
   const playerIndex = playerId === "p2" ? 1 : 0;
   const draft = isOnlineGame() ? online.match?.currentDeck : sideboardDrafts[playerIndex];
   const submitted = Boolean(match?.submissions?.[playerId]);
-  const sideboardingEnabled = isOnlineGame()
-    ? Boolean(online.room?.sideboardingEnabled)
-    : Boolean(match?.sideboardingEnabled);
-  const locked = !sideboardingEnabled;
+  const locked = match?.phase === "between-games" || match?.lastGameWasDraw;
+  const chooser = match?.firstPlayerChooserId === playerId;
   const wins = match?.wins || { p1: 0, p2: 0 };
   if (!draft) return `<main class="shell-screen sideboarding-screen"><p class="empty">${locale() === LOCALES.KO ? "사이드보드 정보를 기다리고 있습니다." : "Waiting for sideboard data."}</p></main>`;
   return `
@@ -4339,17 +2736,12 @@ function sideboardingView() {
         <header class="sideboarding-head">
           <div>
             <p class="eyebrow visible">${locale() === LOCALES.KO ? `게임 ${match.gameNumber} 종료` : `Game ${match.gameNumber} complete`}</p>
-            <h1>${locked ? (locale() === LOCALES.KO ? "다음 게임 준비" : "Prepare for the next game") : (locale() === LOCALES.KO ? "사이드보딩" : "Sideboarding")}</h1>
-            <p>${locked
-              ? (locale() === LOCALES.KO ? "등록한 덱 구성으로 다음 게임을 준비합니다." : "Prepare the next game with the registered deck configuration.")
-              : match?.lastGameWasDraw
-                ? (locale() === LOCALES.KO ? "이전 선후공은 유지되고 무승부 전장은 다시 선택할 수 있습니다. 주 덱과 사이드 카드를 같은 수만큼 교환해 주세요." : "The previous play order is retained and Battlefields from the drawn game remain available. Exchange the same number of Main Deck and Sideboard cards.")
-                : (locale() === LOCALES.KO ? "주 덱 카드와 사이드 카드를 같은 수만큼 교환해 주세요." : "Exchange the same number of Main Deck and Sideboard cards.")}</p>
+            <h1>${locked ? (locale() === LOCALES.KO ? "무승부 후 다음 게임 준비" : "Prepare after a draw") : (locale() === LOCALES.KO ? "사이드보딩" : "Sideboarding")}</h1>
+            <p>${locked ? (locale() === LOCALES.KO ? "무승부였으므로 카드를 교체할 수 없고 직전 전장을 그대로 사용합니다." : "Cards cannot be exchanged after a draw, and both previous Battlefields are locked.") : (locale() === LOCALES.KO ? "주 덱 카드와 사이드 카드를 같은 수만큼 교환해 주세요." : "Exchange the same number of Main Deck and Sideboard cards.")}</p>
           </div>
           <div class="match-score"><strong>${locale() === LOCALES.KO ? "플레이어 1" : "P1"} ${wins.p1}</strong><span>:</span><strong>${wins.p2} ${locale() === LOCALES.KO ? "플레이어 2" : "P2"}</strong></div>
         </header>
         <div class="sideboarding-player-banner">${isOnlineGame() ? (locale() === LOCALES.KO ? "내 사이드보드" : "Your sideboard") : `${playerId.toUpperCase()} · ${locale() === LOCALES.KO ? "다른 플레이어는 화면을 보지 마세요" : "Other player, please look away"}`}</div>
-        ${match?.firstPlayerChooserId ? `<p class="deck-note">${locale() === LOCALES.KO ? "양쪽 전장을 비공개로 고른 뒤 동시에 공개하면, 직전 경기의 패자가 선후공을 선택합니다." : "After both private Battlefield choices are revealed together, the previous game's loser chooses the play order."}</p>` : ""}
         <div class="sideboarding-grid">
           <section class="sideboarding-column">
             <div class="deck-zone-title"><strong>${t("mainDeck", locale())}</strong><span>${mainDeckCount(draft)}/${DECK_RULES.tournamentMainExact}</span></div>
@@ -4362,9 +2754,10 @@ function sideboardingView() {
             <div class="sideboarding-card-list">${draft.sideboard.map(([number, count]) => sideboardCardRow(number, count, "sideboard", locked || submitted)).join("") || `<p class="empty">${locale() === LOCALES.KO ? "등록된 사이드 카드가 없습니다." : "No registered Sideboard cards."}</p>`}</div>
           </section>
         </div>
+        ${chooser ? `<fieldset class="first-player-choice" ${submitted ? "disabled" : ""}><legend>${locale() === LOCALES.KO ? "이전 게임 패자: 다음 게임의 선공 플레이어를 선택하세요." : "Previous game loser: choose who plays first."}</legend><label><input type="radio" name="next-first" value="p1" data-action="sideboard-first-player" ${sideboardFirstPlayerId === "p1" ? "checked" : ""}/> ${locale() === LOCALES.KO ? "플레이어 1" : "P1"}</label><label><input type="radio" name="next-first" value="p2" data-action="sideboard-first-player" ${sideboardFirstPlayerId === "p2" ? "checked" : ""}/> ${locale() === LOCALES.KO ? "플레이어 2" : "P2"}</label></fieldset>` : ""}
         <div class="sideboarding-actions">
           ${sideboardSelectedMain ? `<button class="secondary" data-action="sideboard-cancel-selection">${locale() === LOCALES.KO ? "선택 취소" : "Cancel selection"}</button>` : ""}
-          <button class="primary" data-action="sideboard-submit" ${submitted ? "disabled" : ""}>${submitted ? (locale() === LOCALES.KO ? "상대 준비 대기 중" : "Waiting for opponent") : (locale() === LOCALES.KO ? "구성 확정" : "Confirm configuration")}</button>
+          <button class="primary" data-action="sideboard-submit" ${submitted || (chooser && !sideboardFirstPlayerId) ? "disabled" : ""}>${submitted ? (locale() === LOCALES.KO ? "상대 준비 대기 중" : "Waiting for opponent") : (locale() === LOCALES.KO ? "구성 확정" : "Confirm configuration")}</button>
         </div>
       </section>
     </main>
@@ -4388,20 +2781,24 @@ function swapSideboardCard(draft, mainNumber, sideNumber) {
 }
 
 async function submitSideboardDraft() {
+  const match = activeBetweenGamesMatch();
   const playerId = isOnlineGame() ? online.playerId : sideboardPlayerId;
   const index = playerId === "p2" ? 1 : 0;
   const draft = isOnlineGame() ? online.match.currentDeck : sideboardDrafts[index];
+  const firstPlayerId = match.firstPlayerChooserId === playerId ? sideboardFirstPlayerId : null;
   if (isOnlineGame()) {
-    dispatchGameCommand({ kind: "submitSideboard", deckRecord: draft });
+    dispatchGameCommand({ kind: "submitSideboard", deckRecord: draft, firstPlayerId });
     return;
   }
-  const result = submitSideboardConfiguration(localMatch, playerId, draft, cardByNumber);
+  const result = submitSideboardConfiguration(localMatch, playerId, draft, cardByNumber, firstPlayerId);
   if (!result.ok) { recentFeedback = { tone: "error", message: result.message }; return; }
   if (aiMode && playerId === "p1") {
-    submitSideboardConfiguration(localMatch, "p2", sideboardDrafts[1], cardByNumber);
+    const aiFirst = localMatch.firstPlayerChooserId === "p2" ? "p2" : null;
+    submitSideboardConfiguration(localMatch, "p2", sideboardDrafts[1], cardByNumber, aiFirst);
   } else if (!localMatch.submissions.p2) {
     sideboardPlayerId = "p2";
     sideboardSelectedMain = null;
+    sideboardFirstPlayerId = localMatch.nextFirstPlayerId || null;
   }
   if (localMatch.phase === "ready-next-game") startNextLocalMatchGame();
 }
@@ -4411,9 +2808,8 @@ function startNextLocalMatchGame() {
   if (!next.ok) return;
   game = createGame({
     interactive: true,
-    randomFirstPlayer: !next.firstPlayerId && !next.firstPlayerChooserId,
+    randomFirstPlayer: !next.firstPlayerId,
     firstPlayerId: next.firstPlayerId,
-    firstPlayerChooserId: next.firstPlayerChooserId,
     lockedBattlefields: next.lockedBattlefields,
     unavailableBattlefields: next.unavailableBattlefields,
     format: localMatch.sideboardingEnabled ? "match" : "duel",
@@ -4623,7 +3019,6 @@ function dispatchGameCommand(command, applyLocal) {
   // on serialized data. Send the explicit UI command and let the server's
   // shared legal-action gate validate and canonicalize it.
   const resolvedCommand = command;
-  const snapshotRevisionAtDispatch = onlineSnapshotRevision;
   online.commandPending = { kind: command.kind, startedAt: Date.now() };
   render();
   sendOnlineCommand(online.roomId, online.playerToken, resolvedCommand)
@@ -4637,31 +3032,12 @@ function dispatchGameCommand(command, applyLocal) {
     })
     .finally(() => {
       online.commandPending = null;
-      if (onlineSnapshotRevision === snapshotRevisionAtDispatch) render();
-      else renderAfterTabletopFlights();
-    });
-}
-
-function renderAfterTabletopFlights() {
-  if (deferredOnlineRenderTimer) clearTimeout(deferredOnlineRenderTimer);
-  const deadline = Date.now() + 1800;
-  const finish = () => {
-    deferredOnlineRenderTimer = null;
-    const activeTabletopMotion = document.querySelector(".tabletop-card-flight-layer, .tabletop-state-motion");
-    if (!activeTabletopMotion || Date.now() >= deadline || appView !== "game") {
       render();
-      return;
-    }
-    deferredOnlineRenderTimer = setTimeout(finish, 32);
-  };
-  finish();
+    });
 }
 
 function resolveCurrentGameCommand(command) {
   if (["surrender", "restartGame", "submitSideboard"].includes(command?.kind)) return command;
-  if (command?.kind === "cancelPayment"
-    && game.pendingPayment
-    && !game.players.some((player) => player.id === game.pendingPayment.playerId)) return command;
   const actorId = aiActiveActorId(game);
   if (!actorId) return null;
   return resolveLegalAction(game, command, actorId);
@@ -4740,7 +3116,6 @@ function emptyMotion() {
     entered: new Set(),
     chained: new Set(),
     trashed: new Set(),
-    transfers: [],
     sourceIds: new Set(),
     targetIds: new Set(),
     sourceZones: new Set(),
@@ -4769,43 +3144,6 @@ function prepareUiMotion() {
   motion.entered = diffSet(current.board, previous.board);
   motion.chained = diffSet(current.chain, previous.chain);
   motion.trashed = diffSet(current.trash, previous.trash);
-  motion.transfers = buildTabletopTransfers(previous.cardZones, current.cardZones);
-  motion.transfers.push(...buildPrivateHandChainTransfers(
-    previous.cardZones,
-    current.cardZones,
-    previous.chainItems,
-    current.chainItems,
-    viewerPlayerId(),
-    motion.transfers
-  ));
-  motion.transfers.push(...buildPrivateHiddenChainTransfers(
-    previous.cardZones,
-    current.cardZones,
-    previous.chainItems,
-    current.chainItems,
-    viewerPlayerId(),
-    motion.transfers
-  ));
-  motion.transfers.push(...buildPrivateHandBoardTransfers(
-    previous.cardZones,
-    current.cardZones,
-    viewerPlayerId(),
-    motion.transfers
-  ));
-  motion.transfers.push(...buildPrivateDeckTransfers(
-    previous.cardZones,
-    current.cardZones,
-    viewerPlayerId(),
-    motion.transfers
-  ));
-  motion.transfers = buildBurnOutDrawTransfers(
-    motion.transfers,
-    previous.players,
-    current.players,
-    previous.cardZones,
-    current.cardZones
-  );
-  motion.transfers.sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
   motion.feedback = buildRealtimeFeedback(current, previous, motion);
   rememberEffectAnimations(detectEffectAnimations(previous, current));
 
@@ -4813,7 +3151,7 @@ function prepareUiMotion() {
 }
 
 function rememberEffectAnimations(events) {
-  const expiresAt = Date.now() + presentationMotionDuration(EFFECT_ANIMATION_DURATION_MS);
+  const expiresAt = Date.now() + EFFECT_ANIMATION_DURATION_MS;
   for (const event of events.draws) effectAnimations.draws.set(event.playerId, { ...event, expiresAt });
   for (const event of events.deaths) effectAnimations.deaths.set(event.id, { ...event, expiresAt });
   for (const event of events.mightChanges) effectAnimations.mightChanges.set(event.unitId, { ...event, expiresAt });
@@ -4865,8 +3203,7 @@ function uiSnapshot() {
     effectMessage: game.effectFlash?.message || "",
     players: new Map(game.players.map((player) => [player.id, {
       deckCount: player.mainDeck.length,
-      handIds: new Set(player.hand.map((card) => card.instanceId)),
-      burnOuts: Math.max(0, Number(player.burnOuts) || 0)
+      handIds: new Set(player.hand.map((card) => card.instanceId))
     }])),
     hand: new Set(game.players.flatMap((player) => player.hand.map((card) => card.instanceId))),
     board: new Set(boardUnits.keys()),
@@ -4913,7 +3250,6 @@ function visibleChainItems() {
 function chainItemSnapshot(item, index) {
   const card = item?.card || {};
   const targets = chainItemTargetIds(item);
-  const effectPlayOrigin = item.playOptions?.effectPlayOrigin;
   return {
     id: item.id || `${card.instanceId || "chain"}-${index}`,
     cardId: card.instanceId,
@@ -4922,87 +3258,28 @@ function chainItemSnapshot(item, index) {
     rawName: card.name || item.trigger?.label || "",
     sourceName: chainItemSourceTitle(item),
     type: item.itemType || "card",
-    sourceZone: item.playOptions?.playProcess?.source || effectPlayOrigin?.zone || "",
-    sourcePlayerId: effectPlayOrigin?.playerId || item.playerId || "",
-    order: index,
     status: item.status || "pending",
     targetIds: targets
   };
 }
 
-function motionCardZone(card, { playerId = "", zone = "", locationId = "", index = 0, faceVisible = true } = {}) {
-  if (!card?.instanceId) return null;
-  const visible = Boolean(faceVisible && !card.redacted);
-  return {
-    playerId: String(playerId || card.controllerId || card.ownerId || ""),
-    cardType: String(card.type || ""),
-    zone,
-    locationId: String(locationId || ""),
-    index: Number.isFinite(Number(index)) ? Number(index) : 0,
-    faceVisible: visible,
-    image: visible ? String(card.image || "") : "",
-    name: visible ? String(cardName(card) || "") : "",
-    exhausted: Boolean(card.exhausted)
-  };
-}
-
-function setMotionCardZone(zones, card, options) {
-  const location = motionCardZone(card, options);
-  if (location) zones.set(card.instanceId, location);
-}
-
-function setMotionAttachmentZones(zones, parent, playerId) {
-  for (const [index, attachment] of (parent?.attachments || []).entries()) {
-    setMotionCardZone(zones, attachment, {
-      playerId: attachment.controllerId || attachment.ownerId || playerId,
-      zone: "attachment",
-      locationId: parent.instanceId,
-      index
-    });
-    setMotionAttachmentZones(zones, attachment, attachment.controllerId || attachment.ownerId || playerId);
-  }
-}
-
 function cardZoneSnapshot() {
   const zones = new Map();
-  const viewerId = viewerPlayerId();
   for (const player of game.players) {
-    const handVisible = player.id === viewerId || canViewPrivateInfo(viewerId, player.id);
-    player.hand.forEach((card, index) => setMotionCardZone(zones, card, { playerId: player.id, zone: "hand", index, faceVisible: handVisible }));
-    player.base.forEach((card, index) => {
-      setMotionCardZone(zones, card, { playerId: player.id, zone: "base", locationId: "base", index });
-      setMotionAttachmentZones(zones, card, player.id);
-    });
-    player.runes.forEach((card, index) => setMotionCardZone(zones, card, { playerId: player.id, zone: "runes", index }));
-    player.trash.forEach((card, index) => setMotionCardZone(zones, card, { playerId: player.id, zone: "trash", index }));
-    (player.banished || []).forEach((card, index) => setMotionCardZone(zones, card, { playerId: player.id, zone: "banished", index }));
-    setMotionCardZone(zones, player.legend, { playerId: player.id, zone: "legend" });
-    if (player.champion?.zone === "champion") {
-      setMotionCardZone(zones, player.champion, { playerId: player.id, zone: "champion" });
-    }
-    player.mainDeck.forEach((card, index) => setMotionCardZone(zones, card, { playerId: player.id, zone: "mainDeck", index, faceVisible: false }));
-    player.runeDeck.forEach((card, index) => setMotionCardZone(zones, card, { playerId: player.id, zone: "runeDeck", index, faceVisible: false }));
+    for (const card of player.hand) zones.set(card.instanceId, { playerId: player.id, zone: "hand" });
+    for (const card of player.base) zones.set(card.instanceId, { playerId: player.id, zone: "base" });
+    for (const card of player.trash) zones.set(card.instanceId, { playerId: player.id, zone: "trash" });
+    for (const card of player.banished || []) zones.set(card.instanceId, { playerId: player.id, zone: "banished" });
+    if (player.legend) zones.set(player.legend.instanceId, { playerId: player.id, zone: "legend" });
+    if (player.champion) zones.set(player.champion.instanceId, { playerId: player.id, zone: "champion" });
+    for (const card of player.mainDeck) zones.set(card.instanceId, { playerId: player.id, zone: "mainDeck" });
+    for (const card of player.runeDeck) zones.set(card.instanceId, { playerId: player.id, zone: "runeDeck" });
   }
   for (const field of game.battlefields) {
-    setMotionCardZone(zones, field, { playerId: field.controlledBy, zone: "battlefield", locationId: field.instanceId });
-    field.units.forEach((card, index) => {
-      setMotionCardZone(zones, card, { playerId: card.controllerId, zone: "battlefield", locationId: field.instanceId, index });
-      setMotionAttachmentZones(zones, card, card.controllerId);
-    });
-    (field.hidden || []).forEach((item, index) => {
-      const controllerId = hiddenCardControllerId(item);
-      const visible = controllerId === viewerId || canViewPrivateInfo(viewerId, controllerId);
-      setMotionCardZone(zones, item?.card, { playerId: controllerId, zone: "hidden", locationId: field.instanceId, index, faceVisible: visible });
-    });
+    zones.set(field.instanceId, { playerId: field.controlledBy, zone: "battlefield" });
+    for (const card of field.units) zones.set(card.instanceId, { playerId: card.controllerId, zone: "battlefield" });
+    for (const item of field.hidden || []) zones.set(item.card.instanceId, { playerId: hiddenCardControllerId(item), zone: "hidden", battlefieldId: field.instanceId });
   }
-  const motionChain = game.actionChain?.chain || game.showdown?.chain || [];
-  motionChain.filter(Boolean).forEach((item, index) => setMotionCardZone(zones, item?.card, {
-    playerId: item?.playerId,
-    zone: "chain",
-    locationId: item?.id || `chain-${index}`,
-    index,
-    faceVisible: cardVisibleToCurrentViewer(item?.card)
-  }));
   return zones;
 }
 
@@ -5063,29 +3340,13 @@ function rememberRealtimeFeedback(feedback) {
     feedbackDismissTimer = null;
     recentFeedback = null;
     if (appView === "game") render();
-  }, presentationMotionDuration(1800));
+  }, 1800);
 }
 
 function clearRealtimeFeedback() {
   recentFeedback = null;
   if (feedbackDismissTimer) clearTimeout(feedbackDismissTimer);
   feedbackDismissTimer = null;
-}
-
-function clearViewerTransientPresentation() {
-  clearRealtimeFeedback();
-  clearEffectAnimations();
-  resetPresentationState(presentationState);
-  previousUiSnapshot = null;
-  uiMotion = emptyMotion();
-  activeImpact = null;
-  staticImpactPreview = false;
-  actionRejection = null;
-  chainTreePresentationItems = [];
-  if (impactDismissTimer) clearTimeout(impactDismissTimer);
-  impactDismissTimer = null;
-  for (const layer of document.querySelectorAll(".tabletop-card-flight-layer")) layer.remove();
-  clearTabletopStateMotions(document);
 }
 
 function chainFeedbackTitle(item, previousZone) {
@@ -5102,12 +3363,7 @@ function diffSet(current, previous) {
 
 function headline() {
   if (game.phase === "complete") return t("wins", locale(), { name: winnerName() });
-  if (game.phase === "first-player") {
-    const method = game.firstPlayerDecision?.method;
-    if (method === "roll") return t("firstPlayerRoll", locale());
-    if (method === "preset") return locale() === LOCALES.KO ? "선후공 확인" : "Confirm play order";
-    return locale() === LOCALES.KO ? "선후공 선택" : "Choose play order";
-  }
+  if (game.phase === "first-player") return t("firstPlayerRoll", locale());
   if (game.phase === "champion-select") {
     const championPlayer = game.players.find((player) => player.id === game.championSelectPlayerId);
     return `${playerName(championPlayer)}: ${t("chooseChampion", locale())}`;
@@ -5128,7 +3384,7 @@ function interactionStatus() {
   const actorId = activePlayerId();
   const actor = game.players.find((player) => player.id === actorId) || currentPlayer(game);
   const actorName = actor ? playerName(actor) : t("nobody", locale());
-  const mine = (!isOnlineGame() && !aiMode && !replayMode) || actorId === viewerPlayerId();
+  const mine = !isOnlineGame() || actorId === viewerPlayerId();
 
   if (game.phase === "complete") {
     return { tone: "complete", label: t("gameEnded", locale()), title: headline(), detail: t("reviewFinalState", locale()) };
@@ -5143,7 +3399,7 @@ function interactionStatus() {
   }
   if (game.pendingPayment) {
     const payment = game.pendingPayment;
-    const decisionVisible = decisionVisibleToViewer(payment);
+    const decisionVisible = pendingDecisionVisibleToViewer({ aiMode, viewerPlayerId: viewerPlayerId(), decision: payment });
     const player = game.players.find((candidate) => candidate.id === payment.playerId);
     const card = paymentDisplayCard(player, payment) || payment.effectPayment?.sourceCard;
     const needed = payment.energyCost ?? card?.energy ?? 0;
@@ -5161,7 +3417,7 @@ function interactionStatus() {
   }
   if (game.pendingChoice) {
     const choice = game.pendingChoice;
-    const decisionVisible = decisionVisibleToViewer(choice);
+    const decisionVisible = pendingDecisionVisibleToViewer({ aiMode, viewerPlayerId: viewerPlayerId(), decision: choice });
     const source = choice.card ? cardName(choice.card) : t("effect", locale());
     return {
       tone: mine ? "attention" : "waiting",
@@ -5208,11 +3464,7 @@ function interactionStatus() {
 }
 
 function turnLabel() {
-  if (game.phase === "first-player") {
-    return game.firstPlayerDecision?.method === "roll"
-      ? t("roll", locale())
-      : (locale() === LOCALES.KO ? "선후공" : "Play order");
-  }
+  if (game.phase === "first-player") return t("roll", locale());
   if (game.phase === "champion-select") return t("champion", locale());
   if (game.phase === "battlefield-select") return t("setup", locale());
   if (game.phase === "mulligan") return t("mulligan", locale());
@@ -5223,30 +3475,26 @@ function turnLabel() {
 function firstPlayerPanel() {
   const decision = game.firstPlayerDecision;
   if (decision?.method === "roll") return firstPlayerRollPanel(decision);
-  if (decision?.method === "designated") return designatedFirstPlayerPanel(decision);
   const first = game.players.find((player) => player.id === game.firstPlayerId);
   const second = game.players.find((player) => player.id !== game.firstPlayerId);
-  if (!first || !second) return privateFirstPlayerWaitingPanel(null);
   return `
     <section class="first-player-screen">
       <article class="first-player-card">
         <div class="section-head">
           <div>
             <h2>${t("firstPlayer", locale())}</h2>
-            <span>${game.officialMatchSetup
-              ? (locale() === LOCALES.KO ? "전장 공개 후 확정된 선후공입니다." : "This play order is confirmed after both Battlefields are revealed.")
-              : t("decidedBeforeSetup", locale())}</span>
+            <span>${t("decidedBeforeSetup", locale())}</span>
           </div>
         </div>
-        <div class="first-player-result setup-loadout-result">
-          <div class="first-seat first" data-player-id="${escapeHtml(first.id)}">
-            ${firstPlayerLoadout(first)}
+        <div class="first-player-result">
+          <div class="first-seat first">
+            ${imageCard(first.legend, "select-only")}
             <strong>${t("first", locale())}</strong>
             <span>${playerName(first)}</span>
           </div>
           <div class="versus">${locale() === LOCALES.KO ? "대" : "VS"}</div>
-          <div class="first-seat second" data-player-id="${escapeHtml(second.id)}">
-            ${firstPlayerLoadout(second)}
+          <div class="first-seat second">
+            ${imageCard(second.legend, "select-only")}
             <strong>${t("second", locale())}</strong>
             <span>${playerName(second)}</span>
           </div>
@@ -5260,6 +3508,9 @@ function firstPlayerPanel() {
 function firstPlayerRollPanel(decision) {
   const chooser = game.players.find((player) => player.id === decision.chooserId);
   const isChoosing = decision.status === "choosing";
+  if (isChoosing && !setupSelectionVisibleToViewer(chooser?.id)) {
+    return privateFirstPlayerWaitingPanel(chooser);
+  }
   const canUseDecisionControl = viewerCanAct();
   const notice = isChoosing
     ? (canUseDecisionControl
@@ -5278,7 +3529,7 @@ function firstPlayerRollPanel(decision) {
           </div>
         </div>
         <p class="dice-order-notice">${notice}</p>
-        <div class="first-player-result setup-loadout-result dice-results">
+        <div class="first-player-result dice-results">
           ${game.players.map((player, index) => firstPlayerDieSeat(player, decision, index)).join(`<div class="versus">${locale() === LOCALES.KO ? "대" : "VS"}</div>`)}
         </div>
         ${isChoosing ? `
@@ -5316,40 +3567,11 @@ function firstPlayerDieSeat(player, decision, index) {
   const active = decision.status === "rolling" && decision.rollerId === player.id;
   const winner = decision.winnerId === player.id;
   return `
-    <div class="first-seat dice-seat ${active ? "active" : ""} ${winner ? "roll-winner" : ""}" data-player-index="${index}" data-player-id="${escapeHtml(player.id)}">
-      ${firstPlayerLoadout(player)}
+    <div class="first-seat dice-seat ${active ? "active" : ""} ${winner ? "roll-winner" : ""}" data-player-index="${index}">
+      ${imageCard(player.legend, "select-only")}
       <span class="die-face ${displayValue == null ? "pending" : ""}" aria-label="${displayValue == null ? t("waitingForRoll", locale()) : t("rolledNumber", locale(), { n: displayValue })}">${displayValue ?? "?"}</span>
       <strong>${displayValue == null ? t("waitingForRoll", locale()) : t("rolledNumber", locale(), { n: displayValue })}</strong>
       <span>${playerName(player)}</span>
-    </div>
-  `;
-}
-
-function selectedSetupBattlefield(player) {
-  if (!player) return null;
-  const battlefields = Array.isArray(game?.battlefields) ? game.battlefields : [];
-  return battlefields.find((field) => field
-    && (field.ownerId === player.id
-      || (player.selectedBattlefieldId && field.instanceId === player.selectedBattlefieldId))) || null;
-}
-
-function firstPlayerLoadout(player) {
-  if (!player) return "";
-  const roles = [
-    { key: "legend", label: t("legend", locale()), card: player.legend },
-    { key: "champion", label: t("champion", locale()), card: player.champion },
-    { key: "battlefield", label: t("battlefield", locale()), card: selectedSetupBattlefield(player) }
-  ];
-  return `
-    <div class="first-player-loadout" aria-label="${escapeHtml(`${playerName(player)} ${locale() === LOCALES.KO ? "공개 구성" : "revealed setup"}`)}">
-      ${roles.map(({ key, label, card }) => `
-        <div class="first-player-loadout-card ${card && !card.redacted ? "revealed" : "unavailable"}" data-setup-role="${key}">
-          <small>${escapeHtml(label)}</small>
-          ${card && !card.redacted
-            ? `${imageCard(card, "select-only")}<span>${escapeHtml(cardName(card))}</span>`
-            : `<div class="setup-card-placeholder" aria-label="${escapeHtml(`${label} ${t("waiting", locale())}`)}"><b>?</b></div><span>${t("waiting", locale())}</span>`}
-        </div>
-      `).join("")}
     </div>
   `;
 }
@@ -5378,7 +3600,7 @@ function rememberCinematicImpact(impact) {
     activeImpact = null;
     if (finalImpact) resultRevealReady = true;
     if (appView === "game") render();
-  }, presentationMotionDuration(finalImpact ? 2200 : 1150));
+  }, finalImpact ? 2200 : 1150);
 }
 
 function cinematicImpactOverlay() {
@@ -5405,7 +3627,7 @@ function gameResultModal() {
   const highlights = rankPresentationHighlights(presentationState.highlights);
   const korean = locale() === LOCALES.KO;
   return `
-    <section class="result-modal match-result-modal modal-panel ${won ? "result-victory" : "result-defeat"}" role="dialog" aria-modal="true" aria-labelledby="match-result-title" data-ui-modal data-modal-key="match-result" tabindex="-1">
+    <section class="result-modal match-result-modal modal-panel ${won ? "result-victory" : "result-defeat"}" role="dialog" aria-modal="true" aria-labelledby="match-result-title">
       <div class="result-crown" aria-hidden="true"><span></span></div>
       <div class="result-modal-copy">
         <span>${game.surrenderedPlayerId ? (korean ? "항복으로 종료" : "Ended by surrender") : t("gameEnded", locale())}</span>
@@ -5430,7 +3652,7 @@ function gameResultModal() {
         `}
       </section>
       <div class="result-actions">
-        <button type="button" class="secondary" data-action="review-result" data-primary-focus>${korean ? "전장 돌아보기" : "Review battlefield"}</button>
+        <button type="button" class="secondary" data-action="review-result">${korean ? "전장 돌아보기" : "Review battlefield"}</button>
         ${isOnlineGame()
           ? `<button type="button" class="primary" data-action="confirm-online-result">${korean ? "로비로 돌아가기" : "Return to lobby"}</button>`
           : `<button type="button" class="primary" data-action="new-game">${t("newGame", locale())}</button>`}
@@ -5457,14 +3679,14 @@ function resultHighlightCard(highlight, index) {
 function gameExitConfirmModal() {
   const restarting = pendingGameExit === "new-game";
   return `
-    <section class="result-modal game-exit-modal modal-panel" role="dialog" aria-modal="true" aria-labelledby="game-exit-title" data-ui-modal data-modal-key="game-exit" tabindex="-1">
+    <section class="result-modal game-exit-modal modal-panel" role="dialog" aria-modal="true" aria-labelledby="game-exit-title">
       <div class="result-modal-copy">
         <span>${restarting ? t("newGame", locale()) : t("surrender", locale())}</span>
         <h2 id="game-exit-title">${t(restarting ? "restartConfirmTitle" : "surrenderConfirmTitle", locale())}</h2>
         <p>${t(restarting ? "restartConfirmDetail" : "surrenderConfirmDetail", locale())}</p>
       </div>
       <div class="actions game-exit-actions">
-        <button type="button" data-action="cancel-game-exit" data-primary-focus>${t("continueGame", locale())}</button>
+        <button type="button" data-action="cancel-game-exit">${t("continueGame", locale())}</button>
         <button type="button" class="danger" data-action="confirm-game-exit">${restarting ? t("newGame", locale()) : t("surrender", locale())}</button>
       </div>
     </section>
@@ -5472,8 +3694,8 @@ function gameExitConfirmModal() {
 }
 
 function scoreTrack() {
-  const left = viewerPlayer();
-  const right = opponentPlayer();
+  const left = isOnlineGame() ? viewerPlayer() : game.players[0];
+  const right = isOnlineGame() ? opponentPlayer() : game.players[1];
   const labels = [1, 2, 3, 4, 5, 6, 7, 8, 7, 6, 5, 4, 3, 2, 1];
   return `
     <section class="score-track" aria-label="${locale() === LOCALES.KO ? "점수" : "Score"}">
@@ -5497,223 +3719,79 @@ function scoreTrack() {
 
 function gamePanel(player) {
   syncInspectedChainTargets();
-  const battlefieldCount = Array.isArray(game?.battlefields) ? game.battlefields.length : 0;
   const selected = uiSelectedCard();
   const bottomPlayer = viewerPlayer();
   const topPlayer = opponentPlayer();
-  const showPaymentStage = decisionVisibleToViewer(game.pendingPayment);
-  const showChoiceStage = decisionVisibleToViewer(game.pendingChoice);
-  const choiceSurface = showChoiceStage && !replayMode ? choiceCardSurface(game.pendingChoice) : "none";
-  const commandChoice = ["hand", "pile", "board", "damage"].includes(choiceSurface);
+  const showPendingPayment = pendingDecisionVisibleToViewer({
+    aiMode,
+    viewerPlayerId: viewerPlayerId(),
+    decision: game.pendingPayment
+  });
+  const showPendingChoice = pendingDecisionVisibleToViewer({
+    aiMode,
+    viewerPlayerId: viewerPlayerId(),
+    decision: game.pendingChoice
+  });
   return `
-    <div class="play-area tabletop-board ${actingPlayerClass()} ${showPaymentStage ? "payment-active" : ""} ${isOnlineGame() && !viewerCanAct() ? "waiting-for-opponent" : ""} ${online.commandPending ? "command-pending" : ""}" data-phase="${escapeHtml(game.phase || "unknown")}" aria-busy="${online.commandPending ? "true" : "false"}">
+    <div class="play-area ${actingPlayerClass()} ${isOnlineGame() && !viewerCanAct() ? "waiting-for-opponent" : ""} ${online.commandPending ? "command-pending" : ""}" aria-busy="${online.commandPending ? "true" : "false"}">
       <section class="board-panel" aria-label="${t("gameBoard", locale())}">
         <div class="board-band opponent-band">
-          <span class="side-label">${t("opponentSide", locale())}</span>
+          <span>${t("opponentSide", locale())}</span>
           ${playerSide(topPlayer, "top")}
-          ${opponentHandFan(topPlayer)}
         </div>
         ${chainZonePanel()}
         ${realtimeFeedbackOverlay()}
-        <div class="location-band" data-zone="battlefields" data-count="${battlefieldCount}">
-          <span class="zone-caption battlefield-caption">${t("battlefield", locale())}</span>
-          <section class="battlefield-mat ${battlefieldCount > 2 ? "has-extra-battlefields" : ""}" aria-label="${t("battlefields", locale())}" data-scroll-key="battlefield-scroll">
+        <div class="location-band" data-scroll-key="battlefield-scroll">
+          <span>${t("battlefield", locale())}</span>
+          <section class="battlefield-mat ${game.battlefields.length > 2 ? "has-extra-battlefields" : ""}" aria-label="${t("battlefields", locale())}">
             ${battlefieldColumns()}
           </section>
         </div>
         <div class="board-band player-band">
-          <span class="side-label">${t("playerSide", locale())}</span>
+          <span>${t("playerSide", locale())}</span>
           ${playerSide(bottomPlayer, "bottom")}
         </div>
       </section>
-      <div class="table-command-layer">
-        ${showPaymentStage ? paymentPanel() : ""}
-        ${showPaymentStage ? "" : commandChoice ? commandChoiceSurface(game.pendingChoice) : actionBar(player, selected)}
-        ${handDrawer(player)}
+      ${moveBatchBar(player)}
+      ${actionBar(player, selected)}
+      ${handDrawer(player)}
+      <div class="floating-panels ${game.phase === "showdown" ? "showdown-dock" : ""} ${showPendingPayment || showPendingChoice || graveyardOpenPlayerId || banishedOpenPlayerId ? "has-modal" : ""}">
+        ${game.phase === "showdown" ? "" : ""}
+        ${showPendingPayment ? paymentPanel() : ""}
+        ${showPendingChoice ? choicePanel() : ""}
+        ${graveyardOpenPlayerId ? graveyardPanel(graveyardOpenPlayerId) : ""}
+        ${banishedOpenPlayerId ? banishedPanel(banishedOpenPlayerId) : ""}
+        ${intelOpenPlayerId ? intelPanel(intelOpenPlayerId) : ""}
       </div>
-      ${tableUtilityRail(inspectedCard() || selected)}
     </div>
   `;
-}
-
-function designatedFirstPlayerPanel(decision) {
-  const chooser = game.players.find((player) => player.id === decision.chooserId);
-  const canChoose = Boolean(chooser && viewerCanAct());
-  return `
-    <section class="first-player-screen">
-      <article class="first-player-card designated-order-card">
-        <div class="section-head">
-          <div>
-            <h2>${locale() === LOCALES.KO ? "선후공 선택" : "Choose play order"}</h2>
-            <span>${locale() === LOCALES.KO ? "전장을 동시에 공개했습니다." : "Both Battlefields have been revealed."}</span>
-          </div>
-        </div>
-        <p class="dice-order-notice">${locale() === LOCALES.KO
-          ? `${escapeHtml(playerName(chooser))}님이 이번 게임의 선공 플레이어를 선택합니다.`
-          : `${escapeHtml(playerName(chooser))} chooses who plays first this game.`}</p>
-        <div class="first-player-result setup-loadout-result">
-          ${game.players.map((player, index) => `
-            ${index ? `<div class="versus">${locale() === LOCALES.KO ? "대" : "VS"}</div>` : ""}
-            <div class="first-seat" data-player-id="${escapeHtml(player.id)}">
-              ${firstPlayerLoadout(player)}
-              <strong>${escapeHtml(playerName(player))}</strong>
-              <span>${locale() === LOCALES.KO ? "선공 후보" : "First-player candidate"}</span>
-            </div>
-          `).join("")}
-        </div>
-        <div class="play-order-actions">
-          ${game.players.map((player) => `<button class="${player.id === chooser?.id ? "primary" : "secondary"}" data-action="choose-first-player" data-player="${escapeHtml(player.id)}" ${canChoose ? "" : "disabled"}>${locale() === LOCALES.KO ? `${escapeHtml(playerName(player))} 선공` : `${escapeHtml(playerName(player))} plays first`}</button>`).join("")}
-        </div>
-      </article>
-    </section>
-  `;
-}
-
-function gameFloatingPanels() {
-  const showPendingChoice = decisionVisibleToViewer(game.pendingChoice);
-  const choiceSurface = showPendingChoice ? (replayMode ? "panel" : choiceCardSurface(game.pendingChoice)) : "none";
-  const sidePanelChoice = showPendingChoice && choiceSurface === "panel";
-  const blocking = sidePanelChoice;
-  const liveBlocking = blocking && !replayMode;
-  return `
-    <div class="floating-panels ${game.phase === "showdown" ? "showdown-dock" : ""} ${liveBlocking ? "has-modal has-blocking-decision" : ""} ${blocking && replayMode ? "replay-readonly-decision" : ""}">
-      ${sidePanelChoice ? choicePanel() : ""}
-      ${showPendingChoice ? "" : graveyardOpenPlayerId ? graveyardPanel(graveyardOpenPlayerId) : ""}
-      ${showPendingChoice ? "" : banishedOpenPlayerId ? banishedPanel(banishedOpenPlayerId) : ""}
-      ${showPendingChoice ? "" : intelOpenPlayerId ? intelPanel(intelOpenPlayerId) : ""}
-    </div>
-  `;
-}
-
-function closeTabletopSheets(keep = "") {
-  if (keep !== "inspector") {
-    inspectorOpen = false;
-    inspectorPreviewCard = null;
-    attachmentsOpenCardId = null;
-  }
-  if (keep !== "graveyard") graveyardOpenPlayerId = null;
-  if (keep !== "banished") banishedOpenPlayerId = null;
-  if (keep !== "intel") intelOpenPlayerId = null;
-  if (keep !== "log") logOpen = false;
-}
-
-function toggleTabletopSheet(kind, value = true) {
-  const open = kind === "inspector"
-    ? inspectorOpen
-    : kind === "graveyard"
-      ? graveyardOpenPlayerId === value
-      : kind === "banished"
-        ? banishedOpenPlayerId === value
-        : kind === "intel"
-          ? intelOpenPlayerId === value
-          : kind === "log"
-            ? logOpen
-            : false;
-  closeTabletopSheets(open ? "" : kind);
-  if (open) return;
-  if (kind === "inspector") inspectorOpen = true;
-  if (kind === "graveyard") graveyardOpenPlayerId = value;
-  if (kind === "banished") banishedOpenPlayerId = value;
-  if (kind === "intel") intelOpenPlayerId = value;
-  if (kind === "log") logOpen = true;
 }
 
 function uiSelectedCard() {
   return game.selectedCardId ? getSelectedCard(game) : null;
 }
 
-function inspectedChainCard() {
-  if (!inspectedChainItemId) return null;
-  const item = currentChainTreeItems().find((candidate) => candidate?.id === inspectedChainItemId);
-  const snapshot = chainItemSourceCard(item);
-  if (!snapshot || snapshot.redacted) return null;
-  return findVisibleCard(snapshot.instanceId || snapshot.id) || snapshot;
-}
-
-function inspectedCard() {
-  return inspectorPreviewCard || inspectedChainCard() || uiSelectedCard();
-}
-
-function chainPreviewCard(cardId) {
-  const previewId = String(cardId || "");
-  const item = currentChainTreeItems().find((candidate) => {
-    const source = chainItemSourceCard(candidate);
-    return source?.instanceId === previewId
-      || source?.id === previewId
-      || candidate?.trigger?.sourceCardId === previewId;
-  });
-  return findVisibleCard(previewId) || chainItemSourceCard(item) || null;
-}
-
-function toggleInspectedChainItem(chainItemId) {
-  const requestedId = String(chainItemId || "");
-  inspectedChainItemId = requestedId && inspectedChainItemId !== requestedId ? requestedId : null;
-  inspectorPreviewCard = null;
-  fullCardOpen = false;
-  fullCardPreviewCard = null;
-  syncInspectedChainTargets();
-  if (inspectedChainItemId && inspectedChainCard()) {
-    inspectorOpen = true;
-    closeTabletopSheets("inspector");
-  } else if (!inspectedChainItemId) {
-    inspectorOpen = false;
-  }
-}
-
-function focusChainTarget(cardId) {
-  const preview = findVisibleCard(String(cardId || ""));
-  if (!preview || preview.redacted || !cardVisibleToCurrentViewer(preview)) return;
-  inspectorPreviewCard = preview;
-  inspectorOpen = true;
-  closeTabletopSheets("inspector");
-}
-
 function handDrawer(player) {
-  const seat = tabletopSeatView(player, {
-    side: "bottom",
-    visibleHandCount: handCountVisibleToViewer(game, player, viewerPlayerId()),
-    revealHand: true
-  });
-  const cardCount = seat.counts.hand;
+  const cardCount = player.hand.length;
   return `
-    <section class="hand-drawer persistent-hand ${handOpen ? "open focused" : "closed"}" data-zone="hand" data-count="${cardCount}" data-player-id="${escapeHtml(seat.id)}">
-      <div class="hand-panel" aria-label="${escapeHtml(`${playerName(player)} ${t("hand", locale())} ${cardCount}`)}">
+    <section class="hand-drawer ${handOpen ? "open" : "closed"}">
+      <div class="hand-panel" aria-hidden="${handOpen ? "false" : "true"}">
         <div class="section-head">
           <h2>${playerName(player)} ${t("hand", locale())}</h2>
           <span>${t("cardCount", locale(), { n: cardCount })}</span>
-          <button type="button" class="hand-focus-toggle" data-action="toggle-hand" aria-expanded="${handOpen}">${handOpen ? t("hideHand", locale()) : t("hand", locale())}</button>
         </div>
-        <div class="cards hand-fan" data-scroll-key="hand-scroll">${seat.hand.map((card, index) => handCard(card, index, seat.hand.length)).join("") || `<p class="empty">${t("noCardsInHand", locale())}</p>`}</div>
+        <div class="cards">${championCard(player)}${player.hand.map(handCard).join("") || `<p class="empty">${t("noCardsInHand", locale())}</p>`}</div>
       </div>
     </section>
   `;
 }
 
-function opponentHandFan(player) {
-  const revealHand = canViewPrivateInfo(viewerPlayerId(), player?.id);
-  const visibleCount = handCountVisibleToViewer(game, player, viewerPlayerId());
-  const seat = tabletopSeatView(player, { side: "top", visibleHandCount: visibleCount, revealHand });
-  const count = seat.counts.hand;
-  const cards = Array.from({ length: count }, (_, index) => seat.visibleHandCards[index] || null);
-  return `
-    <section class="opponent-hand persistent-hand" data-zone="hand" data-count="${count}" data-player-id="${escapeHtml(seat.id)}" aria-label="${escapeHtml(`${playerName(player)} ${t("hand", locale())} ${count}`)}">
-      <span class="zone-caption">${t("hand", locale())} <b>${count}</b></span>
-      <div class="opponent-hand-fan">
-        ${cards.map((card, index) => card
-          ? `<article class="opponent-hand-card revealed-card" data-hand-card style="${fanCardStyle(index, count, { maxAngle: 18, maxRise: 12, reverse: true })}" data-card-id="${escapeHtml(card.instanceId || "")}" role="button" tabindex="0" aria-label="${escapeHtml(cardName(card))}">${cardImage(card)}</article>`
-          : `<span class="opponent-hand-card card-back" data-hand-card style="${fanCardStyle(index, count, { maxAngle: 18, maxRise: 12, reverse: true })}" aria-label="${escapeHtml(`${t("opponentSide", locale())} ${t("hand", locale())} ${index + 1}`)}"><i aria-hidden="true">R</i></span>`
-        ).join("") || `<span class="empty-hand-count">0</span>`}
-      </div>
-    </section>
-  `;
-}
-
-function moveBatchCommandGroup(player) {
+function moveBatchBar(player) {
   const units = [...moveSelection].map((unitId) => findVisibleCard(unitId)).filter(Boolean);
   if (game.phase !== "action" || game.pendingPayment || game.pendingChoice || units.length < 2) return "";
   const destinations = batchMoveDestinations(units);
   return `
-    <div class="move-batch-command-group" role="group" aria-label="${escapeHtml(`${t("standardMove", locale())}: ${units.length} ${t("units", locale())}`)}">
+    <section class="move-batch-bar">
       <span>${t("standardMove", locale())}: ${units.length} ${t("units", locale())}</span>
       <div class="actions inline">
         ${destinations.map((destination) => `
@@ -5721,7 +3799,7 @@ function moveBatchCommandGroup(player) {
         `).join("") || `<button disabled>${t("noSharedDestination", locale())}</button>`}
         <button data-action="clear-move-selection">${t("clear", locale())}</button>
       </div>
-    </div>
+    </section>
   `;
 }
 
@@ -5746,7 +3824,7 @@ function logDrawer() {
   const interaction = interactionStatus();
   const visibleLog = gameLogVisibleToViewer(game, viewerPlayerId());
   return `
-    <aside class="log-drawer" role="dialog" aria-modal="false" aria-label="${t("eventTimeline", locale())}" data-ui-sheet="log">
+    <aside class="log-drawer" aria-label="${t("eventTimeline", locale())}">
       <div class="section-head">
         <div>
           <h2>${t("eventTimeline", locale())}</h2>
@@ -5765,7 +3843,7 @@ function logDrawer() {
   `;
 }
 
-function logEntryView(entry, index, total = (game.log || []).length) {
+function logEntryView(entry, index, total = game.log.length) {
   const value = String(entry || "");
   const category = /pay|cost/i.test(value)
     ? "payment"
@@ -5845,78 +3923,43 @@ function localizedEffectSource(sourceName) {
 
 function paymentPanel() {
   const payment = game.pendingPayment;
-  if (!payment || typeof payment !== "object") return "";
   const player = game.players.find((candidate) => candidate.id === payment.playerId);
-  if (!player) {
-    const issue = locale() === LOCALES.KO
-      ? "비용을 지불할 플레이어 정보를 확인할 수 없습니다. 결제를 취소하고 다시 시도해 주세요."
-      : "The paying player is unavailable. Cancel this payment and try again.";
-    return `
-      <section class="payment-stage-banner payment-panel payment-stage-error" role="alert" data-payment-stage>
-        <div class="payment-stage-copy">
-          <span class="payment-stage-kicker">${locale() === LOCALES.KO ? "비용 지불 단계" : "PAYMENT STEP"}</span>
-          <div class="payment-stage-title-row"><h2>${t("paymentRequired", locale())}</h2></div>
-          <p>${issue}</p>
-        </div>
-        <div class="payment-stage-controls actions inline">
-          <button data-action="cancel-payment">${t("cancel", locale())}</button>
-        </div>
-      </section>
-    `;
-  }
-  const resumeLegality = paymentResumeLegality(game, payment);
-  if (!resumeLegality.ok) {
-    const issue = locale() === LOCALES.KO
-      ? "이전에 진행 중이던 비용 지불 상태를 안전하게 복구할 수 없습니다. 현재 결제를 취소하고 다시 시도해 주세요."
-      : "The previous payment state cannot be restored safely. Cancel this payment and try again.";
-    return `
-      <section class="payment-stage-banner payment-panel payment-stage-error" role="alert" data-payment-stage data-invalid-resume-payment>
-        <div class="payment-stage-copy">
-          <span class="payment-stage-kicker">${locale() === LOCALES.KO ? "비용 지불 단계" : "PAYMENT STEP"}</span>
-          <div class="payment-stage-title-row"><h2>${t("paymentRequired", locale())}</h2></div>
-          <p>${issue}</p>
-        </div>
-        <div class="payment-stage-controls actions inline">
-          <button data-action="cancel-payment" data-primary-focus>${t("cancel", locale())}</button>
-        </div>
-      </section>
-    `;
-  }
   const card = paymentDisplayCard(player, payment);
   const displayCard = card || { name: payment.cardName || t("effectPayment", locale()), energy: payment.energyCost || 0, power: [] };
-  const powerCost = Array.isArray(payment.powerCost)
-    ? payment.powerCost.filter((requirement) => requirement && typeof requirement === "object")
-    : Array.isArray(displayCard.power)
-      ? displayCard.power.filter((requirement) => requirement && typeof requirement === "object")
-      : [];
+  const powerCost = payment.powerCost || displayCard.power || [];
   const energyNeeded = payment.energyCost ?? displayCard.energy ?? 0;
   const poolEnergySelected = payment.poolEnergyIds?.length || 0;
+  const runeEnergyNeeded = Math.max(0, energyNeeded - poolEnergySelected);
   const paymentReady = paymentConfirmationLegality(game).ok;
-  const modalAttributes = replayMode
-    ? `role="region" aria-labelledby="payment-stage-title" aria-readonly="true" data-replay-readonly-decision inert`
-    : `role="region" aria-labelledby="payment-stage-title" aria-describedby="payment-stage-help" data-payment-stage data-modal-key="payment-${escapeHtml(payment.id || payment.cardId || payment.source || "pending")}"`;
-  const help = locale() === LOCALES.KO
-    ? "룬은 왼쪽 클릭으로 에너지, 오른쪽 클릭으로 힘을 지불합니다. 생성 자원은 아래에서 선택하고 전설·문장 등 자원 능력도 바로 사용할 수 있습니다."
-    : "Left-click Runes for Energy and right-click for Power. Select generated resources below, or activate a Legend, Seal, or another resource ability.";
   return `
-    <section class="payment-stage-banner payment-panel" ${modalAttributes}>
-      <div class="payment-stage-copy">
-        <span class="payment-stage-kicker">${locale() === LOCALES.KO ? "비용 지불 단계" : "PAYMENT STEP"}</span>
-        <div class="payment-stage-title-row">
-          <h2 id="payment-stage-title">${t("paymentRequired", locale())}</h2>
+    <section class="payment-panel modal-panel">
+      <div class="section-head">
+        <div>
+          <h2>${t("paymentRequired", locale())}</h2>
           <span>${paymentCostSummary(player, displayCard, payment, energyNeeded, poolEnergySelected, powerCost)}</span>
         </div>
-        <p id="payment-stage-help">${help}</p>
+        <div class="actions inline">
+          <button data-action="cancel-payment">${t("cancel", locale())}</button>
+          <button class="primary" data-action="confirm-payment" ${paymentReady ? "" : "disabled"}>${paymentReady ? t("confirm", locale()) : t("selectCost", locale())}</button>
+        </div>
       </div>
-      <div class="payment-stage-resources">
+      <div class="payment-body">
+        <aside class="payment-card-preview">
+          ${cardImage(displayCard)}
+          <strong>${displayCard.cardNumber ? cardName(displayCard) : localizedDynamicText(displayCard.name)}</strong>
+          <span>${payment.source === "effectEnergy"
+            ? t("effectPayment", locale())
+            : payment.source === "activatedAbility"
+              ? (locale() === LOCALES.KO ? "활성화 비용" : "Activation cost")
+              : payment.source === "hideCard" ? t("payCost", locale()) : t("playCost", locale())}</span>
+        </aside>
+        <div class="payment-cost-area">
           ${optionalPaymentControls(payment)}
           ${paymentAddControls(player)}
           ${poolEnergyControls(player, payment)}
-          ${poolPowerControls(powerCost)}
-      </div>
-      <div class="payment-stage-controls actions inline">
-        <button data-action="cancel-payment">${t("cancel", locale())}</button>
-        <button class="primary" data-action="confirm-payment" ${paymentReady ? "data-primary-focus" : "disabled"}>${paymentReady ? t("confirm", locale()) : t("selectCost", locale())}</button>
+          ${poolPowerControls(player, payment, powerCost)}
+          ${paymentRuneSection(player, payment, displayCard, powerCost)}
+        </div>
       </div>
     </section>
   `;
@@ -5932,8 +3975,7 @@ function paymentDisplayCard(player, payment) {
 
 function paymentCostSummary(player, card, payment, energyNeeded, poolEnergySelected, powerCost) {
   const parts = [t("costFor", locale(), { name: cardName(card) })];
-  const energyRunesSelected = Array.isArray(payment.energyRuneIds) ? payment.energyRuneIds.length : 0;
-  if (energyNeeded > 0) parts.push(`${t("energy", locale())} ${energyRunesSelected + poolEnergySelected}/${energyNeeded}`);
+  if (energyNeeded > 0) parts.push(`${t("energy", locale())} ${(payment.energyRuneIds || []).length + poolEnergySelected}/${energyNeeded}`);
   if (totalPowerAmount(powerCost) > 0) parts.push(`${t("power", locale())} ${powerProgress(player, card, payment)}`);
   if ((payment.xpCost || 0) > 0) parts.push(`XP ${player.xp || 0}/${payment.xpCost}`);
   if (parts.length === 1) parts.push(t("noCost", locale()));
@@ -5952,19 +3994,18 @@ function poolEnergyControls(player, payment) {
       <div class="pool-energy-list">
       ${pool.map((resource) => {
         const selected = resource.selected;
-        const sourceName = localizedEffectSource(resource.sourceName) || t("generatedEnergy", locale());
         return `
           <button
             class="pool-energy ${selected ? "selected" : ""}"
             data-action="pay-pool-energy"
-            data-energy="${escapeHtml(resource.id || "")}"
+            data-energy="${resource.id}"
             aria-pressed="${selected}"
             ${resource.canToggle ? "" : "disabled"}
-            title="${escapeHtml(sourceName)}${resource.restriction ? ` - ${escapeHtml(resource.restriction)} only` : ""}"
+            title="${resource.sourceName}${resource.restriction ? ` - ${resource.restriction} only` : ""}"
           >
             <span class="pool-energy-orb">${domainSwatches(resource.domains)}</span>
             <strong>${selected ? t("selected", locale()) : `${t("energy", locale())} +1`}</strong>
-            <span>${escapeHtml(sourceName)}</span>
+            <span>${localizedEffectSource(resource.sourceName)}</span>
           </button>
         `;
       }).join("")}
@@ -5973,8 +4014,8 @@ function poolEnergyControls(player, payment) {
   `;
 }
 
-function poolPowerControls(powerCost) {
-  const pool = legalPaymentPoolPowerOptions(game);
+function poolPowerControls(player, payment, powerCost) {
+  const pool = runePoolPower(player);
   if (!pool.length || totalPowerAmount(powerCost) <= 0) return "";
   return `
     <section class="payment-resource-group generated-resource-group">
@@ -5984,19 +4025,23 @@ function poolPowerControls(powerCost) {
       </div>
       <div class="pool-energy-list">
       ${pool.map((resource) => {
-        const selected = resource.selected;
+        const selected = (payment.poolPowerIds || []).includes(resource.id);
+        const card = game.players.find((candidate) => candidate.id === payment.playerId)?.hand
+          .find((candidate) => candidate.instanceId === payment.cardId)
+          || findVisibleCard(payment.cardId);
+        const usable = poolPowerCanPay(resource, card)
+          && powerCost.some((requirement) => powerMatches(resource, requirement));
+        const limitReached = !selected
+          && ((payment.poolPowerIds?.length || 0) + (payment.powerRuneIds?.length || 0) >= totalPowerAmount(powerCost));
         return `
           <button
-            class="pool-power ${selected ? "selected" : ""}"
+            class="${selected ? "selected" : ""}"
             data-action="pay-pool-power"
-            data-power="${escapeHtml(resource.id || "")}"
+            data-power="${resource.id}"
             aria-pressed="${selected}"
-            ${resource.canToggle ? "" : "disabled"}
-            title="${escapeHtml(resource.sourceName || t("generatedPower", locale()))}${resource.restriction ? ` - ${escapeHtml(resource.restriction)} only` : ""}"
-          >
-            <strong>${domainText(resource.domain)} ${t("power", locale())} +1</strong>
-            <span>${escapeHtml(localizedEffectSource(resource.sourceName) || t("generatedPower", locale()))}</span>
-          </button>
+            ${!selected && (!usable || limitReached) ? "disabled" : ""}
+            title="${resource.sourceName || t("generatedPower", locale())}${resource.restriction ? ` - ${resource.restriction} only` : ""}"
+          >${domainText(resource.domain)} ${t("power", locale())}</button>
         `;
       }).join("")}
       </div>
@@ -6005,7 +4050,6 @@ function poolPowerControls(powerCost) {
 }
 
 function poolEnergyCanPay(resource, card = null) {
-  if (!resource?.restriction) return true;
   if (resource.restriction === "showdown") return game.phase === "showdown";
   if (resource.restriction === "spell") {
     const pendingCard = game.pendingPayment
@@ -6014,34 +4058,13 @@ function poolEnergyCanPay(resource, card = null) {
       : card;
     return pendingCard?.type === "spell";
   }
-  if (resource.restriction === "unitOrUnitAbility") {
-    const pendingCard = card || (game.pendingPayment
-      ? paymentDisplayCard(
-        game.players.find((player) => player.id === game.pendingPayment.playerId),
-        game.pendingPayment
-      )
-      : null);
-    return Boolean(pendingCard && cardHasType(pendingCard, "unit"));
-  }
-  if (resource.restriction === "gear") {
-    const pendingCard = card || (game.pendingPayment
-      ? paymentDisplayCard(
-        game.players.find((player) => player.id === game.pendingPayment.playerId),
-        game.pendingPayment
-      )
-      : null);
-    return Boolean(pendingCard && cardHasType(pendingCard, "gear"));
-  }
-  return false;
+  return true;
 }
 
 function poolPowerCanPay(resource, card = null) {
-  if (!resource?.restriction) return true;
   if (resource.restriction === "showdown") return game.phase === "showdown";
   if (resource.restriction === "spell") return card?.type === "spell";
-  if (resource.restriction === "unitOrUnitAbility") return Boolean(card && cardHasType(card, "unit"));
-  if (resource.restriction === "gear") return Boolean(card && cardHasType(card, "gear"));
-  return false;
+  return true;
 }
 
 function paymentAddControls(player) {
@@ -6118,19 +4141,14 @@ function runePoolEnergy(player) {
 }
 
 function runePoolPower(player) {
-  const power = Array.isArray(player?.runePool?.power) ? player.runePool.power : [];
-  return power.map((resource, index) => {
+  return (player.runePool?.power || []).map((resource, index) => {
     if (resource && typeof resource === "object") return resource;
     return { id: `legacy-power-${player.id}-${index}`, instanceId: `legacy-power-${player.id}-${index}`, domain: resource || "Any" };
   });
 }
 
 function powerProgress(player, card, payment) {
-  const powerCost = Array.isArray(payment?.powerCost)
-    ? payment.powerCost.filter((requirement) => requirement && typeof requirement === "object")
-    : Array.isArray(card?.power)
-      ? card.power.filter((requirement) => requirement && typeof requirement === "object")
-      : [];
+  const powerCost = payment.powerCost || card.power || [];
   if (!powerCost.length) return "0/0";
   const selectedPowerRunes = (payment.powerRuneIds || [])
     .map((id) => player.runes.find((rune) => rune.instanceId === id))
@@ -6155,8 +4173,7 @@ function powerMatches(rune, requirement) {
 }
 
 function totalPowerAmount(requirements) {
-  if (!Array.isArray(requirements)) return 0;
-  return requirements.reduce((sum, requirement) => sum + Math.max(0, Number(requirement?.amount) || 0), 0);
+  return requirements.reduce((sum, requirement) => sum + requirement.amount, 0);
 }
 
 function runeCanPayPower(rune, card, payment, powerCost) {
@@ -6167,65 +4184,72 @@ function runeCanPayPower(rune, card, payment, powerCost) {
   return true;
 }
 
-function directRunePaymentState(rune, playerId) {
-  const inactive = {
-    active: false,
-    energySelected: false,
-    powerSelected: false,
-    canPayEnergy: false,
-    canPayPower: false
-  };
-  const payment = game?.pendingPayment;
-  if (!rune || typeof rune !== "object" || !payment || payment.playerId !== playerId) return inactive;
-  if (!decisionVisibleToViewer(payment) || replayMode || !viewerCanAct()) return inactive;
-  const player = game.players.find((candidate) => candidate.id === payment.playerId);
-  if (!player) return inactive;
-  const card = paymentDisplayCard(player, payment) || {
-    name: payment.cardName || t("effectPayment", locale()),
-    energy: Math.max(0, Number(payment.energyCost) || 0),
-    power: Array.isArray(payment.powerCost) ? payment.powerCost : []
-  };
-  const energyRuneIds = Array.isArray(payment.energyRuneIds) ? payment.energyRuneIds : [];
-  const powerRuneIds = Array.isArray(payment.powerRuneIds) ? payment.powerRuneIds : [];
+function paymentRuneSection(player, payment, card, powerCost) {
+  const runes = player.runes.map((rune) => paymentRune(rune, payment, card, powerCost)).filter(Boolean);
+  if (!runes.length) return "";
+  return `
+    <section class="payment-resource-group rune-payment-group">
+      <div class="payment-resource-heading">
+        <strong>${locale() === LOCALES.KO ? "룬으로 지불" : "Pay With Runes"}</strong>
+        <span>${locale() === LOCALES.KO
+          ? "에너지는 룬을 탈진시키고, 힘은 룬을 재활용합니다"
+          : "Energy exhausts a Rune; Power recycles it"}</span>
+      </div>
+      <div class="pay-runes">${runes.join("")}</div>
+    </section>
+  `;
+}
+
+function paymentRune(rune, payment, card, powerCost) {
+  const energyRuneIds = payment.energyRuneIds || [];
+  const powerRuneIds = payment.powerRuneIds || [];
   const energySelected = energyRuneIds.includes(rune.instanceId);
   const powerSelected = powerRuneIds.includes(rune.instanceId);
-  const energyCost = Math.max(0, Number(payment.energyCost ?? card.energy) || 0);
-  const selectedEnergy = energyRuneIds.length + (Array.isArray(payment.poolEnergyIds) ? payment.poolEnergyIds.length : 0);
-  const powerCost = Array.isArray(payment.powerCost) ? payment.powerCost : (Array.isArray(card.power) ? card.power : []);
-  return {
-    active: true,
-    energySelected,
-    powerSelected,
-    canPayEnergy: energySelected || (!rune.exhausted && energyCost > 0 && selectedEnergy < energyCost),
-    canPayPower: powerSelected || (totalPowerAmount(powerCost) > 0 && runeCanPayPower(rune, card, payment, powerCost))
-  };
+  const powerDisabled = !runeCanPayPower(rune, card, payment, powerCost);
+  const energyCost = payment.energyCost ?? (card.energy || 0);
+  const poolSelected = payment.poolEnergyIds?.length || 0;
+  const runeEnergyNeeded = Math.max(0, energyCost - poolSelected);
+  const energyDisabled = rune.exhausted || (!energySelected && energyRuneIds.length >= runeEnergyNeeded);
+  const showEnergy = energySelected || (energyCost > 0 && !energyDisabled);
+  const showPower = powerSelected || (totalPowerAmount(powerCost) > 0 && !powerDisabled);
+  if (!showEnergy && !showPower) return "";
+  return `
+    <article class="pay-rune ${energySelected ? "selected-energy" : ""} ${powerSelected ? "selected-power" : ""}">
+      <span class="rune payment-rune-card ${rune.exhausted ? "spent" : ""}" style="--rune:${rune.color}">
+        ${rune.image ? `<img src="${rune.image}" alt="${cardName(rune)}" />` : `<span class="rune-swatch"></span>`}
+        <span class="rune-card-caption">${domainText(rune.domain)}${rune.exhausted ? ` · ${t("spent", locale())}` : ""}</span>
+      </span>
+      <div class="payment-mode-buttons">
+        ${showEnergy ? `<button class="${energySelected ? "selected" : ""}" data-action="pay-rune" data-rune="${rune.instanceId}" data-mode="energy" aria-pressed="${energySelected}">${t("energy", locale())}</button>` : ""}
+        ${showPower ? `<button class="${powerSelected ? "selected" : ""}" data-action="pay-rune" data-rune="${rune.instanceId}" data-mode="power" aria-pressed="${powerSelected}">${domainText(rune.domain)} ${t("power", locale())}</button>` : ""}
+      </div>
+    </article>
+  `;
 }
 
 function domainSwatches(domains = ["Any"]) {
-  const safeDomains = Array.isArray(domains) && domains.length ? domains : ["Any"];
-  return safeDomains.map((domain) => `<span style="--swatch:${RUNE_COLORS[domain] || RUNE_COLORS.Any || "#e9e2d1"}"></span>`).join("");
+  return domains.map((domain) => `<span style="--swatch:${RUNE_COLORS[domain] || RUNE_COLORS.Any || "#e9e2d1"}"></span>`).join("");
 }
 
 function graveyardPanel(playerId) {
   const player = game.players.find((candidate) => candidate.id === playerId);
   if (!player) return "";
   return `
-    <section class="graveyard-panel modal-panel" role="dialog" aria-modal="false" aria-labelledby="graveyard-panel-title" data-ui-sheet="graveyard">
+    <section class="graveyard-panel modal-panel">
       <div class="section-head">
         <div>
-          <h2 id="graveyard-panel-title">${playerName(player)} ${t("trash", locale())}</h2>
+          <h2>${playerName(player)} ${t("trash", locale())}</h2>
           <span>${t("cardCount", locale(), { n: player.trash.length })}</span>
         </div>
         <button data-action="close-graveyard">${t("close", locale())}</button>
       </div>
       <div class="cards graveyard-cards" data-scroll-key="graveyard-${player.id}">
         ${player.trash.map((card) => `
-          <div class="graveyard-card-entry pile-browser-entry">
-            <article class="${imageCardClass(card, "graveyard-card pile-browser-card")}" data-card-id="${escapeHtml(card.instanceId || "")}" role="button" tabindex="0" aria-label="${escapeHtml(cardName(card))}">
-              <span class="pile-browser-art">${cardImage(card)}</span>
-              <span class="pile-browser-copy"><strong>${escapeHtml(cardName(card))}</strong><small>${escapeHtml(cardTags(card).join(" · "))}</small></span>
+          <div class="graveyard-card-entry">
+            <article class="${imageCardClass(card, "graveyard-card")}" data-card-id="${card.instanceId}">
+              ${cardImage(card)}
             </article>
-            ${player.id === viewerPlayerId() ? `<div class="pile-browser-actions">${trashActions(card, player).join("")}</div>` : ""}
+            ${player.id === viewerPlayerId() ? trashActions(card, player).join("") : ""}
           </div>
         `).join("") || `<p class="empty">${t("trashEmpty", locale())}</p>`}
       </div>
@@ -6238,20 +4262,13 @@ function banishedPanel(playerId) {
   if (!player) return "";
   const cards = player.banished || [];
   return `
-    <section class="graveyard-panel modal-panel banished-panel" role="dialog" aria-modal="false" aria-labelledby="banished-panel-title" data-ui-sheet="banished">
+    <section class="graveyard-panel modal-panel banished-panel">
       <div class="section-head">
-        <div><h2 id="banished-panel-title">${playerName(player)} ${t("banished", locale())}</h2><span>${t("cardCount", locale(), { n: cards.length })}</span></div>
+        <div><h2>${playerName(player)} ${t("banished", locale())}</h2><span>${t("cardCount", locale(), { n: cards.length })}</span></div>
         <button data-action="close-banished">${t("close", locale())}</button>
       </div>
       <div class="cards graveyard-cards" data-scroll-key="banished-${player.id}">
-        ${cards.map((card) => `
-          <div class="pile-browser-entry">
-            <article class="${imageCardClass(card, "graveyard-card pile-browser-card")}" data-card-id="${escapeHtml(card.instanceId || "")}" role="button" tabindex="0" aria-label="${escapeHtml(cardName(card))}">
-              <span class="pile-browser-art">${cardImage(card)}</span>
-              <span class="pile-browser-copy"><strong>${escapeHtml(cardName(card))}</strong><small>${escapeHtml(cardTags(card).join(" · "))}</small></span>
-            </article>
-          </div>
-        `).join("") || `<p class="empty">${t("banishedEmpty", locale())}</p>`}
+        ${cards.map((card) => `<article class="${imageCardClass(card, "graveyard-card")}" data-card-id="${card.instanceId}">${cardImage(card)}</article>`).join("") || `<p class="empty">${t("banishedEmpty", locale())}</p>`}
       </div>
     </section>`;
 }
@@ -6266,10 +4283,10 @@ function intelPanel(playerId) {
       .map((item) => ({ ...item, fieldName: battlefieldName(field) }))
   );
   return `
-    <section class="intel-panel modal-panel reveal-panel" role="dialog" aria-modal="false" aria-labelledby="intel-panel-title" data-ui-sheet="intel" data-scroll-key="intel-${escapeHtml(player.id)}">
+    <section class="intel-panel modal-panel reveal-panel">
       <div class="section-head">
         <div>
-          <h2 id="intel-panel-title">${playerName(player)}: ${t("revealedIntel", locale())}</h2>
+          <h2>${playerName(player)}: ${t("revealedIntel", locale())}</h2>
           <span>${t("availableUntilTurnEnds", locale())}</span>
         </div>
         <button data-action="close-intel">${t("close", locale())}</button>
@@ -6299,345 +4316,25 @@ function intelPanel(playerId) {
   `;
 }
 
-function choiceModalAttributes(choice, { inline = false } = {}) {
-  const key = `choice-${choice?.id || choice?.effect || "pending"}`;
-  const label = localizedChoicePrompt(choice) || (locale() === LOCALES.KO ? "효과 선택" : "Effect choice");
-  if (replayMode) return `role="region" aria-label="${escapeHtml(label)}" aria-readonly="true" data-replay-readonly-decision inert`;
-  if (inline || pendingChoiceSharesChainSurface(choice)) {
-    return `role="region" aria-label="${escapeHtml(label)}" aria-live="polite" data-choice-stage="${escapeHtml(key)}"`;
-  }
-  return `role="dialog" aria-modal="true" aria-label="${escapeHtml(label)}" data-ui-modal data-modal-key="${escapeHtml(key)}" tabindex="-1"`;
-}
-
-function choiceUiKey(choice) {
-  if (!choice || typeof choice !== "object") return null;
-  return String(choice.id || `${choice.playerId || "player"}:${choice.effect || "choice"}`);
-}
-
-function validChoiceOptions(choice) {
-  return Array.isArray(choice?.options)
-    ? choice.options.filter((option) => option && typeof option === "object" && !Array.isArray(option))
-    : [];
-}
-
-function choiceOptionCardId(option) {
-  return String(option?.cardId || option?.card?.instanceId || "");
-}
-
-function choiceOptionHasPhysicalCard(option) {
-  const cardId = choiceOptionCardId(option);
-  if (!cardId) return false;
-  const preview = choicePreviewCard(option);
-  const context = choiceCardContext(cardId, preview);
-  return Boolean(preview && context && context.zone !== "unknown");
-}
-
-function choiceOptionIsViewerHandCard(option) {
-  const cardId = choiceOptionCardId(option);
-  const viewer = viewerPlayer();
-  return Boolean(cardId && viewer?.hand?.some((card) => card?.instanceId === cardId));
-}
-
-function choiceOptionCanUseInlineBoard(option) {
-  const cardId = choiceOptionCardId(option);
-  const preview = choicePreviewCard(option);
-  const context = choiceCardContext(cardId, preview);
-  if (!cardId || !context) return false;
-  if (["base", "battlefield", "attachment", "battlefield-card", "rune", "legend", "champion"].includes(context.zone)) return true;
-  if (context.zone !== "hidden") return false;
-  const controllerId = context.playerId || preview?.controllerId || preview?.ownerId || null;
-  return Boolean(controllerId && (controllerId === viewerPlayerId() || canViewPrivateInfo(viewerPlayerId(), controllerId)));
-}
-
-function syncStagedChoiceUi(choice) {
-  const key = choiceUiKey(choice);
-  if (key !== stagedChoiceKey) {
-    stagedChoiceKey = key;
-    stagedChoiceOptionId = null;
-    choiceDrawerCollapsed = false;
-  }
-  if (!choice || !stagedChoiceOptionId) return;
-  const stillAvailable = validChoiceOptions(choice).some((option) =>
-    option.id === stagedChoiceOptionId && choiceOptionCardId(option) && !option.disabled
-  );
-  if (!stillAvailable) stagedChoiceOptionId = null;
-}
-
-const BINARY_EFFECT_CHOICES = new Set([
-  "declareOptionalTrigger",
-  "declareTriggerUse"
-]);
-
-const FLOATING_EFFECT_CHOICES = new Set([
-  ...BINARY_EFFECT_CHOICES,
-  "triggerOrder",
-  "payDeflect",
-  "predictChoice",
-  "observedTopDeckSelfAbility",
-  "acknowledgeReveal",
-  "chooseDrawOrBuffSelf",
-  "unleashedPutUnitInDeck",
-  "unleashedStunMoveSelf",
-  "attachedUnusedMode",
-  "damageOrDrawInstead",
-  "preparedDeathRecallPayment",
-  "moveWithFriendlyFromSameBattlefield",
-  "deathReplacementSource"
-]);
-
-function choiceCardSurface(choice) {
-  if (!choice || !decisionVisibleToViewer(choice)) return "none";
-  if (["combatDamage", "alphaStrikeDamage", "splitDamageAllocation"].includes(choice.effect)) return "damage";
-  // These decisions describe whether/how an effect is used. Some engine
-  // options carry their source card id solely for context; that id must never
-  // be mistaken for a target that the player has to click again.
-  if (FLOATING_EFFECT_CHOICES.has(choice.effect)) return "panel";
-  const cardOptions = validChoiceOptions(choice).filter(choiceOptionHasPhysicalCard);
-  if (!cardOptions.length) return "panel";
-  const zones = cardOptions.map((option) => choiceCardContext(choiceOptionCardId(option), choicePreviewCard(option))?.zone || "unknown");
-  if (zones.every((zone) => zone === "hand") && cardOptions.every(choiceOptionIsViewerHandCard)) return "hand";
-  if (zones.every((zone) => ["main-deck", "rune-deck", "trash", "banished"].includes(zone))) return "pile";
-  if (cardOptions.every(choiceOptionCanUseInlineBoard)) return "board";
-  // Revealed opponent-hand cards and mixed/off-screen zones have no reliable
-  // tabletop hit target. Keep those choices in the wide, rules-safe drawer.
-  return "pile";
-}
-
-function choiceOptionForCard(cardId) {
-  if (!cardId || !game?.pendingChoice || !decisionVisibleToViewer(game.pendingChoice)) return null;
-  const options = choiceOptionsForCard(cardId);
-  return options.find((option) => !option.disabled) || options[0] || null;
-}
-
-function choiceOptionsForCard(cardId, choice = game?.pendingChoice) {
-  if (!cardId || !choice || !decisionVisibleToViewer(choice)) return [];
-  return validChoiceOptions(choice).filter((option) =>
-    choiceOptionHasPhysicalCard(option) && choiceOptionCardId(option) === String(cardId)
-  );
-}
-
-function stageChoiceOption(optionId) {
-  const choice = game?.pendingChoice;
-  if (!choice || !decisionVisibleToViewer(choice)) return false;
-  syncStagedChoiceUi(choice);
-  const option = validChoiceOptions(choice).find((candidate) => candidate.id === optionId);
-  if (!option || option.disabled || !choiceOptionCardId(option)) return false;
-  stagedChoiceOptionId = stagedChoiceOptionId === option.id ? null : option.id;
-  return true;
-}
-
-function setStagedChoiceOption(optionId) {
-  const choice = game?.pendingChoice;
-  if (!choice || !decisionVisibleToViewer(choice)) return false;
-  syncStagedChoiceUi(choice);
-  const option = validChoiceOptions(choice).find((candidate) => candidate.id === optionId);
-  if (!option || option.disabled || !choiceOptionHasPhysicalCard(option)) return false;
-  stagedChoiceOptionId = option.id;
-  return true;
-}
-
-function stageChoiceCard(cardId) {
-  const options = choiceOptionsForCard(cardId).filter((option) => !option.disabled);
-  if (!options.length) return false;
-  const current = stagedChoiceOption();
-  if (current && choiceOptionCardId(current) === String(cardId)) {
-    stagedChoiceOptionId = null;
-    return true;
-  }
-  stagedChoiceOptionId = options[0].id;
-  return true;
-}
-
-function stagedChoiceOption(choice = game?.pendingChoice) {
-  syncStagedChoiceUi(choice);
-  return validChoiceOptions(choice).find((option) => option.id === stagedChoiceOptionId && !option.disabled) || null;
-}
-
-function choiceCardStateClasses(cardId) {
-  const surface = game?.pendingChoice ? choiceCardSurface(game.pendingChoice) : "none";
-  if (!["hand", "board"].includes(surface)) return "";
-  const options = choiceOptionsForCard(cardId);
-  if (!options.length) return "";
-  const enabled = options.some((option) => !option.disabled);
-  const staged = stagedChoiceOption();
-  return [
-    enabled ? "choice-card-selectable" : "choice-card-disabled",
-    staged && choiceOptionCardId(staged) === String(cardId) ? "choice-card-staged" : "",
-    options.some((option) => option.selected) ? "choice-card-committed" : ""
-  ].filter(Boolean).join(" ");
-}
-
-function choiceStageTitle(choice) {
-  const source = choice?.card ? cardName(choice.card) : t("effect", locale());
-  return choice?.data?.declareTrigger
-    ? `${t("declaring", locale())} · ${source}`
-    : `${t("resolving", locale())} · ${source}`;
-}
-
-function choiceTextActions(choice) {
-  return validChoiceOptions(choice)
-    .filter((option) => !choiceOptionHasPhysicalCard(option))
-    .map((option) => `
-      <button type="button" class="${option.confirmControlledChoices ? "primary" : "secondary"}" data-action="choose-effect" data-choice="${escapeHtml(option.id || "")}" ${option.disabled ? "disabled aria-disabled=\"true\"" : ""}>
-        ${escapeHtml(localizedChoiceOptionLabel(option))}
-      </button>
-    `).join("");
-}
-
-function choiceOptionVariantLabel(option, siblings = []) {
-  if (option?.placement === "top") return locale() === LOCALES.KO ? "덱 위" : "Top of deck";
-  if (option?.placement === "bottom") return locale() === LOCALES.KO ? "덱 아래" : "Bottom of deck";
-  if (option?.destination === "base") return locale() === LOCALES.KO ? "기지" : "Base";
-  if (option?.destination) {
-    const field = game.battlefields.find((candidate) => candidate?.instanceId === option.destination);
-    if (field) return battlefieldName(field);
-  }
-  if (Number.isFinite(Number(option?.amount)) && Number(option.amount) > 0) {
-    return locale() === LOCALES.KO ? `피해 ${Number(option.amount)}` : `${Number(option.amount)} damage`;
-  }
-  const label = localizedChoiceOptionLabel(option);
-  const duplicateCount = siblings.filter((candidate) => localizedChoiceOptionLabel(candidate) === label).length;
-  if (duplicateCount <= 1) return label;
-  const index = Math.max(0, siblings.findIndex((candidate) => candidate.id === option.id));
-  return `${label} ${index + 1}`;
-}
-
-function choiceStageVariants(choice) {
-  const selected = stagedChoiceOption(choice);
-  if (!selected) return "";
-  const siblings = choiceOptionsForCard(choiceOptionCardId(selected), choice).filter((option) => !option.disabled);
-  if (siblings.length <= 1) return "";
-  const groupLabel = locale() === LOCALES.KO ? "선택 방식" : "Choice variant";
-  return `
-    <div class="choice-stage-variants" role="group" aria-label="${escapeHtml(groupLabel)}">
-      ${siblings.map((option) => `
-        <button type="button" class="choice-stage-variant ${option.id === selected.id ? "is-active" : ""}" data-action="stage-choice-option" data-choice="${escapeHtml(option.id || "")}" aria-pressed="${option.id === selected.id}">
-          ${escapeHtml(choiceOptionVariantLabel(option, siblings))}
-        </button>
-      `).join("")}
-    </div>
-  `;
-}
-
-function choiceStageActionGroup(choice, { drawer = false } = {}) {
-  const selected = stagedChoiceOption(choice);
-  const selectedCard = selected ? choicePreviewCard(selected) : null;
-  let selectedLabel = selectedCard && !selectedCard.redacted
-    ? cardName(selectedCard)
-    : selected ? localizedChoiceOptionLabel(selected) : "";
-  if (selected) {
-    const siblings = choiceOptionsForCard(choiceOptionCardId(selected), choice).filter((option) => !option.disabled);
-    if (siblings.length > 1) selectedLabel = `${selectedLabel} · ${choiceOptionVariantLabel(selected, siblings)}`;
-  }
-  return `
-    <div class="choice-stage-actions">
-      ${choiceTextActions(choice)}
-      ${choice.optional ? `<button type="button" class="secondary" data-action="decline-effect">${t("decline", locale())}</button>` : ""}
-      ${drawer ? `<button type="button" class="secondary choice-drawer-toggle" data-action="toggle-choice-drawer" aria-expanded="${!choiceDrawerCollapsed}">${choiceDrawerCollapsed ? (locale() === LOCALES.KO ? "선택 카드 펼치기" : "Show cards") : (locale() === LOCALES.KO ? "선택 카드 숨기기" : "Hide cards")}</button>` : ""}
-      ${choiceStageVariants(choice)}
-      <button type="button" class="primary confirm-staged-choice" data-action="confirm-staged-choice" ${selected ? "" : "disabled aria-disabled=\"true\""}>
-        ${selected ? `${t("confirm", locale())} · ${escapeHtml(selectedLabel)}` : (locale() === LOCALES.KO ? "카드를 선택해 주세요" : "Choose a card")}
-      </button>
-    </div>
-  `;
-}
-
-function compactChoiceCard(option) {
-  const preview = choicePreviewCard(option);
-  const cardId = choiceOptionCardId(option);
-  const context = choiceCardContext(cardId, preview);
-  const selected = stagedChoiceOptionId === option.id;
-  const committed = Boolean(option.selected);
-  const label = preview && !preview.redacted ? cardName(preview) : localizedChoiceOptionLabel(option);
-  return `
-    <div class="choice-drawer-card-wrap ${selected ? "is-staged" : ""} ${committed ? "is-committed" : ""}">
-      <button type="button" class="choice-drawer-card" data-action="stage-choice-card" data-stage-mode="option" data-choice="${escapeHtml(option.id || "")}" data-card-id="${escapeHtml(cardId)}" aria-pressed="${selected}" ${option.disabled ? "disabled aria-disabled=\"true\"" : ""}>
-        ${choiceOptionImage(option)}
-        <span class="choice-card-name">${escapeHtml(label)}</span>
-        <small>${escapeHtml(choiceLocationLabel(context))}</small>
-        <b class="choice-check" aria-hidden="true">${selected ? "✓" : committed ? "●" : ""}</b>
-      </button>
-      ${preview && !preview.redacted ? `<button type="button" class="choice-card-view" data-action="view-choice-card" data-card-id="${escapeHtml(cardId)}">${t("cardInfo", locale())}</button>` : ""}
-    </div>
-  `;
-}
-
-function inlineCardChoiceBar(choice, surface) {
-  const surfaceLabel = surface === "hand"
-    ? (locale() === LOCALES.KO ? "손패에서 선택" : "Choose from hand")
-    : (locale() === LOCALES.KO ? "보드에서 선택" : "Choose on the board");
-  const prompt = localizedChoicePrompt(choice);
-  const repeatProgress = repeatedDamageProgressInfo(choice);
-  const progressTitle = repeatProgress ? `${repeatProgress.label} · ${repeatProgress.detail} · ${prompt}` : prompt;
-  return `
-    <section class="choice-stage-bar ${surface}-choice-stage" ${choiceModalAttributes(choice, { inline: true })}>
-      <div class="choice-stage-copy">
-        <span>${surfaceLabel}</span>
-        <strong>${escapeHtml(choiceStageTitle(choice))}</strong>
-        <p class="${repeatProgress ? "choice-repeat-progress has-repeat-progress" : ""}" title="${escapeHtml(progressTitle)}">
-          ${repeatProgress ? `<strong>${escapeHtml(repeatProgress.label)}</strong><span>${escapeHtml(repeatProgress.detail)}</span>` : ""}
-          <span class="choice-stage-prompt">${escapeHtml(prompt)}</span>
-        </p>
-      </div>
-      ${choiceStageActionGroup(choice)}
-    </section>
-  `;
-}
-
-function pileChoiceDrawer(choice) {
-  const options = validChoiceOptions(choice).filter(choiceOptionHasPhysicalCard);
-  return `
-    <section class="choice-zone-drawer ${choiceDrawerCollapsed ? "is-collapsed" : ""}" ${choiceModalAttributes(choice)}>
-      <div class="choice-drawer-head">
-        <div>
-          <span>${locale() === LOCALES.KO ? "카드 선택" : "Card selection"}</span>
-          <strong>${escapeHtml(choiceStageTitle(choice))}</strong>
-          <p>${escapeHtml(localizedChoicePrompt(choice))}</p>
-        </div>
-        ${choiceStageActionGroup(choice, { drawer: true })}
-      </div>
-      ${choiceDrawerCollapsed ? "" : `
-        <div class="choice-drawer-track" data-scroll-key="choice-${escapeHtml(choiceUiKey(choice) || "pending")}-drawer">
-          ${options.map(compactChoiceCard).join("")}
-        </div>
-      `}
-    </section>
-  `;
-}
-
-function commandChoiceSurface(choice) {
-  const surface = choiceCardSurface(choice);
-  if (surface === "hand" || surface === "board") return inlineCardChoiceBar(choice, surface);
-  if (surface === "pile") return pileChoiceDrawer(choice);
-  if (surface === "damage") return choice.effect === "combatDamage" ? combatDamagePanel(choice) : alphaStrikeDamagePanel(choice);
-  return "";
-}
-
 function choicePanel() {
   const choice = game.pendingChoice;
-  if (!choice || !Array.isArray(choice.options)) return "";
-  if (BINARY_EFFECT_CHOICES.has(choice.effect)) return binaryEffectChoicePanel(choice);
   if (choice.effect === "triggerOrder") return triggerOrderPanel(choice);
   if (choice.effect === "combatDamage") return combatDamagePanel(choice);
-  if (["alphaStrikeDamage", "splitDamageAllocation"].includes(choice.effect)) return alphaStrikeDamagePanel(choice);
+  if (choice.effect === "alphaStrikeDamage") return alphaStrikeDamagePanel(choice);
   if (choice.effect === "payDeflect") return deflectPaymentPanel(choice);
   if (choice.effect === "predictChoice") return predictChoicePanel(choice);
   if (choice.effect === "observedTopDeckSelfAbility") return observedTopDeckSelfAbilityPanel(choice);
   if (choice.effect === "acknowledgeReveal") return revealConfirmationPanel(choice);
-  const options = choice.options.filter((option) => option && typeof option === "object" && !Array.isArray(option));
   const instruction = choiceEffectInstruction(choice);
   const repeatProgress = repeatedDamageProgress(choice);
-  const searchable = options.length > 12;
-  const hasCardOptions = options.some(choiceOptionHasPhysicalCard);
-  const hasTextOptions = options.some((option) => !choiceOptionHasPhysicalCard(option));
-  const choiceLayout = hasCardOptions && hasTextOptions ? "mixed" : hasCardOptions ? "cards" : "text";
+  const searchable = choice.options.length > 12;
   return `
-    <section class="choice-panel modal-panel choice-resolution-panel ${hasCardOptions ? "choice-card-selection-panel has-card-options" : ""} ${hasTextOptions ? "has-text-options" : ""} ${choice.effect === "sabotage" ? "reveal-panel" : ""}" data-choice-layout="${choiceLayout}" data-choice-count="${options.length}" ${choiceModalAttributes(choice)}>
+    <section class="choice-panel modal-panel ${choice.effect === "sabotage" ? "reveal-panel" : ""}">
       <div class="section-head">
         <div>
-          <h2>${escapeHtml(choice.effect === "sabotage" ? `${choice?.card ? cardName(choice.card) : t("effect", locale())}: ${t("revealedHand", locale())}` : `${choice.data?.declareTrigger ? t("declaring", locale()) : t("resolving", locale())} ${choice?.card ? cardName(choice.card) : t("effect", locale())}`)}</h2>
-          <span>${escapeHtml(localizedChoicePrompt(choice))}</span>
-          ${instruction ? `<p class="choice-instruction">${escapeHtml(instruction)}</p>` : ""}
+          <h2>${choice.effect === "sabotage" ? `${cardName(choice.card)}: ${t("revealedHand", locale())}` : `${choice.data?.declareTrigger ? t("declaring", locale()) : t("resolving", locale())} ${cardName(choice.card)}`}</h2>
+          <span>${localizedChoicePrompt(choice)}</span>
+          ${instruction ? `<p class="choice-instruction">${instruction}</p>` : ""}
           ${repeatProgress}
         </div>
         ${choice.optional ? `<button data-action="decline-effect">${t("decline", locale())}</button>` : ""}
@@ -6649,11 +4346,11 @@ function choicePanel() {
           <input type="search" data-action="choice-search" autocomplete="off"
             placeholder="${locale() === LOCALES.KO ? "카드 이름이나 선택지 입력" : "Type a card name or choice"}"
             aria-controls="pending-choice-grid" />
-          <small data-choice-search-count>${locale() === LOCALES.KO ? `전체 ${options.length}개` : `${options.length} total`}</small>
+          <small data-choice-search-count>${locale() === LOCALES.KO ? `전체 ${choice.options.length}개` : `${choice.options.length} total`}</small>
         </label>
       ` : ""}
-      <div class="choice-grid" id="pending-choice-grid" data-choice-layout="${choiceLayout}" data-scroll-key="choice-${escapeHtml(choice.id || choice.effect || "pending")}-options">
-        ${options.map(choiceOptionButton).join("")}
+      <div class="choice-grid" id="pending-choice-grid">
+        ${choice.options.map(choiceOptionButton).join("")}
       </div>
       ${searchable ? `<p class="choice-search-empty" data-choice-search-empty hidden>${locale() === LOCALES.KO ? "일치하는 선택지가 없습니다." : "No matching choices."}</p>` : ""}
     </section>
@@ -6667,15 +4364,15 @@ function triggerOrderPanel(choice) {
   const triggerOptions = choice.options.filter((option) => !option.confirmTriggerOrder);
   const confirmOption = choice.options.find((option) => option.confirmTriggerOrder);
   const total = triggerOptions.length;
-  const requiredRemaining = triggerOptions.filter((option) => !option.selected).length;
+  const mandatoryRemaining = triggerOptions.filter((option) => !option.optionalTrigger && !option.selected).length;
   return `
-    <section class="choice-panel modal-panel trigger-order-panel" ${choiceModalAttributes(choice)}>
+    <section class="choice-panel modal-panel trigger-order-panel">
       <div class="section-head trigger-order-head">
         <div>
           <h2>${t("triggerOrderTitle", locale())}</h2>
           <span>${t("triggerOrderProgress", locale(), { selected: chosen.length, total })}</span>
           <p class="choice-instruction trigger-order-instruction">${t("triggerOrderHelp", locale())}</p>
-          ${requiredRemaining ? `<p class="trigger-order-required">${t("triggerOrderMandatoryRemaining", locale(), { n: requiredRemaining })}</p>` : ""}
+          ${mandatoryRemaining ? `<p class="trigger-order-required">${t("triggerOrderMandatoryRemaining", locale(), { n: mandatoryRemaining })}</p>` : ""}
         </div>
         ${confirmOption ? `
           <div class="trigger-order-confirm">
@@ -6702,7 +4399,7 @@ function triggerOrderPanel(choice) {
           </ol>
         </div>
       ` : ""}
-      <div class="choice-grid trigger-order-grid" data-scroll-key="choice-${escapeHtml(choice.id || choice.effect || "trigger-order")}-options">
+      <div class="choice-grid trigger-order-grid">
         ${triggerOptions.map((option) => triggerOrderOptionButton(choice, option)).join("")}
       </div>
     </section>
@@ -6719,7 +4416,7 @@ function triggerOrderOptionButton(choice, option) {
       <button type="button" class="choice-option trigger-order-option ${option.selected ? "is-selected" : ""}" data-action="choose-effect" data-choice="${option.id}" data-card-id="${option.cardId || ""}" aria-pressed="${Boolean(option.selected)}">
         <strong class="trigger-order-rank">${option.selected
           ? t("triggerOrderChooseRank", locale(), { n: option.selectionOrder })
-          : t(option.wasOptionalTrigger ? "triggerOrderAcceptedOptional" : "triggerOrderMandatory", locale())}</strong>
+          : t(option.optionalTrigger ? "triggerOrderOptional" : "triggerOrderMandatory", locale())}</strong>
         ${option.cardId ? choiceOptionImage(option) : ""}
         <span class="choice-card-name">${sourceName}</span>
         <span class="trigger-order-kind">${triggerKindLabel(trigger) || t("triggeredAbility", locale())}</span>
@@ -6747,14 +4444,14 @@ function predictChoicePanel(choice) {
   const keep = choice.options.find((option) => option.id === "keep");
   const recycle = choice.options.find((option) => option.id === "recycle");
   return `
-    <section class="choice-panel modal-panel predict-choice-panel" ${choiceModalAttributes(choice)}>
+    <section class="choice-panel modal-panel predict-choice-panel">
       <div class="section-head">
         <div>
           <h2>${t("predictedCard", locale())}</h2>
           <span>${preview && !preview.redacted ? cardName(preview) : localizedChoicePrompt(choice)}</span>
         </div>
       </div>
-      <div class="predict-choice-content" data-scroll-key="choice-${escapeHtml(choice.id || choice.effect || "predict")}-content">
+      <div class="predict-choice-content">
         <div class="predict-card-preview">
           ${cardOption ? choiceOptionImage(cardOption) : ""}
           ${preview && !preview.redacted ? `<strong>${cardName(preview)}</strong><button type="button" class="choice-card-view" data-action="view-choice-card" data-card-id="${preview.instanceId}">${t("viewFullCard", locale())}</button>` : ""}
@@ -6778,34 +4475,6 @@ function predictChoicePanel(choice) {
   `;
 }
 
-function binaryEffectChoicePanel(choice) {
-  const options = validChoiceOptions(choice);
-  const source = choice?.card;
-  const sourceName = source ? cardName(source) : t("effect", locale());
-  const title = locale() === LOCALES.KO ? "효과 발동 여부" : "Use this effect?";
-  const prompt = locale() === LOCALES.KO
-    ? `${sourceName}의 효과를 발동하시겠습니까?`
-    : `Do you want to use ${sourceName}'s effect?`;
-  return `
-    <section class="choice-panel modal-panel binary-effect-choice-panel" ${choiceModalAttributes(choice)}>
-      <div class="binary-effect-copy">
-        <span>${locale() === LOCALES.KO ? "선택 효과" : "Optional effect"}</span>
-        <h2>${escapeHtml(title)}</h2>
-        <strong>${escapeHtml(sourceName)}</strong>
-        <p>${escapeHtml(prompt)}</p>
-      </div>
-      ${source?.image ? `<button type="button" class="binary-effect-source" data-action="view-choice-card" data-card-id="${escapeHtml(source.instanceId || "")}" aria-label="${escapeHtml(`${sourceName} · ${t("cardInfo", locale())}`)}"><img src="${escapeHtml(source.image)}" alt="${escapeHtml(sourceName)}" loading="lazy" /></button>` : ""}
-      <div class="binary-effect-actions" role="group" aria-label="${escapeHtml(title)}">
-        ${options.map((option, index) => `
-          <button type="button" class="${index === 0 ? "primary" : "secondary"}" data-action="choose-effect" data-choice="${escapeHtml(option.id || "")}" ${option.disabled ? "disabled aria-disabled=\"true\"" : ""}>
-            ${escapeHtml(localizedChoiceOptionLabel(option))}
-          </button>
-        `).join("")}
-      </div>
-    </section>
-  `;
-}
-
 function observedTopDeckSelfAbilityPanel(choice) {
   const preview = choice.card;
   const descriptions = locale() === LOCALES.KO
@@ -6820,7 +4489,7 @@ function observedTopDeckSelfAbilityPanel(choice) {
         leave: "Leave this card in the Main Deck and continue the original effect."
       };
   return `
-    <section class="choice-panel modal-panel predict-choice-panel observed-top-deck-choice-panel" ${choiceModalAttributes(choice)}>
+    <section class="choice-panel modal-panel predict-choice-panel observed-top-deck-choice-panel">
       <div class="section-head">
         <div>
           <h2>${cardName(preview)}</h2>
@@ -6829,7 +4498,7 @@ function observedTopDeckSelfAbilityPanel(choice) {
             : choice.prompt}</span>
         </div>
       </div>
-      <div class="predict-choice-content" data-scroll-key="choice-${escapeHtml(choice.id || choice.effect || "observed")}-content">
+      <div class="predict-choice-content">
         <div class="predict-card-preview">
           ${choiceOptionImage({ cardId: preview.instanceId, card: preview, revealed: true, label: cardName(preview) })}
           <strong>${cardName(preview)}</strong>
@@ -6873,14 +4542,14 @@ function choiceRevealedCards(choice) {
 function revealConfirmationPanel(choice) {
   const revealedCards = choice.data?.revealedCards || [];
   return `
-    <section class="choice-panel modal-panel reveal-confirmation-panel" ${choiceModalAttributes(choice)}>
+    <section class="choice-panel modal-panel reveal-confirmation-panel">
       <div class="section-head">
         <div>
           <h2>${cardName(choice.card)}: ${t("revealed", locale())}</h2>
           <span>${locale() === "en" ? choice.prompt : t("confirmRevealPrompt", locale())}</span>
         </div>
       </div>
-      <div class="revealed-card-grid" data-scroll-key="choice-${escapeHtml(choice.id || choice.effect || "reveal")}-cards">
+      <div class="revealed-card-grid">
         ${revealedCards.map((card) => `
           <article class="revealed-card-item">
             ${choiceOptionImage({ cardId: card.instanceId, card, revealed: true, label: cardName(card) })}
@@ -6898,11 +4567,10 @@ function revealConfirmationPanel(choice) {
 
 function choiceOptionButton(option) {
   const preview = choicePreviewCard(option);
-  const physical = choiceOptionHasPhysicalCard(option);
   const label = preview && !preview.redacted
     ? (preview.type === "battlefield" ? battlefieldName(preview) : cardName(preview))
     : localizedChoiceOptionLabel(option);
-  const context = physical ? choiceCardContext(choiceOptionCardId(option), preview) : null;
+  const context = option.cardId ? choiceCardContext(option.cardId, preview) : null;
   const ownership = choiceOwnership(context, preview);
   const location = context ? choiceLocationLabel(context) : "";
   const selectionState = option.selected
@@ -6910,13 +4578,13 @@ function choiceOptionButton(option) {
     : "";
   return `
     <div class="choice-option-wrap">
-      <button type="button" class="choice-option ${physical ? `card-choice-option choice-owner-${ownership.tone}` : "text-choice-option"} ${option.selected ? "is-selected" : ""} ${option.confirmControlledChoices ? "confirm-choice-option" : ""} ${option.disabled ? "disabled-choice" : ""}" data-action="choose-effect" data-choice="${escapeHtml(option.id || "")}" data-card-id="${physical ? escapeHtml(choiceOptionCardId(option)) : ""}" ${option.confirmControlledChoices ? "" : `aria-pressed="${Boolean(option.selected)}"`} ${option.disabled ? "disabled aria-disabled=\"true\"" : ""}>
-        ${physical ? choiceOptionImage(option) : ""}
-        <span class="choice-card-name">${escapeHtml(label)}</span>
+      <button type="button" class="choice-option ${option.cardId ? `card-choice-option choice-owner-${ownership.tone}` : "text-choice-option"} ${option.selected ? "is-selected" : ""} ${option.confirmControlledChoices ? "confirm-choice-option" : ""} ${option.disabled ? "disabled-choice" : ""}" data-action="choose-effect" data-choice="${option.id}" data-card-id="${option.cardId || ""}" ${option.confirmControlledChoices ? "" : `aria-pressed="${Boolean(option.selected)}"`} ${option.disabled ? "disabled aria-disabled=\"true\"" : ""}>
+        ${option.cardId ? choiceOptionImage(option) : ""}
+        <span class="choice-card-name">${label}</span>
         ${selectionState ? `<small class="choice-selection-state">${selectionState}</small>` : ""}
-        ${physical ? `<span class="choice-card-context"><b>${escapeHtml(ownership.label)}</b>${location ? `<small>${escapeHtml(location)}</small>` : ""}</span>` : ""}
+        ${option.cardId ? `<span class="choice-card-context"><b>${ownership.label}</b>${location ? `<small>${location}</small>` : ""}</span>` : ""}
       </button>
-      ${physical && preview && !preview.redacted ? `<button type="button" class="choice-card-view" data-action="view-choice-card" data-card-id="${escapeHtml(preview.instanceId || "")}">${t("viewFullCard", locale())}</button>` : ""}
+      ${preview && !preview.redacted ? `<button type="button" class="choice-card-view" data-action="view-choice-card" data-card-id="${preview.instanceId}">${t("viewFullCard", locale())}</button>` : ""}
     </div>
   `;
 }
@@ -6971,8 +4639,6 @@ function localizedChoiceOptionLabel(option) {
     decline: t("decline", locale()),
     continue: t("confirm", locale()),
     "use-trigger": t("useEffect", locale()),
-    "use-optional-trigger": locale() === LOCALES.KO ? "효과 발동" : "Use effect",
-    "decline-optional-trigger": locale() === LOCALES.KO ? "발동하지 않음" : "Do not use",
     pay: t("payCost", locale()),
     keep: t("keepOnTop", locale()),
     recycle: t("recycle", locale()),
@@ -6993,17 +4659,17 @@ function choicePreviewCard(option) {
   return option?.card && !option.card.redacted ? option.card : findChoicePreviewCard(option?.cardId);
 }
 
-function repeatedDamageProgressInfo(choice) {
+function repeatedDamageProgress(choice) {
   const declarationSpec = choice.effect === "declarePlayTarget"
     ? choice.data?.currentDeclaration?.spec
     : null;
   const declaredRepeatedDamage = declarationSpec?.kind === "dealDamageUnit"
     && declarationSpec?.selectRepeatedTargetsOnPlay;
-  if (choice.effect !== "damageUnit" && !declaredRepeatedDamage) return null;
+  if (choice.effect !== "damageUnit" && !declaredRepeatedDamage) return "";
   const total = declaredRepeatedDamage
     ? choice.data?.max || declarationSpec.repeat || 1
     : choice.data?.repeatTotal || 1;
-  if (total < 2) return null;
+  if (total < 2) return "";
   const step = declaredRepeatedDamage
     ? Math.min(total, (choice.data?.selectedForCurrentStep?.length || 0) + 1)
     : Math.max(1, total - (choice.data?.remaining || total) + 1);
@@ -7017,14 +4683,7 @@ function repeatedDamageProgressInfo(choice) {
   const detail = locale() === LOCALES.KO
     ? (mayRepeatTarget ? "같은 유닛을 다시 선택할 수 있습니다." : "이전에 선택한 유닛은 다시 선택할 수 없습니다.")
     : (mayRepeatTarget ? "The same unit may be selected again." : "Previously selected units cannot be selected again.");
-  return { label, detail };
-}
-
-function repeatedDamageProgress(choice) {
-  const progress = repeatedDamageProgressInfo(choice);
-  if (!progress) return "";
-  const { label, detail } = progress;
-  return `<p class="choice-repeat-progress"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(detail)}</span></p>`;
+  return `<p class="choice-repeat-progress"><strong>${label}</strong><span>${detail}</span></p>`;
 }
 
 function choiceEffectInstruction(choice) {
@@ -7061,7 +4720,6 @@ function choiceEffectInstruction(choice) {
       alphaStrike: `${sourceName}: 선제 피해를 입힐 아군 유닛을 선택하세요.`,
       trashSpell: `${sourceName}: 폐기장에서 사용할 주문을 선택하세요.`,
       alphaStrikeDamage: `${sourceName}: 합법적인 적 유닛들에게 피해를 배정하세요.`,
-      splitDamageAllocation: `${sourceName}: 표시된 합법 피해 수치 중 하나를 적 유닛에게 배정하세요.`,
       starCrossedFriendly: `${sourceName}: 손으로 되돌릴 아군 유닛을 선택하세요.`,
       starCrossedEnemy: `${sourceName}: 손으로 되돌릴 적 유닛을 선택하세요.`,
       discardForHwei: `${sourceName}: 효과를 위해 버릴 카드를 선택하세요.`,
@@ -7101,7 +4759,6 @@ function choiceEffectInstruction(choice) {
     alphaStrike: `${sourceName}: choose the friendly unit that will deal Alpha Strike damage.`,
     trashSpell: `${sourceName}: choose a spell from trash to play through this effect.`,
     alphaStrikeDamage: `${sourceName}: assign the spell's damage among legal enemy units.`,
-    splitDamageAllocation: `${sourceName}: assign one of the shown legal damage amounts to an enemy unit.`,
     starCrossedFriendly: `${sourceName}: choose the friendly unit that will be returned to hand.`,
     starCrossedEnemy: `${sourceName}: choose the enemy unit that will be returned to hand.`,
     discardForHwei: `${sourceName}: choose a card to discard for Hwei's effect.`,
@@ -7114,60 +4771,26 @@ function choiceEffectInstruction(choice) {
   return "";
 }
 
-function damageAssignmentHistory(assignments) {
-  const safeAssignments = Array.isArray(assignments)
-    ? assignments.filter((item) => {
-        const targetId = String(item?.targetId || item?.cardId || "");
-        const amount = Number(item?.amount);
-        return targetId && Number.isFinite(amount) && amount > 0;
-      })
-    : [];
-  if (!safeAssignments.length) return "";
-  const label = locale() === LOCALES.KO ? "이미 배정한 피해" : "Assigned damage";
-  return `
-    <div class="damage-assignment-history" aria-label="${escapeHtml(label)}">
-      <strong>${escapeHtml(label)}</strong>
-      <div class="damage-assignment-history-track">
-        ${safeAssignments.map((item) => {
-          const targetId = String(item.targetId || item.cardId || "");
-          const target = findChoicePreviewCard(targetId) || findVisibleCard(targetId);
-          const targetLabel = target && !target.redacted
-            ? cardName(target)
-            : (locale() === LOCALES.KO ? "대상" : "Target");
-          const amount = Math.max(0, Number(item.amount) || 0);
-          return `<span class="damage-assignment-chip" data-target-id="${escapeHtml(targetId)}" data-amount="${amount}"><b>${escapeHtml(targetLabel)}</b><em>${amount}</em></span>`;
-        }).join("")}
-      </div>
-    </div>
-  `;
-}
-
 function combatDamagePanel(choice) {
   const assigning = game.players.find((player) => player.id === choice.playerId);
   const targetPlayer = game.players.find((player) => player.id === choice.data?.targetPlayerId);
-  const legalOptions = new Map(validChoiceOptions(choice)
-    .filter((option) => choiceOptionCardId(option) && !option.disabled)
-    .map((option) => [choiceOptionCardId(option), String(option.id || "")]));
-  const infos = Array.isArray(choice.data?.targetInfos) && choice.data.targetInfos.length
-    ? choice.data.targetInfos
-    : validChoiceOptions(choice).map((option) => ({ cardId: choiceOptionCardId(option), amount: option.amount || 0 }));
+  const legal = new Set(choice.options.map((option) => option.cardId));
+  const infos = choice.data?.targetInfos || [];
   return `
-    <section class="choice-zone-drawer damage-assignment-drawer combat-damage-panel" ${choiceModalAttributes(choice)}>
-      <div class="damage-assignment-head">
+    <section class="choice-panel modal-panel combat-damage-panel">
+      <div class="section-head">
         <div>
-          <span>${locale() === LOCALES.KO ? "전투 피해 배정" : "Combat damage assignment"}</span>
           <h2>${t("damageAssign", locale())}</h2>
           <span>${t("assigningDamage", locale(), { actor: assigning ? playerName(assigning) : t("nobody", locale()), amount: choice.data?.remaining || 0, target: targetPlayer ? playerName(targetPlayer) : t("opponent", locale()) })}</span>
         </div>
-        <div class="damage-remaining-orb" aria-label="${escapeHtml(locale() === LOCALES.KO ? `남은 피해 ${choice.data?.remaining || 0}` : `${choice.data?.remaining || 0} damage remaining`)}">
-          <strong>${choice.data?.remaining || 0}</strong>
-          <span>${locale() === LOCALES.KO ? "남은 피해" : "remaining"}</span>
-        </div>
       </div>
-      <p class="damage-assignment-help">${t("autoLethalHint", locale())}</p>
-      ${damageAssignmentHistory(choice.data?.assignments)}
-      <div class="damage-target-track combat-choice-grid" data-scroll-key="choice-${escapeHtml(choice.id || choice.effect || "combat")}-options">
-        ${infos.filter((info) => info?.cardId).map((info) => combatDamageOption(info, legalOptions.get(String(info.cardId)) || "", choice.data?.battlefieldId)).join("")}
+      <div class="combat-summary">
+        <strong>${choice.data?.remaining || 0}</strong>
+        <span>${locale() === LOCALES.KO ? "배정 가능한 피해" : "available damage"}</span>
+        <small>${t("autoLethalHint", locale())}</small>
+      </div>
+      <div class="choice-grid combat-choice-grid">
+        ${infos.map((info) => combatDamageOption(info, legal.has(info.cardId))).join("")}
       </div>
     </section>
   `;
@@ -7178,7 +4801,7 @@ function deflectPaymentPanel(choice) {
   const amount = choice.data?.amount || 1;
   const selected = choice.data?.selectedRuneIds?.length || 0;
   return `
-    <section class="choice-panel modal-panel deflect-panel" ${choiceModalAttributes(choice)}>
+    <section class="choice-panel modal-panel deflect-panel">
       <div class="section-head">
         <div>
           <h2>${keywordText(["Deflect"])} ${amount}</h2>
@@ -7189,7 +4812,7 @@ function deflectPaymentPanel(choice) {
       <p class="choice-instruction">${locale() === LOCALES.KO
         ? `이 대상을 선택하려면 힘으로 사용할 룬 ${amount}개를 선택해야 합니다. 선택한 룬은 룬 덱으로 재활용됩니다.`
         : `Choose ${amount} rune${amount === 1 ? "" : "s"} to pay as Power. Chosen runes are recycled to the Rune Deck.`}</p>
-      <div class="deflect-rune-grid" data-scroll-key="choice-${escapeHtml(choice.id || choice.effect || "deflect")}-runes">
+      <div class="deflect-rune-grid">
         ${choice.options.map((option) => {
           const rune = findVisibleCard(option.cardId);
           return `
@@ -7209,46 +4832,32 @@ function alphaStrikeDamagePanel(choice) {
   const targets = [...new Map(choice.options
     .filter((option) => option.cardId)
     .map((option) => [option.cardId, option])).values()];
-  const remaining = Math.max(0, Number(choice.data?.splitDamage?.remainingDamage ?? choice.data?.remainingDamage ?? choice.data?.remaining) || 0);
+  const remaining = choice.data?.remainingDamage || 0;
   return `
-    <section class="choice-zone-drawer damage-assignment-drawer alpha-strike-panel" ${choiceModalAttributes(choice)}>
-      <div class="damage-assignment-head">
+    <section class="choice-panel modal-panel alpha-strike-panel">
+      <div class="section-head">
         <div>
-          <span>${locale() === LOCALES.KO ? "효과 피해 배정" : "Effect damage assignment"}</span>
-          <h2>${escapeHtml(choice?.card ? cardName(choice.card) : t("effect", locale()))}</h2>
-          <span>${escapeHtml(localizedChoicePrompt(choice))}</span>
-        </div>
-        <div class="damage-remaining-orb">
-          <strong>${remaining}</strong>
-          <span>${locale() === LOCALES.KO ? "남은 피해" : "remaining"}</span>
+          <h2>${cardName(choice.card)}</h2>
+          <span>${localizedChoicePrompt(choice)}</span>
         </div>
       </div>
-      <p class="damage-assignment-help">${escapeHtml(choiceEffectInstruction(choice))}</p>
-      ${damageAssignmentHistory(choice.data?.splitDamage?.allocations)}
-      <div class="damage-target-track alpha-strike-targets" data-scroll-key="choice-${escapeHtml(choice.id || choice.effect || "alpha")}-targets">
+      <div class="combat-summary">
+        <strong>${remaining}</strong>
+        <span>${locale() === LOCALES.KO ? "배정 가능한 피해" : "available damage"}</span>
+        <small>${choiceEffectInstruction(choice)}</small>
+      </div>
+      <div class="alpha-strike-targets">
         ${targets.map((option) => {
           const target = findVisibleCard(option.cardId);
-          const stats = target ? boardUnitStats(target, selectedContext(target.instanceId)?.location) : { might: 0, remaining: 0 };
-          const amountOptions = validChoiceOptions(choice)
-            .filter((candidate) => candidate.cardId === option.cardId && Number(candidate.amount) > 0)
-            .sort((left, right) => Number(left.amount) - Number(right.amount));
-          const minimum = Number(amountOptions[0]?.amount) || 1;
-          const maximum = Number(amountOptions.at(-1)?.amount) || Math.max(1, remaining);
-          const initial = maximum;
           return `
             <div class="alpha-strike-target">
               ${choiceOptionImage(option)}
-              <div class="damage-target-copy">
-                <strong>${target ? cardName(target) : localizedDynamicText(option.label)}</strong>
-                <span>${t("currentMight", locale())} ${stats.might} · ${t("remainingHealth", locale())} ${stats.remaining}</span>
-              </div>
-              <div class="damage-stepper" aria-label="${escapeHtml(locale() === LOCALES.KO ? "배정할 피해" : "Damage to assign")}">
-                <button type="button" data-action="adjust-alpha-damage" data-target="${escapeHtml(option.cardId || "")}" data-delta="-1" aria-label="${escapeHtml(locale() === LOCALES.KO ? "피해 1 감소" : "Decrease damage")}">−</button>
-                <output>${initial}</output>
-                <input type="number" min="${minimum}" max="${maximum}" value="${initial}" data-alpha-target="${escapeHtml(option.cardId || "")}" data-allowed-amounts="${escapeHtml(amountOptions.map((candidate) => candidate.amount).join(" "))}" aria-label="${escapeHtml(locale() === LOCALES.KO ? "배정 피해" : "Assigned damage")}" readonly />
-                <button type="button" data-action="adjust-alpha-damage" data-target="${escapeHtml(option.cardId || "")}" data-delta="1" aria-label="${escapeHtml(locale() === LOCALES.KO ? "피해 1 증가" : "Increase damage")}">+</button>
-              </div>
-              <button type="button" class="primary damage-assign-button" data-action="assign-alpha-strike" data-target="${escapeHtml(option.cardId || "")}">${locale() === LOCALES.KO ? "이 유닛에 배정" : "Assign here"}</button>
+              <strong>${target ? cardName(target) : localizedDynamicText(option.label)}</strong>
+              <label>
+                <span>${t("damage", locale())}</span>
+                <input type="number" min="1" max="${remaining}" value="1" data-alpha-target="${option.cardId}" />
+              </label>
+              <button type="button" class="primary" data-action="assign-alpha-strike" data-target="${option.cardId}">${t("confirm", locale())}</button>
             </div>
           `;
         }).join("")}
@@ -7257,47 +4866,25 @@ function alphaStrikeDamagePanel(choice) {
   `;
 }
 
-function combatDamageOption(info, legalOptionId, battlefieldId = null) {
+function combatDamageOption(info, legal) {
   const card = findVisibleCard(info.cardId);
-  const legal = Boolean(legalOptionId);
-  const optionId = legal ? legalOptionId : "";
-  const stats = card ? boardUnitStats(card, battlefieldId) : { might: 0, remaining: 0 };
+  const optionId = legal ? info.cardId : "";
   const amountLabel = info.amount
     ? (locale() === LOCALES.KO ? `${info.amount} 피해${info.lethalNow ? " · 처치 가능" : ""}` : `${info.amount} damage${info.lethalNow ? " lethal" : ""}`)
     : "";
   return `
     <button
-      class="damage-target-card combat-choice ${legal ? "is-legal" : "is-locked"} ${info.lethalNow ? "is-lethal" : ""}"
+      class="choice-option card-choice-option combat-choice ${legal ? "" : "disabled-choice"}"
       data-action="choose-effect"
       data-choice="${optionId}"
       data-card-id="${info.cardId}"
       ${legal ? "" : "disabled"}
     >
       ${choiceOptionImage({ cardId: info.cardId })}
-      <span class="damage-target-copy">
-        <strong>${card ? cardName(card) : (locale() === LOCALES.KO ? "유닛" : "Unit")}</strong>
-        <small>${t("currentMight", locale())} ${stats.might} · ${t("remainingHealth", locale())} ${stats.remaining}</small>
-        <b>${legal ? amountLabel : combatDamageRestrictionLabel(info.reason)}</b>
-      </span>
+      <span>${card ? cardName(card) : (locale() === LOCALES.KO ? "유닛" : "Unit")}</span>
+      <strong>${legal ? amountLabel : localizedDynamicText(info.reason, { fallback: "현재 이 대상에게 피해를 배정할 수 없습니다." })}</strong>
     </button>
   `;
-}
-
-function combatDamageRestrictionLabel(reason) {
-  const korean = {
-    "Lethal already assigned": "이미 처치 피해가 배정되었습니다",
-    "Backline last": "후열 유닛은 마지막에 배정해야 합니다",
-    "Assign last": "이 유닛은 마지막에 배정해야 합니다",
-    "Tank first": "방벽 유닛에게 먼저 배정해야 합니다",
-    "Assign lethal first": "처치 가능한 유닛부터 배정해야 합니다"
-  };
-  const fallback = locale() === LOCALES.KO ? "현재 이 대상에게 배정할 수 없습니다" : "Damage cannot be assigned here yet";
-  const lethalFirst = locale() === LOCALES.KO
-    ? "먼저 처치 가능한 유닛에 필요한 피해를 배정해 주세요"
-    : "Assign the required lethal damage first";
-  if (!reason) return escapeHtml(lethalFirst);
-  if (locale() === LOCALES.KO) return escapeHtml(korean[reason] || localizedDynamicText(reason, { fallback }) || fallback);
-  return escapeHtml(localizedDynamicText(reason, { fallback }) || fallback);
 }
 
 function choiceOptionImage(option) {
@@ -7320,8 +4907,8 @@ function findVisibleCard(cardId) {
     ...game.players.flatMap((player) => [
       player.legend,
       player.champion,
-      ...(player.availableChampions || []),
-      ...(player.availableBattlefields || []),
+      ...player.availableChampions,
+      ...player.availableBattlefields,
       ...player.mainDeck,
       ...player.runeDeck,
       ...player.hand,
@@ -7350,7 +4937,44 @@ function findChoicePreviewCard(cardId) {
 
 function isVisibleSelectableCard(cardId) {
   const card = findVisibleCard(cardId);
-  return Boolean(card && !card.redacted && cardVisibleToCurrentViewer(cardId));
+  return Boolean(card && !card.redacted);
+}
+
+function showdownPanel() {
+  const showdown = game.showdown;
+  const field = game.battlefields.find((candidate) => candidate.instanceId === showdown.battlefieldId);
+  const chain = [...(showdown.chain || [])].filter(chainItemVisibleInTree).reverse();
+  return `
+    <section class="showdown-panel">
+      <div class="section-head">
+        <div>
+          <h2>${t("showdown", locale())}: ${field ? battlefieldName(field) : t("battlefield", locale())}</h2>
+          <span>${chain.length ? t("resolveChainFirst", locale()) : t("passToFight", locale())}</span>
+        </div>
+        <button class="primary" data-action="pass-showdown" ${viewerCanAct() ? "" : "disabled"}>${t("pass", locale())}</button>
+      </div>
+      <div class="chain-row">
+        ${chain.map((item, index) => chainCard(item, index)).join("") || `<p class="empty">${t("chainEmpty", locale())}</p>`}
+      </div>
+    </section>
+  `;
+}
+
+function chainCard(item, index) {
+  const player = game.players.find((candidate) => candidate.id === item?.playerId);
+  const card = item?.card || findVisibleCard(item?.trigger?.sourceCardId);
+  const cardId = card?.instanceId || "";
+  const motionClass = cardId && uiMotion.chained.has(cardId)
+    ? (hasKeyword(card, "Ambush") ? "ambush-chain" : (card.tags?.includes("Reaction") ? "reaction-chain" : "chain-enter"))
+    : "";
+  const itemId = item?.id || `${cardId || "chain"}-${index}`;
+  return `
+    <button type="button" class="chain-card ${motionClass} ${inspectedChainItemId === itemId ? "is-inspected" : ""}" data-action="inspect-chain-effect" data-chain-item-id="${escapeHtml(itemId)}" data-card-id="${cardId}" title="${t("target", locale())}">
+      <strong>${t(index === 0 ? "next" : "queued", locale())}</strong>
+      <span>${chainItemTitle(item)}</span>
+      <small>${player ? playerName(player) : ""} / ${localizedDynamicText(t(item?.status || "finalized", locale()))}</small>
+    </button>
+  `;
 }
 
 function chainZonePanel() {
@@ -7361,8 +4985,9 @@ function chainZonePanel() {
     chainZoneCollapsed = false;
     return "";
   }
+  if (counteredItems.length) chainZoneCollapsed = false;
   return `
-    <section class="chain-zone chain-pod ${chainZoneCollapsed ? "is-collapsed" : ""} ${counteredItems.length ? "has-counter-animation" : ""}" data-zone="chain" aria-label="${t("processingQueue", locale())}" aria-live="polite">
+    <section class="chain-zone ${chainZoneCollapsed ? "is-collapsed" : ""} ${counteredItems.length ? "has-counter-animation" : ""}" aria-label="${t("processingQueue", locale())}" aria-live="polite">
       <div class="chain-zone-head">
         <div>
           <strong>${t("processingQueue", locale())}</strong>
@@ -7376,7 +5001,7 @@ function chainZonePanel() {
       </div>
       <div id="chain-zone-content" class="chain-zone-content" ${chainZoneCollapsed ? "hidden" : ""}>
         <div class="chain-stack" data-scroll-key="chain-stack">
-          ${counteredItems.map(counteredChainZoneItem).join("")}${items.map((item, index) => chainZoneItem(item, items.length - index, { active: index === 0 })).join("") || `<p class="empty">${t("noChainItem", locale())}</p>`}
+          ${counteredItems.map(counteredChainZoneItem).join("")}${items.map((item, index) => chainZoneItem(item, items.length - index)).join("") || `<p class="empty">${t("noChainItem", locale())}</p>`}
         </div>
         ${inspectedChainTargetPanel(items, responding)}
       </div>
@@ -7385,170 +5010,32 @@ function chainZonePanel() {
 }
 
 function currentChainTreeItems() {
-  const chain = game?.actionChain || game?.showdown;
-  const chainItems = chain ? [...normalizeUiChain(Array.isArray(chain.chain) ? chain.chain : [])].reverse() : [];
-  const resolvingItem = pendingResolutionChainItem();
+  const chain = game.actionChain || game.showdown;
+  const chainItems = chain ? [...normalizeUiChain(chain.chain)].reverse() : [];
+  const activeTriggerChoice = game.pendingChoice?.data?.triggerId ? game.pendingChoice : null;
   const triggerItems = [
-    ...(Array.isArray(game?.triggerQueue) ? game.triggerQueue : []).filter(Boolean).map((trigger, index) => ({
+    ...(activeTriggerChoice ? [{
+      id: activeTriggerChoice.data.triggerId,
+      itemType: "trigger",
+      playerId: activeTriggerChoice.playerId,
+      card: activeTriggerChoice.card,
+      trigger: {
+        sourceCardId: activeTriggerChoice.card?.instanceId,
+        kind: activeTriggerChoice.effect,
+        data: activeTriggerChoice.data
+      },
+      status: "resolving"
+    }] : []),
+    ...(game.triggerQueue || []).map((trigger, index) => ({
       id: trigger.id || `queued-trigger-${index}`,
       itemType: "trigger",
       playerId: trigger.playerId,
-      card: findVisibleCard(trigger.sourceCardId) || triggerSnapshotCard(trigger),
+      card: findVisibleCard(trigger.sourceCardId),
       trigger,
       status: trigger.status || "pending"
     }))
   ];
-  const liveItems = [...chainItems, ...triggerItems];
-  if (resolvingItem) {
-    const matchingIndex = liveItems.findIndex((item) => chainPresentationItemsMatch(resolvingItem, item));
-    if (matchingIndex >= 0) {
-      liveItems[matchingIndex] = { ...liveItems[matchingIndex], status: "resolving" };
-    } else {
-      liveItems.unshift(resolvingItem);
-    }
-  }
-  const seen = new Set();
-  const uniqueLiveItems = liveItems.filter((item) => {
-    if (!item) return false;
-    const id = String(item.id || "");
-    if (id && seen.has(id)) return false;
-    if (id) seen.add(id);
-    return true;
-  });
-  if (uniqueLiveItems.length) {
-    chainTreePresentationItems = uniqueLiveItems.map(snapshotChainPresentationItem);
-    return uniqueLiveItems;
-  }
-  const pending = game?.pendingChoice || game?.pendingPayment;
-  const activeChainState = Boolean(
-    game?.actionChain
-    || (Array.isArray(game?.showdown?.chain) && game.showdown.chain.length)
-  );
-  const resolutionStillOpen = Boolean(
-    activeChainState
-    || (Array.isArray(game?.triggerQueue) && game.triggerQueue.length)
-    || pendingDecisionChainKind(pending)
-    || game?.resolvingChainContext
-  );
-  if (resolutionStillOpen && chainTreePresentationItems.length) {
-    return chainTreePresentationItems.map((item, index) => ({
-      ...item,
-      status: index === 0 ? "resolving" : (item.status || "pending")
-    }));
-  }
-  chainTreePresentationItems = [];
-  return [];
-}
-
-function chainPresentationItemsMatch(pendingItem, chainItem) {
-  if (!pendingItem || !chainItem) return false;
-  const ownedChainItemId = String(pendingItem.presentationChainItemId || "");
-  if (ownedChainItemId) return ownedChainItemId === String(chainItem.id || "");
-  const pendingTriggerId = String(pendingItem.trigger?.id || "");
-  const chainTriggerId = String(chainItem.trigger?.id || "");
-  if (pendingTriggerId && chainTriggerId) return pendingTriggerId === chainTriggerId;
-  const pendingCardId = String(chainItemSourceCard(pendingItem)?.instanceId || pendingItem.trigger?.sourceCardId || "");
-  const chainCardId = String(chainItemSourceCard(chainItem)?.instanceId || chainItem.trigger?.sourceCardId || "");
-  if (!pendingCardId || pendingCardId !== chainCardId) return false;
-  return String(pendingItem.itemType || "card") === String(chainItem.itemType || "card");
-}
-
-function pendingResolutionChainItem() {
-  const pending = game?.pendingChoice || game?.pendingPayment;
-  if (!pending || typeof pending !== "object") return null;
-  const chainKind = pendingDecisionChainKind(pending);
-  const triggerId = typeof pending.data?.triggerId === "string" ? pending.data.triggerId : "";
-  if (!chainKind && !triggerId) return null;
-  const player = game.players.find((candidate) => candidate.id === pending.playerId);
-  const card = pending === game.pendingPayment
-    ? paymentDisplayCard(player, pending) || pending.effectPayment?.sourceCard || null
-    : pending.card || null;
-  const sourceCardId = String(card?.instanceId || pending.cardId || pending.sourceCardId || "");
-  const itemType = triggerId || pending.triggeredAbility
-    ? "trigger"
-    : pending.activatedAbility
-      ? "activated"
-      : "card";
-  const id = triggerId || `resolving-${chainKind || "trigger"}-${pending.id || sourceCardId || pending.effect || "effect"}`;
-  const item = {
-    id,
-    presentationChainItemId: pendingResolutionOwnerChainItemId(pending),
-    itemType,
-    playerId: pending.playerId || card?.controllerId || card?.ownerId || "",
-    card,
-    specs: pending.activatedAbility?.specs || pending.specs || [],
-    status: "resolving"
-  };
-  if (itemType === "trigger") {
-    item.trigger = {
-      id: triggerId || id,
-      sourceCardId,
-      sourceCardSnapshot: card && !card.redacted ? card : undefined,
-      kind: pending.effect || pending.triggeredAbility?.kind || "",
-      data: pending.data && typeof pending.data === "object" ? pending.data : {}
-    };
-  }
-  return chainItemVisibleInTree(item) ? item : null;
-}
-
-function pendingResolutionOwnerChainItemId(pending) {
-  if (!pending || typeof pending !== "object") return "";
-  return String(
-    pending.playProcess?.chainItemId
-    || pending.effectPlay?.chainItemId
-    || pending.activatedAbility?.sourceCard?.activationProcess?.chainItemId
-    || pending.card?.activationProcess?.chainItemId
-    || pending.triggeredAbility?.trigger?.pendingChainItemId
-    || pending.data?.trigger?.pendingChainItemId
-    || ""
-  );
-}
-
-function pendingDecisionChainKind(pending) {
-  if (!pending || typeof pending !== "object") return null;
-  if (pending.fromShowdownChain) return "showdown";
-  if (pending.fromActionChain) return "action";
-  const contextKind = pending.gameEffectResolution?.context?.chainKind;
-  return ["action", "showdown"].includes(contextKind) ? contextKind : null;
-}
-
-function pendingChoiceSharesChainSurface(pending) {
-  if (!pending || typeof pending !== "object") return false;
-  return Boolean(
-    pendingDecisionChainKind(pending)
-    || game?.actionChain
-    || (Array.isArray(game?.showdown?.chain) && game.showdown.chain.length)
-    || (Array.isArray(game?.triggerQueue) && game.triggerQueue.length)
-  );
-}
-
-function snapshotChainPresentationItem(item) {
-  try {
-    return structuredClone(item);
-  } catch {
-    return {
-      ...item,
-      card: item?.card && typeof item.card === "object" ? { ...item.card } : null,
-      trigger: item?.trigger && typeof item.trigger === "object" ? { ...item.trigger } : null,
-      specs: Array.isArray(item?.specs) ? item.specs.map((spec) => ({ ...spec })) : []
-    };
-  }
-}
-
-function triggerSnapshotCard(trigger) {
-  const snapshot = trigger?.sourceCardSnapshot;
-  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot) || snapshot.redacted) return null;
-  return snapshot;
-}
-
-function chainItemSourceCard(item) {
-  if (!item || typeof item !== "object") return null;
-  const live = item?.trigger?.sourceCardId ? findVisibleCard(item.trigger.sourceCardId) : null;
-  if (live && !live.redacted) return live;
-  const snapshot = triggerSnapshotCard(item.trigger);
-  if (item?.itemType === "trigger" && snapshot) return snapshot;
-  if (item?.card && typeof item.card === "object" && !item.card.redacted) return item.card;
-  return snapshot;
+  return [...chainItems, ...triggerItems];
 }
 
 function syncInspectedChainTargets() {
@@ -7571,8 +5058,7 @@ function inspectedChainTargetPanel(items, responding) {
     : null;
   if (!item && !responding) return "";
   const targets = item ? chainItemTargetIds(item) : [];
-  const sourceCard = chainItemSourceCard(item);
-  const sourceCardId = sourceCard?.instanceId || item?.trigger?.sourceCardId || "";
+  const sourceCardId = item?.card?.instanceId || item?.trigger?.sourceCardId || "";
   return `
     <aside class="chain-context-panel ${item ? "showing-targets" : ""}" aria-live="polite">
       ${item ? `
@@ -7638,67 +5124,35 @@ function chainItemVisibleInTree(item) {
   return chainItemVisibleToViewer(item, viewerPlayerId());
 }
 
-function chainZoneItem(item = {}, order = 0, { active = false } = {}) {
-  const playerId = String(item?.playerId || "");
-  const player = (Array.isArray(game?.players) ? game.players : []).find((candidate) => candidate?.id === item?.playerId);
-  const targets = chainItemTargetIds(item).map(targetLabel).filter(Boolean).map(escapeHtml);
-  const previewCard = chainItemSourceCard(item);
-  const previewCardId = String(previewCard?.instanceId || item?.trigger?.sourceCardId || "");
-  const snapshotPreview = previewCard === triggerSnapshotCard(item?.trigger);
-  const previewVisible = Boolean(previewCard?.image
-    && !previewCard.redacted
-    && (snapshotPreview || cardVisibleToCurrentViewer(previewCardId)));
-  const itemId = String(item?.id || `${previewCardId || "chain"}-${order}`);
-  const status = String(item?.status || "pending");
-  const statusClass = status.replace(/[^a-z0-9_-]/gi, "").toLowerCase() || "pending";
+function chainZoneItem(item, order) {
+  const player = game.players.find((candidate) => candidate.id === item.playerId);
+  const targets = chainItemTargetIds(item).map(targetLabel).filter(Boolean);
+  const source = chainItemSourceTitle(item);
+  const effectText = chainItemEffectText(item);
+  const previewCardId = item.card?.instanceId || item.trigger?.sourceCardId || "";
   const itemClass = [
     "chain-zone-item",
-    active ? "chain-zone-active" : "chain-zone-queued",
-    inspectedChainItemId === itemId ? "is-inspected" : "",
-    `status-${statusClass}`,
-    choiceCardStateClasses(previewCardId)
+    uiMotion.chained.has(item.card?.instanceId) ? "chain-zone-new" : "",
+    inspectedChainItemId === item.id ? "is-inspected" : "",
+    item.status ? `status-${item.status}` : ""
   ].filter(Boolean).join(" ");
   return `
-    <button type="button" class="${itemClass}" data-action="inspect-chain-effect" data-chain-item-id="${escapeHtml(itemId)}" data-card-id="${escapeHtml(previewCardId)}" title="${escapeHtml(t("target", locale()))}">
-      <span class="chain-card-motion-anchor" data-motion-anchor data-motion-zone="chain" data-motion-player-id="${escapeHtml(playerId)}" data-motion-card-id="${escapeHtml(previewCardId)}" aria-hidden="true">
-        ${previewVisible ? `<img class="chain-card-motion-art" src="${escapeHtml(previewCard.image)}" alt="" width="42" height="59" loading="lazy" />` : `<i class="chain-card-motion-back">R</i>`}
-      </span>
-      <span class="chain-zone-copy">
-        <span class="chain-zone-meta"><b>[${escapeHtml(order)}] ${escapeHtml(playerPerspectiveLabel(player?.id || playerId))}</b><em>${escapeHtml(localizedDynamicText(t(status, locale())))}</em></span>
-        <strong>${escapeHtml(chainItemTitle(item))}</strong>
-        <span class="chain-zone-target">${escapeHtml(t("target", locale()))}: ${targets.length ? targets.join(", ") : escapeHtml(t("noTargetDeclared", locale()))}</span>
-      </span>
+    <button type="button" class="${itemClass}" data-action="inspect-chain-effect" data-chain-item-id="${escapeHtml(item.id)}" data-card-id="${previewCardId}" title="${t("target", locale())}">
+      <b>[${order}] ${playerPerspectiveLabel(item.playerId)}</b>
+      <strong>${chainItemTitle(item)}</strong>
+      <span>${t("source", locale())}: ${source}</span>
+      ${targets.length ? `<small>${t("target", locale())}: ${targets.join(", ")}</small>` : ""}
+      ${effectText ? `<p class="chain-zone-effect">${escapeHtml(effectText)}</p>` : ""}
+      <em>${localizedDynamicText(t(item.status || "pending", locale()))}</em>
     </button>
   `;
 }
 
 function chainItemEffectText(item) {
-  const source = chainItemSourceCard(item);
-  const detail = source ? cardText(source) : (triggerKindLabel(item?.trigger) || "");
-  if (item?.itemType !== "activated") return { summary: "", detail };
-  const labels = [...new Set((Array.isArray(item.specs) ? item.specs : [])
-    .filter((spec) => spec && typeof spec === "object")
-    .map((spec) => activatedChainSpecLabel(spec))
-    .filter(Boolean))];
-  const summary = labels.length
-    ? `${t("ability", locale())}: ${labels.join(" · ")}`
-    : t("ability", locale());
-  return { summary, detail };
-}
-
-function activatedChainSpecLabel(spec) {
-  const abilityId = typeof spec?.abilityId === "string" ? spec.abilityId.trim() : "";
-  const kind = typeof spec?.kind === "string" ? spec.kind.trim() : "";
-  const identifier = abilityId && !/^(?:ability|effect)-\d+$/i.test(abilityId) ? abilityId : kind || abilityId;
-  if (!identifier) return "";
-  const readable = identifier
-    .split(":").at(-1)
-    .replace(/[_-]+/g, " ")
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/^./, (character) => character.toUpperCase());
-  return localizedDynamicText(readable, { fallback: readable });
+  const source = item?.itemType === "trigger"
+    ? findVisibleCard(item.trigger?.sourceCardId) || item.card
+    : item?.card;
+  return source ? cardText(source) : (triggerKindLabel(item?.trigger) || "");
 }
 
 function realtimeFeedbackOverlay() {
@@ -7727,49 +5181,26 @@ function responsePromptInfo() {
   return {
     title: `${playerPerspectiveLabel(latest.playerId)} ${t(latest.itemType === "activated" ? "activatedVerb" : latest.itemType === "trigger" ? "triggeredVerb" : "playedVerb", locale())} ${chainItemTitle(latest)}`,
     detail: targets.length ? `${t("target", locale())}: ${targets.join(", ")}` : t("noTargetDeclared", locale()),
-    cardId: chainItemSourceCard(latest)?.instanceId
+    cardId: latest.card?.instanceId
   };
 }
 
 function responsePrompt(info) {
-  const passState = passControlState();
   return `
     <div class="response-prompt">
-      <strong>${escapeHtml(info?.title || t("responseWindow", locale()))}</strong>
-      <span>${escapeHtml(info?.detail || t("responseHint", locale()))}</span>
-      ${passState ? `<small class="chain-pass-progress">${escapeHtml(passState.progressText)}</small>` : ""}
+      <strong>${info.title}</strong>
+      <span>${info.detail}</span>
+      <div class="actions inline">
+        <button class="primary" data-action="toggle-hand">${handOpen ? t("hideHand", locale()) : t("playReaction", locale())}</button>
+        <button data-action="pass-showdown">${t("pass", locale())}</button>
+      </div>
     </div>
   `;
-}
-
-function priorityResponseControls(actionMarkup = "") {
-  return `
-    <div class="priority-response-controls" role="group" aria-label="${escapeHtml(locale() === LOCALES.KO ? "반응 또는 패스" : "React or pass")}">
-      ${actionMarkup ? `<div class="priority-card-actions">${actionMarkup}</div>` : ""}
-      ${passControlButton()}
-    </div>
-  `;
-}
-
-function actionUseWindowAvailable() {
-  if (!viewerCanAct() || game?.pendingChoice || game?.pendingPayment || game?.actionChain) return false;
-  if (game?.phase === "showdown" && game?.showdown) {
-    const hasFocus = game.showdown.priorityPlayerId === viewerPlayerId();
-    const chainEmpty = !Array.isArray(game.showdown.chain) || game.showdown.chain.filter(Boolean).length === 0;
-    return hasFocus && chainEmpty;
-  }
-  return game?.phase === "action" && activePlayerId() === viewerPlayerId();
-}
-
-function playWindowControlLabel() {
-  if (locale() === LOCALES.KO) return actionUseWindowAvailable() ? "행동 사용" : "반응 사용";
-  return actionUseWindowAvailable() ? "Play Action" : "Play Reaction";
 }
 
 function chainItemTitle(item) {
   if (!item) return t("effect", locale());
-  const source = chainItemSourceCard(item);
-  if (item.itemType === "trigger") return source ? cardName(source) : (item.trigger?.label || triggerLabel(item.trigger) || t("triggeredAbility", locale()));
+  if (item.itemType === "trigger") return item.card ? cardName(item.card) : (item.trigger?.label || triggerLabel(item.trigger) || t("triggeredAbility", locale()));
   if (item.itemType === "activated") return `${item.card ? cardName(item.card) : t("selectedCard", locale())} ${t("ability", locale())}`;
   return item.card ? cardName(item.card) : t("selectedCard", locale());
 }
@@ -7777,7 +5208,7 @@ function chainItemTitle(item) {
 function chainItemSourceTitle(item) {
   if (!item) return t("effect", locale());
   if (item.itemType === "trigger") {
-    const source = chainItemSourceCard(item);
+    const source = findVisibleCard(item.trigger?.sourceCardId);
     return source ? cardName(source) : (triggerKindLabel(item.trigger) || t("triggeredAbility", locale()));
   }
   return item.card ? cardName(item.card) : t("effect", locale());
@@ -7791,7 +5222,11 @@ function chainItemTargetIds(item) {
 
 function visibleChainTargetCard(cardId) {
   const card = findVisibleCard(cardId);
-  if (!card || card.redacted || !cardVisibleToCurrentViewer(cardId)) return null;
+  if (!card || card.redacted) return null;
+  const context = selectedContext(cardId);
+  const privateZones = new Set(["hand", "main-deck", "rune-deck", "hidden", "champion-choice"]);
+  if (context?.playerId && context.playerId !== viewerPlayerId() && privateZones.has(context.zone)
+    && !canViewPrivateInfo(viewerPlayerId(), context.playerId)) return null;
   return card;
 }
 
@@ -7821,11 +5256,7 @@ function sourceZoneLabel(zone) {
     battlefield: t("battlefield", locale()),
     mainDeck: t("mainDeck", locale()),
     runeDeck: t("runeDeck", locale()),
-    chain: t("chain", locale()),
-    trash: t("trash", locale()),
-    banished: t("banished", locale()),
-    played: locale() === LOCALES.KO ? "플레이 중" : "In play",
-    attachment: locale() === LOCALES.KO ? "부착됨" : "Attached"
+    chain: t("chain", locale())
   };
   return labels[zone] || localizedDynamicText(zone);
 }
@@ -7892,7 +5323,9 @@ function setupPanel() {
   if (!setupSelectionVisibleToViewer(selectingPlayer?.id)) {
     return privateSetupWaitingPanel(selectingPlayer);
   }
-  const visiblePlayers = game.players.filter((player) => player.id === viewerPlayerId());
+  const visiblePlayers = aiMode
+    ? game.players.filter((player) => player.id === viewerPlayerId())
+    : game.players;
   return `
     <section class="setup">
       ${visiblePlayers.map((player) => `
@@ -7928,7 +5361,9 @@ function championSelectPanel() {
   if (!setupSelectionVisibleToViewer(selectingPlayer?.id)) {
     return privateSetupWaitingPanel(selectingPlayer, "champion-setup");
   }
-  const visiblePlayers = game.players.filter((player) => player.id === viewerPlayerId());
+  const visiblePlayers = aiMode
+    ? game.players.filter((player) => player.id === viewerPlayerId())
+    : game.players;
   return `
     <section class="setup champion-setup">
       ${visiblePlayers.map((player) => `
@@ -7953,7 +5388,8 @@ function championSelectPanel() {
 }
 
 function championChoice(player, champion) {
-  const matchesLegend = championMatchesLegend(champion, player.legend);
+  const legendTags = new Set((player.legend?.tags || []).filter((tag) => !["Champion", "Signature", "Signature Spell", "Action", "Reaction", "Unit", "Spell", "Gear"].includes(tag)));
+  const matchesLegend = (champion.tags || []).some((tag) => legendTags.has(tag));
   const disabled = !matchesLegend || game.championSelectPlayerId !== player.id || (isOnlineGame() && player.id !== viewerPlayerId()) || !viewerCanAct() || champion.redacted;
   return `
     <article class="image-card champion-choice" data-card-id="${champion.instanceId}">
@@ -8027,7 +5463,11 @@ function mulliganPanel() {
 
 function setupSelectionVisibleToViewer(playerId) {
   if (!playerId) return true;
-  return decisionVisibleToViewer({ playerId });
+  return pendingDecisionVisibleToViewer({
+    aiMode,
+    viewerPlayerId: viewerPlayerId(),
+    decision: { playerId }
+  });
 }
 
 function privateSetupWaitingPanel(player, panelClass = "") {
@@ -8057,92 +5497,51 @@ function mulliganCard(card, selected) {
 }
 
 function playerSide(player, side) {
-  const seat = tabletopSeatView(player, {
-    side,
-    visibleHandCount: handCountVisibleToViewer(game, player, viewerPlayerId()),
-    revealHand: side === "bottom" || canViewPrivateInfo(viewerPlayerId(), player?.id)
-  });
   const baseTarget = targetAttributes("base", player.id);
   const acting = activePlayerId() === player.id;
   const intel = canViewPrivateInfo(viewerPlayerId(), player.id);
   const handGlow = uiMotion.sourceZones.has(`${player.id}:hand`) ? "source-hand-glow" : "";
   const drawAnimation = effectAnimations.draws.get(player.id);
   const baseDeaths = unitDeathGhosts("base", player.id);
-  const championReference = championIdentityReference(player, seat.champion);
-  const paymentSeat = decisionVisibleToViewer(game.pendingPayment) && game.pendingPayment?.playerId === player.id;
-  const baseDropDestination = player.id === viewerPlayerId()
-    ? `data-play-destination="base" data-drop-owner="${escapeHtml(player.id)}"`
-    : "";
   return `
-    <section class="player-side table-seat ${side} owner-${seat.id} ${acting ? "acting-player" : ""} ${paymentSeat ? "payment-seat" : ""} ${handGlow}" data-player-id="${escapeHtml(seat.id)}" data-side="${seat.side}">
-      <div class="player-identity tabletop-identity-dock">
-        <div class="identity-mini physical-identity-cards">
-          <div class="identity-zone legend-zone" data-zone="legend" data-count="${seat.legend ? 1 : 0}">
-            <span class="zone-caption">${t("legend", locale())}</span>
-            ${seat.legend ? miniIdentity(seat.legend) : `<span class="empty-card-slot" aria-label="${t("legend", locale())}"></span>`}
-          </div>
-          <div class="identity-zone champion-zone-slot" data-zone="champion" data-count="${championReference.physical ? 1 : 0}" ${championReference.physical ? "" : `data-reference-zone="${escapeHtml(championReference.zone)}"`}>
-            <span class="zone-caption">${t("championZone", locale())}</span>
-            ${championReference.markup}
-          </div>
+    <section class="player-side ${side} owner-${player.id} ${acting ? "acting-player" : ""} ${handGlow}">
+      <div class="player-identity">
+        <div class="identity-mini">
+          ${miniIdentity(player.legend)}
+          ${miniIdentity(player.champion, player)}
         </div>
         <div class="player-summary">
           <h2>${playerName(player)}</h2>
           <div class="player-stats" data-scroll-key="player-stats-${player.id}">
-            <span class="xp-stat">${t("level", locale())} <b>${seat.xp}</b></span>
-            <span class="hand-stat">${t("hand", locale())} <b>${seat.counts.hand}</b></span>
+            <span class="xp-stat">${t("level", locale())} ${player.xp || 0}</span>
+            <span class="deck-stat" data-effect="${drawAnimation ? "draw" : ""}" aria-label="${t("deck", locale())} ${player.mainDeck.length}">${t("deck", locale())} <b>${player.mainDeck.length}</b></span>
+            ${(player.burnOuts || 0) > 0 ? `<span class="burnout-stat" title="${locale() === LOCALES.KO ? "소진될 때마다 상대가 1점을 획득합니다." : "Each Burn Out gives an opponent 1 point."}">${locale() === LOCALES.KO ? "소진" : "Burn Out"} <b>${player.burnOuts}</b></span>` : ""}
+            <span class="hand-stat">${t("hand", locale())} ${handCountVisibleToViewer(game, player, viewerPlayerId())}</span>
+            <button class="trash-button" data-action="toggle-graveyard" data-player="${player.id}" title="${t("viewTrashTitle", locale(), { name: playerName(player) })}">
+              ${t("trash", locale())} ${player.trash.length}
+            </button>
+            <button class="trash-button banished-button" data-action="toggle-banished" data-player="${player.id}" title="${t("viewBanishedTitle", locale(), { name: playerName(player) })}">
+              ${t("banished", locale())} ${(player.banished || []).length}
+            </button>
             ${intel ? `<button class="intel-button" data-action="toggle-intel" data-player="${player.id}">${t("intel", locale())}</button>` : ""}
           </div>
           ${championPanelStatus(player)}
         </div>
       </div>
-      <div class="table-pile-dock">
-        ${tableCardPile({ zone: "main-deck", player, cards: seat.mainDeck, label: t("mainDeck", locale()), cardBack: true, effect: drawAnimation ? "draw" : "", burnOuts: seat.burnOuts })}
-        ${tableCardPile({ zone: "trash", player, cards: seat.trash, label: t("trash", locale()), action: "toggle-graveyard", title: t("viewTrashTitle", locale(), { name: playerName(player) }) })}
-        ${tableCardPile({ zone: "banished", player, cards: seat.banished, label: t("banished", locale()), action: "toggle-banished", title: t("viewBanishedTitle", locale(), { name: playerName(player) }) })}
-      </div>
-      <div class="resource-zone" data-zone="runes" data-count="${seat.counts.runes}">
+      <div class="resource-zone">
         <span class="zone-caption">${t("runes", locale())}</span>
-        <div class="rune-tabletop">
-          ${tableCardPile({ zone: "rune-deck", player, cards: seat.runeDeck, label: t("runeDeck", locale()), cardBack: true, compact: true })}
-          <div class="rune-play-area">
-            ${runeSummary(player)}
-            <div class="resource-row rune-card-stack" data-rune-scroll-track data-scroll-key="runes-${escapeHtml(player.id)}" tabindex="0" aria-label="${escapeHtml(locale() === LOCALES.KO ? "배치된 룬 카드 · 좌우로 끌어서 이동" : "Played Rune cards · drag sideways to scroll")}">
-              ${seat.runes.map((rune, index) => runeChip(rune, index, seat.runes.length, player.id)).join("")}
-            </div>
-          </div>
+        ${runeSummary(player)}
+        <div class="resource-row">
+          ${player.runes.map(runeChip).join("")}
         </div>
       </div>
-      <div class="base-zone" data-zone="base" data-count="${seat.counts.base}">
+      <div class="base-zone">
         <span class="zone-caption">${t("base", locale())}</span>
-        <div class="base-row ${baseTarget.className}" data-scroll-key="base-${player.id}" ${baseDropDestination} ${baseTarget.attrs}>
-          ${seat.base.map((card) => boardCard(card, "base")).join("")}${baseDeaths || (!seat.base.length ? `<p class="empty">${t("baseEmpty", locale())}</p>` : "")}
+        <div class="base-row ${baseTarget.className}" data-scroll-key="base-${player.id}" ${baseTarget.attrs}>
+          ${player.base.map((card) => boardCard(card, "base")).join("")}${baseDeaths || (!player.base.length ? `<p class="empty">${t("baseEmpty", locale())}</p>` : "")}
         </div>
       </div>
     </section>
-  `;
-}
-
-function tableCardPile({ zone, player, cards, label, action = "", title = "", cardBack = false, effect = "", burnOuts = 0, compact = false }) {
-  const list = Array.isArray(cards) ? cards.filter(Boolean) : [];
-  const top = cardBack ? null : topDiscardCard(list);
-  const playerId = String(player?.id ?? "");
-  const tag = action ? "button" : "div";
-  const actionAttributes = action ? `type="button" data-action="${action}" data-player="${escapeHtml(playerId)}"` : `role="group"`;
-  const titleAttribute = title ? `title="${escapeHtml(title)}"` : "";
-  const compactLabel = locale() === LOCALES.KO
-    ? ({ "main-deck": "덱", "rune-deck": "룬", trash: "폐기", banished: "제외" }[zone] || label)
-    : ({ "main-deck": "Deck", "rune-deck": "Rune", trash: "Trash", banished: "Banish" }[zone] || label);
-  return `
-    <${tag} class="table-card-pile pile-${zone} ${cardBack ? "face-down" : "face-up"} ${compact ? "compact" : ""}" data-zone="${zone}" data-count="${list.length}" data-effect="${effect}" ${actionAttributes} ${titleAttribute} aria-label="${escapeHtml(`${label} ${list.length}`)}">
-      <span class="pile-cards" data-motion-anchor data-motion-zone="${escapeHtml(zone)}" data-motion-player-id="${escapeHtml(playerId)}" aria-hidden="true">
-        <i></i><i></i>
-        ${top?.image ? `<img src="${escapeHtml(top.image)}" alt="" loading="lazy" />` : `<b>${cardBack ? "R" : zone === "banished" ? "◇" : "—"}</b>`}
-      </span>
-      <span class="pile-label"><span class="pile-label-full">${label}</span><span class="pile-label-short">${compactLabel}</span></span>
-      <strong class="pile-count">${list.length}</strong>
-      ${burnOuts > 0 ? `<em class="burnout-stat" title="${locale() === LOCALES.KO ? "소진될 때마다 상대가 1점을 획득합니다." : "Each Burn Out gives an opponent 1 point."}">${locale() === LOCALES.KO ? "소진" : "Burn Out"} ${burnOuts}</em>` : ""}
-    </${tag}>
   `;
 }
 
@@ -8155,19 +5554,10 @@ function miniIdentity(card, player = null) {
   const exhausted = card?.exhausted ? " exhausted" : "";
   const sourceGlow = uiMotion.sourceIds.has(card?.instanceId) ? " source-card-glow" : "";
   const chainTarget = chainTargetClass(card?.instanceId) ? " chain-effect-target" : "";
-  const championDestinations = player && card?.instanceId === player.champion?.instanceId
-    ? legalChampionPlayDestinations(card.instanceId)
-    : [];
-  const dragAttributes = championDestinations.length
-    ? `data-card-drag="champion" data-play-destinations="${escapeHtml(championDestinations.join(" "))}" draggable="true"`
-    : `draggable="false"`;
   return `
-    <button class="identity-button${championState}${exhausted}${sourceGlow}${chainTarget} ${cardStatusClassNames(card)} ${choiceCardStateClasses(card.instanceId)}" data-action="select-card" data-card="${escapeHtml(card.instanceId || "")}" data-card-id="${escapeHtml(card.instanceId || "")}" data-exhausted="${Boolean(card.exhausted)}" ${dragAttributes} title="${escapeHtml(cardName(card))}">
-      <span class="identity-orientation-layer card-exhaust-layer">
-        ${card.image ? `<img src="${escapeHtml(card.image)}" alt="${escapeHtml(cardName(card))}" loading="lazy" />` : `<span class="identity-card-fallback">${escapeHtml(cardName(card))}</span>`}
-      </span>
-      ${identityEmpoweredMarker(card)}
-      ${championState || exhausted ? `<span class="identity-state-label">${card.exhausted ? t("spent", locale()) : championState.trim() === "deployed" ? t("used", locale()) : t("zone", locale())}</span>` : ""}
+    <button class="identity-button${championState}${exhausted}${sourceGlow}${chainTarget}" data-action="select-card" data-card="${card.instanceId}" title="${cardName(card)}">
+      <img src="${card.image}" alt="${cardName(card)}" loading="lazy" />
+      ${championState || exhausted ? `<span>${card.exhausted ? t("spent", locale()) : championState.trim() === "deployed" ? t("used", locale()) : t("zone", locale())}</span>` : ""}
     </button>
   `;
 }
@@ -8211,25 +5601,24 @@ function battlefieldCard(field) {
   const topTarget = targetAttributes(field.instanceId, topPlayer.id);
   const bottomTarget = targetAttributes(field.instanceId, bottomPlayer.id);
   const showdownActive = game.phase === "showdown" && game.showdown?.battlefieldId === field.instanceId;
-  const bottomDropDestination = `data-play-destination="${escapeHtml(field.instanceId)}" data-drop-owner="${escapeHtml(bottomPlayer.id)}"`;
   return `
-    <article class="battlefield location-column ${showdownActive ? "showdown-location" : ""} ${chainTargetClass(field.instanceId)} ${choiceCardStateClasses(field.instanceId)}" data-card-id="${field.instanceId}">
-      <div class="field-lane top-lane ${topTarget.className}" ${topTarget.attrs}>
+    <article class="battlefield location-column ${showdownActive ? "showdown-location" : ""} ${chainTargetClass(field.instanceId)}" data-card-id="${field.instanceId}">
+      <div class="field-lane top-lane ${topTarget.className}" data-scroll-key="field-${field.instanceId}-${topPlayer.id}" ${topTarget.attrs}>
         <span class="lane-label">${t("opponentUnits", locale())}</span>
-        <div class="field-lane-track" data-scroll-key="field-${field.instanceId}-${topPlayer.id}">
+        <div class="field-lane-track">
           ${battlefieldLaneContents(topPlayer, field, topUnits, topHidden, "top")}
         </div>
       </div>
-      <div class="field-center location-card" ${bottomDropDestination}>
+      <div class="field-center location-card">
         <div class="field-image">${cardImage(field)}</div>
         <div class="battlefield-head">
           <h2>${battlefieldName(field)}</h2>
           <span>${controller}</span>
         </div>
       </div>
-      <div class="field-lane bottom-lane ${bottomTarget.className}" ${bottomDropDestination} ${bottomTarget.attrs}>
+      <div class="field-lane bottom-lane ${bottomTarget.className}" data-scroll-key="field-${field.instanceId}-${bottomPlayer.id}" ${bottomTarget.attrs}>
         <span class="lane-label">${t("yourUnits", locale())}</span>
-        <div class="field-lane-track" data-scroll-key="field-${field.instanceId}-${bottomPlayer.id}">
+        <div class="field-lane-track">
           ${battlefieldLaneContents(bottomPlayer, field, bottomUnits, bottomHidden, "bottom")}
         </div>
       </div>
@@ -8288,7 +5677,6 @@ function battlefieldLaneContents(player, field, units, hiddenItems, side) {
 }
 
 function hiddenCardBack(item, field) {
-  if (!item?.card || typeof item.card !== "object") return "";
   const controllerId = hiddenCardControllerId(item);
   const controlledByViewer = viewerPlayerId() === controllerId;
   const visibleByIntel = canViewPrivateInfo(viewerPlayerId(), controllerId);
@@ -8298,23 +5686,23 @@ function hiddenCardBack(item, field) {
   const chainTarget = chainTargetClass(item.card.instanceId) ? " chain-effect-target" : "";
   if (controlledByViewer) {
     return `
-      <button class="hidden-card-back hidden-card-visible hidden-card-owned owner-${escapeHtml(item.ownerId || "")} ${playable ? "usable-card" : ""}${sourceGlow}${targetGlow}${chainTarget} ${choiceCardStateClasses(item.card.instanceId)}" data-action="select-card" data-card="${escapeHtml(item.card.instanceId || "")}" data-card-id="${escapeHtml(item.card.instanceId || "")}" title="${escapeHtml(cardName(item.card))}">
-        <span class="hidden-visible-art">${cardImage(item.card)}</span>
+      <button class="hidden-card-back hidden-card-owned owner-${item.ownerId} ${playable ? "usable-card" : ""}${sourceGlow}${targetGlow}${chainTarget}" data-action="select-card" data-card="${item.card.instanceId}" data-card-id="${item.card.instanceId}" title="${cardName(item.card)}">
+        ${cardImage(item.card)}
         <span class="hidden-label">${t("hiddenZone", locale())}</span>
       </button>
     `;
   }
   if (visibleByIntel && !controlledByViewer) {
     return `
-      <article class="hidden-card-back hidden-card-visible hidden-card-intel owner-${escapeHtml(item.ownerId || "")}${sourceGlow}${targetGlow}${chainTarget} ${choiceCardStateClasses(item.card.instanceId)}" data-card-id="${escapeHtml(item.card.instanceId || "")}" title="${escapeHtml(cardName(item.card))}" role="button" tabindex="0">
-        <span class="hidden-visible-art">${cardImage(item.card)}</span>
-        <span class="hidden-label">${t("revealed", locale())}</span>
+      <article class="${imageCardClass(item.card, `hidden-revealed owner-${item.ownerId}${sourceGlow}${targetGlow}${chainTarget}`)}" data-card-id="${item.card.instanceId}" title="${cardName(item.card)}">
+        ${cardImage(item.card)}
+        <span class="status-line">${t("revealed", locale())}</span>
       </article>
     `;
   }
   const attrs = `title="${t("hiddenZone", locale())}" aria-label="${t("opponentHiddenCard", locale())}"`;
   return `
-    <button class="hidden-card-back owner-${escapeHtml(item.ownerId || "")} locked-hidden ${playable ? "usable-card" : ""}${sourceGlow}${targetGlow}${chainTarget}" ${attrs}>
+    <button class="hidden-card-back owner-${item.ownerId} locked-hidden ${playable ? "usable-card" : ""}${sourceGlow}${targetGlow}${chainTarget}" ${attrs}>
       <span class="card-back-mark">H</span>
       <span class="hidden-label">${controlledByViewer ? t("hiddenZone", locale()) : t("setHidden", locale())}</span>
     </button>
@@ -8328,133 +5716,11 @@ function canViewPrivateInfo(viewerId, ownerId) {
   ));
 }
 
-function championIdentityReference(player, champion) {
-  if (!champion) {
-    return {
-      physical: false,
-      zone: "",
-      markup: `<span class="empty-card-slot" aria-label="${t("championZone", locale())}"></span>`
-    };
-  }
-  const chainItems = [...(game.actionChain?.chain || []), ...(game.showdown?.chain || [])];
-  const inChain = chainItems.some((item) => item?.card?.instanceId === champion.instanceId);
-  const inTrash = player.trash.some((card) => card.instanceId === champion.instanceId);
-  const inBanished = (player.banished || []).some((card) => card.instanceId === champion.instanceId);
-  const inHidden = game.battlefields.some((field) => field.hidden.some((item) => item.card.instanceId === champion.instanceId));
-  const inBattlefield = game.battlefields.some((field) => field.units.some((card) => card.instanceId === champion.instanceId));
-  const inBase = player.base.some((card) => card.instanceId === champion.instanceId);
-  const physical = champion.zone === "champion" && !inChain && !inTrash && !inBanished && !inHidden && !inBattlefield && !inBase;
-  if (physical) return { physical: true, zone: "champion", markup: miniIdentity(champion, player) };
-
-  let zone = inChain ? "chain" : String(champion.zone || "played");
-  if (!inChain && inTrash) zone = "trash";
-  else if (!inChain && inBanished) zone = "banished";
-  else if (!inChain && inHidden) zone = "hidden";
-  else if (!inChain && inBattlefield) zone = "battlefield";
-  else if (!inChain && inBase) zone = "base";
-  return {
-    physical: false,
-    zone,
-    markup: ""
-  };
-}
-
-function decisionVisibleToViewer(decision, viewerId = viewerPlayerId()) {
-  return pendingDecisionVisibleToViewer({
-    aiMode: aiMode || replayMode || isOnlineGame(),
-    viewerPlayerId: viewerId,
-    decision
-  });
-}
-
-function pendingChoiceCardVisibleToViewer(cardId) {
-  const choice = game.pendingChoice;
-  if (!choice || !cardId || !decisionVisibleToViewer(choice)) return false;
-  const revealed = Array.isArray(choice.data?.revealedCards) ? choice.data.revealedCards : [];
-  const options = Array.isArray(choice.options) ? choice.options : [];
-  const disclosedIds = [
-    ...(Array.isArray(choice.data?.revealedIds) ? choice.data.revealedIds : []),
-    ...(Array.isArray(choice.data?.lookedIds) ? choice.data.lookedIds : []),
-    ...(Array.isArray(choice.data?.observedIds) ? choice.data.observedIds : []),
-    ...(Array.isArray(choice.data?.topCardIds) ? choice.data.topCardIds : []),
-    ...(typeof choice.data?.topCardId === "string" ? [choice.data.topCardId] : [])
-  ].map(String);
-  return revealed.some((card) => card?.instanceId === cardId && !card.redacted)
-    || options.some((option) => option?.card?.instanceId === cardId && !option.card.redacted)
-    || disclosedIds.includes(String(cardId));
-}
-
-function cardVisibleToCurrentViewer(cardOrId) {
-  const cardId = typeof cardOrId === "string" ? cardOrId : cardOrId?.instanceId;
-  if (!cardId) return false;
-  if (pendingChoiceCardVisibleToViewer(cardId)) return true;
-  const viewerId = viewerPlayerId();
-  for (const player of game.players) {
-    const owns = player.id === viewerId;
-    if (player.legend?.instanceId === cardId || player.champion?.instanceId === cardId) return true;
-    if (player.base.some((card) => card?.instanceId === cardId)) return true;
-    if (player.runes.some((card) => card?.instanceId === cardId)) return true;
-    if (player.trash.some((card) => card?.instanceId === cardId)) return true;
-    if ((player.banished || []).some((card) => card?.instanceId === cardId)) return true;
-    if (player.hand.some((card) => card?.instanceId === cardId)) return owns || canViewPrivateInfo(viewerId, player.id);
-    if (player.mainDeck.some((card) => card?.instanceId === cardId)) return false;
-    if (player.runeDeck.some((card) => card?.instanceId === cardId)) return false;
-    if ((player.availableChampions || []).some((card) => card?.instanceId === cardId)) return setupSelectionVisibleToViewer(player.id);
-    if ((player.availableBattlefields || []).some((card) => card?.instanceId === cardId)) return setupSelectionVisibleToViewer(player.id);
-    for (const permanent of player.base) {
-      if ((permanent.attachments || []).some((card) => card?.instanceId === cardId)) return true;
-    }
-  }
-  for (const field of game.battlefields) {
-    if (field.instanceId === cardId) return true;
-    if (field.units.some((card) => card?.instanceId === cardId)) return true;
-    for (const unit of field.units) {
-      if ((unit.attachments || []).some((card) => card?.instanceId === cardId)) return true;
-    }
-    const hidden = (field.hidden || []).find((item) => item?.card?.instanceId === cardId);
-    if (hidden) {
-      const controllerId = hiddenCardControllerId(hidden);
-      return controllerId === viewerId || canViewPrivateInfo(viewerId, controllerId);
-    }
-  }
-  return currentChainTreeItems().some((item) =>
-    (item.card?.instanceId || item.trigger?.sourceCardId) === cardId
-  );
-}
-
-function sanitizeViewerUiState() {
-  if (intelOpenPlayerId && !canViewPrivateInfo(viewerPlayerId(), intelOpenPlayerId)) intelOpenPlayerId = null;
-  if (inspectorPreviewCard) {
-    const previewId = inspectorPreviewCard.instanceId || inspectorPreviewCard.id;
-    const livePreview = previewId ? findVisibleCard(previewId) : null;
-    if (!livePreview || !cardVisibleToCurrentViewer(livePreview)) inspectorPreviewCard = null;
-    else inspectorPreviewCard = livePreview;
-  }
-  if (game.selectedCardId && !cardVisibleToCurrentViewer(game.selectedCardId)) {
-    game.selectedCardId = null;
-    onlineSelectedCardId = null;
-    if (!inspectedChainCard()) inspectorOpen = false;
-    attachmentsOpenCardId = null;
-  }
-  if (inspectorOpen && !inspectedCard()) inspectorOpen = false;
-  if (attachmentsOpenCardId && !cardVisibleToCurrentViewer(attachmentsOpenCardId)) attachmentsOpenCardId = null;
-  if (fullCardOpen) {
-    const preview = fullCardPreviewCard || inspectedCard();
-    if (!preview || !cardVisibleToCurrentViewer(preview)) {
-      fullCardOpen = false;
-      fullCardPreviewCard = null;
-    } else {
-      fullCardPreviewCard = findVisibleCard(preview.instanceId || preview.id) || preview;
-    }
-  }
-  syncInspectedChainTargets();
-}
-
 function viewerPlayerId() {
   if (replayMode) return replayBrowser.viewerPlayerId || "p1";
   if (isOnlineGame() && online.playerId) return online.playerId;
   if (aiMode && aiHumanPlayerId) return aiHumanPlayerId;
-  return activePlayerId() || currentPlayer(game)?.id || game.players[0]?.id;
+  return currentPlayer(game)?.id || game.players[0]?.id;
 }
 
 function viewerPlayer() {
@@ -8495,221 +5761,36 @@ function activePlayerId() {
 function actingPlayerClass() {
   const id = activePlayerId();
   if (!id) return "";
-  if (id === viewerPlayerId()) return "acting-bottom";
-  return game.players.some((player) => player.id === id) ? "acting-top" : "";
+  const index = game.players.findIndex((player) => player.id === id);
+  return index === 0 ? "acting-bottom" : index === 1 ? "acting-top" : "";
 }
 
-function handCard(card, index = 0, total = 1) {
-  if (!card || typeof card !== "object") return "";
-  const choiceOption = choiceOptionForCard(card.instanceId);
-  const choiceSurface = game?.pendingChoice ? choiceCardSurface(game.pendingChoice) : "none";
-  const choiceSelectable = Boolean(choiceOption && ["hand", "board"].includes(choiceSurface) && !choiceOption.disabled);
-  const playDestinations = legalHandCardPlayDestinations(card.instanceId);
-  const draggable = !choiceSelectable && playDestinations.length > 0;
-  const dragAttributes = draggable
-    ? `data-card-drag="play" data-play-destinations="${escapeHtml(playDestinations.join(" "))}" draggable="true"`
-    : `data-play-destinations="" draggable="false"`;
+function championCard(player) {
+  if (!player.champion) return "";
+  if (!["champion", "played"].includes(player.champion.zone)) return "";
+  if (player.championPlayed || player.champion.zone === "played") {
+    return `
+      <article class="champion-zone-slot champion-zone-used" aria-label="${locale() === LOCALES.KO ? `${cardName(player.champion)} 챔피언을 사용했습니다` : `${player.champion.name} has been played`}">
+        <span class="zone-label">${t("championZone", locale())}</span>
+        ${cardImage(player.champion)}
+        <span class="status-line">${t("deployed", locale())}</span>
+      </article>
+    `;
+  }
   return `
-    <article class="hand-fan-card ${imageCardClass(card, `${card.type || "card"} ${motionCardClass(card, "hand")}`)}" data-card-id="${escapeHtml(card.instanceId || "")}" data-hand-card ${choiceSelectable ? `data-action="stage-choice-card" data-choice="${escapeHtml(choiceOption.id || "")}"` : ""} ${dragAttributes} style="${fanCardStyle(index, total)}" role="button" tabindex="0" aria-label="${escapeHtml(cardName(card))}" aria-pressed="${choiceSelectable ? choiceOptionCardId(stagedChoiceOption()) === card.instanceId : game.selectedCardId === card.instanceId}">
-      <div class="card-orientation-layer">
-        <div class="card-face-layer">${cardImage(card)}</div>
-      </div>
+    <article class="${imageCardClass(player.champion, `champion-zone ${motionCardClass(player.champion, "hand")}`)}" data-card-id="${player.champion.instanceId}">
+      <span class="zone-label">${t("championZone", locale())}</span>
+      ${cardImage(player.champion)}
     </article>
   `;
 }
 
-function legalHandCardPlayDestinations(cardId) {
-  if (!cardId || replayMode || game?.pendingChoice || game?.pendingPayment || online.commandPending || !viewerCanAct()) return [];
-  return [...new Set(uiLegalActions
-    .filter((action) => action?.kind === "beginPlayCard" && action.cardId === cardId && typeof action.destination === "string")
-    .filter((action) => tutorialAllowsUiAction("begin-play", { card: cardId, destination: action.destination }))
-    .map((action) => action.destination)
-    .filter(Boolean))];
-}
-
-function legalChampionPlayDestinations(cardId) {
-  const requestedCardId = String(cardId || "");
-  const player = viewerPlayer();
-  if (!requestedCardId || !player || replayMode || game?.pendingChoice || game?.pendingPayment || online.commandPending || !viewerCanAct()) return [];
-  if (player.champion?.instanceId !== requestedCardId || player.championPlayed || player.champion?.zone !== "champion") return [];
-  return [...new Set(uiLegalActions
-    .filter((action) => action?.kind === "beginPlayChampion" && typeof action.destination === "string")
-    .filter((action) => tutorialAllowsUiAction("begin-champion", { card: requestedCardId, destination: action.destination }))
-    .map((action) => action.destination)
-    .filter(Boolean))];
-}
-
-function requestChampionPlay(cardId, destination) {
-  const requestedCardId = String(cardId || "");
-  const requestedDestination = String(destination || "");
-  if (!requestedCardId || !requestedDestination) return false;
-  if (!legalChampionPlayDestinations(requestedCardId).includes(requestedDestination)) return false;
-  const player = viewerPlayer();
-  const legalAction = uiLegalActions.find((action) =>
-    action?.kind === "beginPlayChampion" && action.destination === requestedDestination
-  );
-  if (!player || player.champion?.instanceId !== requestedCardId || !legalAction
-    || !tutorialAllowsUiAction("begin-champion", { card: requestedCardId, destination: requestedDestination })) return false;
-  handOpen = false;
-  dispatchGameCommand(
-    { kind: "beginPlayChampion", destination: requestedDestination },
-    () => beginPlayChampion(game, requestedDestination)
-  );
-  return true;
-}
-
-function requestHandCardPlay(cardId, destination) {
-  const requestedCardId = String(cardId || "");
-  const requestedDestination = String(destination || "");
-  if (!requestedCardId || !requestedDestination) return false;
-  if (!legalHandCardPlayDestinations(requestedCardId).includes(requestedDestination)) return false;
-  const legalAction = uiLegalActions.find((action) =>
-    action?.kind === "beginPlayCard"
-      && action.cardId === requestedCardId
-      && action.destination === requestedDestination
-  );
-  if (!legalAction || !tutorialAllowsUiAction("begin-play", {
-    card: requestedCardId,
-    destination: requestedDestination
-  })) return false;
-  handOpen = false;
-  dispatchGameCommand(
-    { kind: "beginPlayCard", cardId: requestedCardId, destination: requestedDestination },
-    () => beginPlayCard(game, requestedCardId, requestedDestination)
-  );
-  return true;
-}
-
-function legalUnitMoveDestinations(unitId) {
-  if (!unitId || replayMode || game?.pendingChoice || game?.pendingPayment || online.commandPending || !viewerCanAct()) return [];
-  return [...new Set(legalMoveDestinationIds(uiLegalActions, String(unitId))
-    .filter((destination) => tutorialAllowsUiAction("move", { unit: String(unitId), destination }))
-    .filter(Boolean))];
-}
-
-function requestUnitMove(unitId, destination) {
-  const requestedUnitId = String(unitId || "");
-  const requestedDestination = String(destination || "");
-  if (!requestedUnitId || !requestedDestination) return false;
-  if (!legalUnitMoveDestinations(requestedUnitId).includes(requestedDestination)) return false;
-  const legalAction = uiLegalActions.find((action) =>
-    action?.kind === "moveUnit"
-      && action.unitId === requestedUnitId
-      && action.destinationId === requestedDestination
-  );
-  if (!legalAction || !tutorialAllowsUiAction("move", {
-    unit: requestedUnitId,
-    destination: requestedDestination
-  })) return false;
-  dispatchGameCommand(
-    { kind: "moveUnit", unitId: requestedUnitId, destinationId: requestedDestination },
-    () => moveUnit(game, requestedUnitId, requestedDestination)
-  );
-  moveSelection.clear();
-  return true;
-}
-
-function cardDragDescriptor(sourceNode) {
-  if (!(sourceNode instanceof HTMLElement)) return null;
-  const kind = sourceNode.dataset.cardDrag;
-  const cardId = String(sourceNode.dataset.cardId || "");
-  if (!cardId || !["play", "move", "champion"].includes(kind)) return null;
-  const destinations = kind === "play"
-    ? legalHandCardPlayDestinations(cardId)
-    : kind === "champion"
-      ? legalChampionPlayDestinations(cardId)
-      : legalUnitMoveDestinations(cardId);
-  return destinations.length ? { kind, cardId } : null;
-}
-
-function dragSessionDestinations(session = draggingCardSession) {
-  if (!session?.cardId) return [];
-  if (session.kind === "move") return legalUnitMoveDestinations(session.cardId);
-  if (session.kind === "champion") return legalChampionPlayDestinations(session.cardId);
-  return legalHandCardPlayDestinations(session.cardId);
-}
-
-function legalDropDestinationNode(node, session = draggingCardSession) {
-  const destinationNode = node?.closest?.("[data-play-destination]") || null;
-  if (!destinationNode || !app.contains(destinationNode)) return null;
-  if (String(destinationNode.dataset.dropOwner || "") !== String(viewerPlayerId() || "")) return null;
-  const destination = String(destinationNode.dataset.playDestination || "");
-  return dragSessionDestinations(session).includes(destination) ? destinationNode : null;
-}
-
-function beginCardDragPresentation(session, sourceNode = null) {
-  const normalized = session?.kind && session?.cardId
-    ? { kind: String(session.kind), cardId: String(session.cardId) }
-    : null;
-  if (draggingCardSession && (
-    draggingCardSession.kind !== normalized?.kind
-    || draggingCardSession.cardId !== normalized?.cardId
-  )) clearCardDragPresentation();
-  const destinations = new Set(dragSessionDestinations(normalized));
-  if (!normalized || !destinations.size) return false;
-  draggingCardSession = normalized;
-  app.classList.add("is-dragging-card", `is-dragging-${normalized.kind}`);
-  sourceNode?.classList.add("drag-source-active");
-  for (const node of app.querySelectorAll("[data-play-destination]")) {
-    const ownDestination = String(node.dataset.dropOwner || "") === String(viewerPlayerId() || "");
-    node.classList.toggle("is-legal-drop", ownDestination && destinations.has(String(node.dataset.playDestination || "")));
-  }
-  return true;
-}
-
-function updateCardDragDestination(node) {
-  for (const current of app.querySelectorAll("[data-play-destination].drag-over, [data-play-destination].drop-target-active")) {
-    current.classList.remove("drag-over", "drop-target-active");
-  }
-  const target = legalDropDestinationNode(node);
-  if (target) target.classList.add("drag-over", "drop-target-active");
-  return target;
-}
-
-function clearCardDragPresentation() {
-  const pointerSession = pointerCardDrag;
-  pointerCardDrag = null;
-  app.classList.remove("is-dragging-card", "is-dragging-play", "is-dragging-move", "is-dragging-champion");
-  for (const node of app.querySelectorAll(".drag-source-active, [data-play-destination].is-legal-drop, [data-play-destination].drag-over, [data-play-destination].drop-target-active")) {
-    node.classList.remove("drag-source-active", "is-legal-drop", "drag-over", "drop-target-active");
-  }
-  pointerSession?.ghost?.remove?.();
-  try {
-    if (pointerSession?.sourceNode?.hasPointerCapture?.(pointerSession.pointerId)) {
-      pointerSession.sourceNode.releasePointerCapture(pointerSession.pointerId);
-    }
-  } catch {
-    // Pointer capture may already have been released by the browser.
-  }
-  draggingCardSession = null;
-  if (cardDragRenderPending) {
-    queueMicrotask(() => {
-      if (cardDragRenderPending && !draggingCardSession && !pointerCardDrag) render();
-    });
-  }
-}
-
-function createPointerDragGhost(sourceNode) {
-  if (!(sourceNode instanceof HTMLElement)) return null;
-  const ghost = sourceNode.cloneNode(true);
-  ghost.removeAttribute("id");
-  ghost.removeAttribute("draggable");
-  ghost.removeAttribute("tabindex");
-  ghost.removeAttribute("role");
-  ghost.classList.add(sourceNode.dataset.cardDrag === "move"
-    ? "board-card-drag-ghost"
-    : sourceNode.dataset.cardDrag === "champion"
-      ? "champion-card-drag-ghost"
-      : "hand-card-drag-ghost");
-  ghost.setAttribute("aria-hidden", "true");
-  document.body.appendChild(ghost);
-  return ghost;
-}
-
-function positionPointerDragGhost(ghost, clientX, clientY) {
-  if (!ghost) return;
-  ghost.style.left = `${clientX}px`;
-  ghost.style.top = `${clientY}px`;
+function handCard(card) {
+  return `
+    <article class="${imageCardClass(card, `${card.type} ${motionCardClass(card, "hand")}`)}" data-card-id="${card.instanceId}" role="button" tabindex="0" aria-label="${escapeHtml(cardName(card))}">
+      ${cardImage(card)}
+    </article>
+  `;
 }
 
 function visibleCardStatuses(card) {
@@ -8721,18 +5802,16 @@ function visibleCardStatuses(card) {
   });
 }
 
-function cardStatusBadges(card, { excludeKinds = [] } = {}) {
-  const excluded = new Set(excludeKinds);
+function cardStatusBadges(card) {
   const statuses = visibleCardStatuses(card)
-    .filter((status) => !["exhausted", "damage", "attachments"].includes(status.kind) && !excluded.has(status.kind))
-    .sort((left, right) => Number(right.kind === "empowered") - Number(left.kind === "empowered"));
+    .filter((status) => !["stunned", "exhausted", "damage", "attachments", "attacker", "defender"].includes(status.kind));
   if (!statuses.length) return "";
   const visible = statuses.slice(0, 2);
   const remaining = statuses.length - visible.length;
   const summary = statuses.map((status) => status.badge).join(", ");
   return `
     <span class="unit-state-badges" aria-label="${escapeHtml(locale() === LOCALES.KO ? `적용 상태: ${summary}` : `Active statuses: ${summary}`)}" title="${escapeHtml(summary)}">
-      ${visible.map((status) => `<span class="unit-state-badge tone-${status.tone}" data-status-kind="${escapeHtml(status.kind)}">${escapeHtml(compactBoardStatusLabel(status))}</span>`).join("")}
+      ${visible.map((status) => `<span class="unit-state-badge tone-${status.tone}">${escapeHtml(status.badge)}</span>`).join("")}
       ${remaining > 0 ? `<span class="unit-state-badge more">${locale() === LOCALES.KO ? `외 ${remaining}` : `+${remaining} more`}</span>` : ""}
     </span>
   `;
@@ -8830,64 +5909,45 @@ function unitMightCue(card) {
   return `<span class="unit-might-cue" aria-label="${escapeHtml(`${label} ${sign}${animation.delta}`)}"><b>${sign}${animation.delta}</b><small>${label}</small></span>`;
 }
 
-function ownerChip(owner, fallbackId = "") {
-  const fullName = owner ? playerName(owner) : String(fallbackId || "");
-  const playerIndex = owner ? game.players.findIndex((player) => player.id === owner.id) : -1;
-  const shortName = playerIndex >= 0 ? `P${playerIndex + 1}` : fullName;
-  return `<span class="owner-chip" title="${escapeHtml(fullName)}"><span class="owner-chip-full">${escapeHtml(fullName)}</span><span class="owner-chip-short">${escapeHtml(shortName)}</span></span>`;
-}
-
 function boardCard(card, location) {
   const flashed = isFlashed(card.instanceId);
   const owner = game.players.find((player) => player.id === card.ownerId);
   const motion = motionCardClass(card, "board");
-  const attachments = card.type === "unit" && Array.isArray(card.attachments)
-    ? card.attachments.filter((gear) => gear && typeof gear === "object" && !Array.isArray(gear))
-    : [];
+  const attachments = card.type === "unit" ? (card.attachments || []) : [];
   if (location === "base") return baseToken(card, location, owner, motion, attachments, flashed);
   if (card.type === "unit") return unitToken(card, location, owner, motion, attachments, flashed);
   return `
-    <article class="${imageCardClass(card, `${card.type} owner-${card.ownerId} controller-${card.controllerId} ${attachments.length ? "has-attachments" : ""} ${card.exhausted ? "exhausted" : ""} ${flashed ? "effect-flash" : ""} ${motion}`)}" data-card-id="${card.instanceId}" data-location="${location}" data-exhausted="${Boolean(card.exhausted)}">
-      ${ownerChip(owner, card.ownerId)}
+    <article class="${imageCardClass(card, `${card.type} owner-${card.ownerId} controller-${card.controllerId} ${attachments.length ? "has-attachments" : ""} ${card.exhausted ? "exhausted" : ""} ${flashed ? "effect-flash" : ""} ${motion}`)}" data-card-id="${card.instanceId}" data-location="${location}">
+      <span class="owner-chip">${owner ? playerName(owner) : card.ownerId}</span>
       ${moveSelectButton(card)}
-      <div class="card-exhaust-layer"><div class="card-face-layer">${cardImage(card)}</div></div>
+      ${cardImage(card)}
       ${attachmentStrip(attachments)}
       ${statusLine(card)}
     </article>
   `;
 }
 
-function boardUnitDragAttributes(card) {
-  if (!card || card.type !== "unit") return `draggable="false"`;
-  const destinations = legalUnitMoveDestinations(card.instanceId);
-  if (!destinations.length) return `data-move-destinations="" draggable="false"`;
-  return `data-card-drag="move" data-move-destinations="${escapeHtml(destinations.join(" "))}" draggable="true"`;
-}
-
 function baseToken(card, location, owner, motion, attachments, flashed) {
   const domain = domainText(card.domains?.[0]) || (card.tags?.[0] ? keywordText([card.tags[0]]) : cardType(card));
-  const stats = card.type === "unit" ? boardUnitStats(card, location) : null;
-  const gearMight = card.type === "gear" ? Math.max(0, Number(effectiveMight(card)) || 0) : null;
-  const stateLabel = card.exhausted ? t("exhausted", locale()) : t("readyState", locale());
-  const statusSummary = visibleCardStatuses(card).map((status) => status.badge).filter(Boolean).join(", ");
-  const accessibleState = [cardName(card), stateLabel]
-    .concat(stats ? [`${t("currentMight", locale())} ${stats.might}`, `${t("remainingHealth", locale())} ${stats.remaining}`] : [])
-    .concat(statusSummary ? [statusSummary] : [])
-    .join(" · ");
-  const dragAttributes = boardUnitDragAttributes(card);
+  const state = card.stunned ? t("stunned", locale()) : card.exhausted ? t("exhausted", locale()) : t("readyState", locale());
+  const mainBadge = card.type === "unit" ? `${t("might", locale())} ${currentMight(game, card)}` : cardType(card);
   return `
-    <article class="unit-token base-token physical-board-card ${card.type}-token owner-${card.ownerId} controller-${card.controllerId} ${attachments.length ? "has-attachments" : ""} ${card.exhausted ? "exhausted" : "ready"} ${cardStatusClassNames(card)} ${unitMightAnimationClass(card)} ${chainTargetClass(card.instanceId)} ${choiceCardStateClasses(card.instanceId)} ${flashed ? "effect-flash" : ""} ${motion}" data-card-id="${card.instanceId}" data-location="${location}" data-current-might="${stats?.might ?? gearMight ?? ""}" data-remaining-health="${stats?.remaining ?? ""}" data-damage="${Number(card.damage) || 0}" data-exhausted="${Boolean(card.exhausted)}" data-stunned="${Boolean(card.stunned)}" ${dragAttributes} role="button" tabindex="0" aria-label="${escapeHtml(accessibleState)}" title="${escapeHtml(accessibleState)}">
-      <div class="card-exhaust-layer">
-        <div class="card-face-layer">
-          <div class="unit-token-art">
-            ${card.image ? `<img src="${escapeHtml(card.image)}" alt="${escapeHtml(cardName(card))}" loading="lazy" />` : `<span>${escapeHtml(cardName(card))}</span>`}
-          </div>
-          ${card.image ? "" : `<div class="unit-token-body"><strong>${escapeHtml(cardName(card))}</strong><span>${escapeHtml(domain)}</span></div>`}
-          ${empoweredBoardMarker(card)}
-          ${boardCardCornerOverlay(card, stats)}
+    <article class="unit-token base-token ${card.type}-token owner-${card.ownerId} controller-${card.controllerId} ${attachments.length ? "has-attachments" : ""} ${card.exhausted ? "exhausted" : "ready"} ${cardStatusClassNames(card)} ${unitMightAnimationClass(card)} ${chainTargetClass(card.instanceId)} ${flashed ? "effect-flash" : ""} ${motion}" data-card-id="${card.instanceId}" data-location="${location}">
+      <div class="unit-token-art">
+        ${card.image ? `<img src="${card.image}" alt="${cardName(card)}" loading="lazy" />` : `<span>${cardName(card)}</span>`}
+      </div>
+      <div class="unit-token-body">
+        <strong>${cardName(card)}</strong>
+        <span>${domain}</span>
+        <div class="unit-token-badges">
+          <b>${mainBadge}</b>
+          <em>${state}</em>
+          ${card.damage ? `<em>${card.damage} ${t("damageShort", locale())}</em>` : ""}
+          ${attachments.length ? `<em>${attachments.length} ${t("attachedGear", locale())}</em>` : ""}
+          ${cardStatusBadges(card)}
         </div>
       </div>
-      ${ownerChip(owner, card.ownerId)}
+      <span class="owner-chip">${owner ? playerName(owner) : card.ownerId}</span>
       ${card.type === "unit" ? unitMightCue(card) : ""}
       ${card.type === "unit" ? moveSelectButton(card) : ""}
       ${attachmentStrip(attachments)}
@@ -8897,31 +5957,27 @@ function baseToken(card, location, owner, motion, attachments, flashed) {
 
 function unitToken(card, location, owner, motion, attachments, flashed) {
   const domain = domainText(card.domains?.[0]) || (card.tags?.[0] ? keywordText([card.tags[0]]) : "");
+  const state = card.exhausted ? t("exhausted", locale()) : card.stunned ? t("stunned", locale()) : t("readyState", locale());
   const zoneClass = location === "base" ? "base-token" : "field-token";
-  const stats = boardUnitStats(card, location);
-  const stateLabel = card.exhausted ? t("exhausted", locale()) : t("readyState", locale());
-  const statusSummary = visibleCardStatuses(card).map((status) => status.badge).filter(Boolean).join(", ");
-  const accessibleState = [
-    cardName(card),
-    stateLabel,
-    `${t("currentMight", locale())} ${stats.might}`,
-    `${t("remainingHealth", locale())} ${stats.remaining}`,
-    statusSummary
-  ].filter(Boolean).join(" · ");
-  const dragAttributes = boardUnitDragAttributes(card);
+  const combatStats = showdownUnitStats(card, location);
+  const displayMight = combatStats?.might ?? currentMight(game, card);
   return `
-    <article class="unit-token ${zoneClass} physical-board-card owner-${card.ownerId} controller-${card.controllerId} ${attachments.length ? "has-attachments" : ""} ${card.exhausted ? "exhausted" : "ready"} ${cardStatusClassNames(card)} ${unitMightAnimationClass(card)} ${chainTargetClass(card.instanceId)} ${choiceCardStateClasses(card.instanceId)} ${flashed ? "effect-flash" : ""} ${motion}" data-card-id="${card.instanceId}" data-location="${location}" data-current-might="${stats.might}" data-remaining-health="${stats.remaining}" data-damage="${Number(card.damage) || 0}" data-exhausted="${Boolean(card.exhausted)}" data-stunned="${Boolean(card.stunned)}" ${dragAttributes} role="button" tabindex="0" aria-label="${escapeHtml(accessibleState)}" title="${escapeHtml(accessibleState)}">
-      <div class="card-exhaust-layer">
-        <div class="card-face-layer">
-          <div class="unit-token-art">
-            ${card.image ? `<img src="${escapeHtml(card.image)}" alt="${escapeHtml(cardName(card))}" loading="lazy" />` : `<span>${escapeHtml(cardName(card))}</span>`}
-          </div>
-          ${card.image ? "" : `<div class="unit-token-body"><strong>${escapeHtml(cardName(card))}</strong><span>${escapeHtml(domain)}</span></div>`}
-          ${empoweredBoardMarker(card)}
-          ${boardCardCornerOverlay(card, stats)}
+    <article class="unit-token ${zoneClass} owner-${card.ownerId} controller-${card.controllerId} ${attachments.length ? "has-attachments" : ""} ${card.exhausted ? "exhausted" : ""} ${cardStatusClassNames(card)} ${unitMightAnimationClass(card)} ${chainTargetClass(card.instanceId)} ${flashed ? "effect-flash" : ""} ${motion}" data-card-id="${card.instanceId}" data-location="${location}">
+      <div class="unit-token-art">
+        ${card.image ? `<img src="${card.image}" alt="${cardName(card)}" loading="lazy" />` : `<span>${cardName(card)}</span>`}
+      </div>
+      <div class="unit-token-body">
+        <strong>${cardName(card)}</strong>
+        <span>${domain}</span>
+        <div class="unit-token-badges">
+          <b>${t("might", locale())} ${displayMight}</b>
+          <em>${state}</em>
+          ${card.damage ? `<em>${card.damage} ${t("damageShort", locale())}</em>` : ""}
+          ${combatStats ? `<b class="combat-stat">${t("currentMight", locale())} ${combatStats.might}</b><em class="${combatStats.remaining <= 0 ? "lethal-stat" : "health-stat"}">${t("remainingHealth", locale())} ${combatStats.remaining}</em>` : ""}
+          ${cardStatusBadges(card)}
         </div>
       </div>
-      ${ownerChip(owner, card.ownerId)}
+      <span class="owner-chip">${owner ? playerName(owner) : card.ownerId}</span>
       ${unitMightCue(card)}
       ${moveSelectButton(card)}
       ${attachmentStrip(attachments)}
@@ -8948,102 +6004,15 @@ function showdownUnitStats(card, location) {
 }
 
 function attachmentStrip(attachments) {
-  const safeAttachments = Array.isArray(attachments)
-    ? attachments.filter((gear) => gear && typeof gear === "object" && !Array.isArray(gear))
-    : [];
-  if (!safeAttachments.length) return "";
+  if (!attachments.length) return "";
   return `
     <div class="attachment-strip" aria-label="${locale() === LOCALES.KO ? "부착된 도구" : "Attached gear"}">
-      ${safeAttachments.map((gear) => {
-        const state = attachedGearCompactState(gear);
-        return `
-        <button class="attached-gear ${gear.exhausted ? "exhausted" : "ready"} ${cardStatusClassNames(gear)} ${game.selectedCardId === gear.instanceId ? "selected-attachment" : ""} ${chainTargetClass(gear.instanceId)} ${choiceCardStateClasses(gear.instanceId)}" data-action="select-card" data-card="${escapeHtml(gear.instanceId || "")}" data-card-id="${escapeHtml(gear.instanceId || "")}" data-current-might="${state.might}" data-exhausted="${Boolean(gear.exhausted)}" title="${escapeHtml(`${cardName(gear)} · ${state.summary}`)}">
-          <span class="attachment-orientation-layer">
-            ${gear.image ? `<img src="${escapeHtml(gear.image)}" alt="${escapeHtml(cardName(gear))}" loading="lazy" />` : `<span>${escapeHtml(cardName(gear))}</span>`}
-            <span class="attached-gear-board-overlay" aria-hidden="true">
-              ${cardStatusBadges(gear)}
-            </span>
-          </span>
+      ${attachments.map((gear) => `
+        <button class="attached-gear ${game.selectedCardId === gear.instanceId ? "selected-attachment" : ""} ${chainTargetClass(gear.instanceId)}" data-card-id="${gear.instanceId}" title="${cardName(gear)}">
+          ${gear.image ? `<img src="${gear.image}" alt="${cardName(gear)}" loading="lazy" />` : `<span>${cardName(gear)}</span>`}
         </button>
-      `; }).join("")}
+      `).join("")}
     </div>
-  `;
-}
-
-function boardUnitStats(card, location) {
-  const raw = showdownUnitStats(card, location) || unitDamageState(game, card);
-  const might = Number.isFinite(Number(raw?.might)) ? Number(raw.might) : 0;
-  const remaining = Number.isFinite(Number(raw?.remaining)) ? Math.max(0, Number(raw.remaining)) : Math.max(0, might);
-  return { might, remaining };
-}
-
-function empoweredBoardMarker(card) {
-  const status = visibleCardStatuses(card).find((candidate) => candidate.kind === "empowered");
-  if (!status) return "";
-  const visibleLabel = locale() === LOCALES.KO ? "강화됨" : "Empowered";
-  return `<span class="empowered-board-marker" data-empowered-count="${Math.max(1, Number(card.empoweredCount) || 1)}" title="${escapeHtml(status.badge)}" aria-label="${escapeHtml(status.badge)}"><span aria-hidden="true">✦</span>${escapeHtml(visibleLabel)}</span>`;
-}
-
-function identityEmpoweredMarker(card) {
-  const status = visibleCardStatuses(card).find((candidate) => candidate.kind === "empowered");
-  if (!status) return "";
-  const visibleLabel = locale() === LOCALES.KO ? "강화됨" : "Empowered";
-  return `<span class="identity-empowered-marker" data-empowered-count="${Math.max(1, Number(card.empoweredCount) || 1)}" title="${escapeHtml(status.badge)}" aria-label="${escapeHtml(status.badge)}"><span aria-hidden="true">✦</span>${escapeHtml(visibleLabel)}</span>`;
-}
-
-function boardCardCornerOverlay(card, stats = null) {
-  const statusMarkup = cardStatusBadges(card, { excludeKinds: ["empowered"] });
-  if (!stats && !statusMarkup) return "";
-  return `
-    <span class="unit-board-overlay" aria-hidden="true">
-      ${statusMarkup}
-      ${stats ? `<span class="unit-corner-value unit-remaining-health ${stats.remaining <= 0 ? "lethal-stat" : "health-stat"}" title="${escapeHtml(`${t("remainingHealth", locale())} ${stats.remaining}`)}">${stats.remaining}</span>` : ""}
-      ${stats ? `<span class="unit-corner-value unit-current-might" title="${escapeHtml(`${t("currentMight", locale())} ${stats.might}`)}">${stats.might}</span>` : ""}
-    </span>
-  `;
-}
-
-function compactBoardStatusLabel(status) {
-  const badge = String(status?.badge || "").trim();
-  if (!badge) return locale() === LOCALES.KO ? "상태" : "Status";
-  if (locale() !== LOCALES.KO) {
-    return badge
-      .replace(/^Temporary Might\s*/iu, "Might ")
-      .replace(/^Might modifier\s*/iu, "Might ")
-      .replace(/^Damage prevention\s*/iu, "Guard ")
-      .replace(/^Control changed$/iu, "Control");
-  }
-  return badge
-    .replace(/^일시 위력\s*/u, "위력 ")
-    .replace(/^위력 변경\s*/u, "위력 ")
-    .replace(/^피해 방지\s*/u, "방지 ")
-    .replace(/^죽음 대체$/u, "보호")
-    .replace(/^조종권 변경$/u, "조종");
-}
-
-function attachedGearCompactState(gear) {
-  const mightValue = Number(effectiveMight(gear));
-  const might = Number.isFinite(mightValue) ? mightValue : 0;
-  const readiness = gear?.exhausted ? t("exhausted", locale()) : t("readyState", locale());
-  const statuses = visibleCardStatuses(gear)
-    .filter((status) => !["exhausted", "attachments"].includes(status.kind))
-    .map((status) => status.badge)
-    .filter(Boolean);
-  const summary = [readiness, ...statuses].join(" · ");
-  const compactReadiness = locale() === LOCALES.KO
-    ? readiness
-    : gear?.exhausted ? "EXH" : "RDY";
-  const compactSummary = `${compactReadiness}${statuses.length ? ` +${statuses.length}` : ""}`;
-  return { might, readiness, statuses, summary, compactSummary };
-}
-
-function attachedGearStateMarkup(state, { compact = false } = {}) {
-  const visibleSummary = compact ? state.compactSummary : state.summary;
-  return `
-    <span class="attached-gear-state" aria-label="${escapeHtml(state.summary)}">
-      <span class="attached-gear-might" title="${escapeHtml(t("might", locale()))}">${state.might}</span>
-      <span class="attached-gear-readiness" title="${escapeHtml(state.summary)}">${escapeHtml(visibleSummary)}</span>
-    </span>
   `;
 }
 
@@ -9074,17 +6043,19 @@ function imageCard(card, className = "") {
 function imageCardClass(card, extra = "") {
   const sourceGlow = uiMotion.sourceIds.has(card?.instanceId) ? "source-card-glow" : "";
   const targetGlow = uiMotion.targetIds.has(card?.instanceId) ? "target-card-glow" : "";
-  const choiceClasses = choiceCardStateClasses(card?.instanceId);
-  return `image-card ${extra} ${sourceGlow} ${targetGlow} ${chainTargetClass(card?.instanceId)} ${isUsableCard(card) ? "usable-card" : ""} ${game.selectedCardId === card?.instanceId ? "selected-card" : ""} ${choiceClasses}`.trim();
+  return `image-card ${extra} ${sourceGlow} ${targetGlow} ${chainTargetClass(card?.instanceId)} ${isUsableCard(card) ? "usable-card" : ""} ${game.selectedCardId === card.instanceId ? "selected-card" : ""}`.trim();
 }
 
 function chainTargetClass(cardId) {
   return cardId && inspectedChainTargetIds.has(cardId) ? "chain-effect-target" : "";
 }
 
-function motionCardClass() {
-  // Geometry-based flights own position and scale changes. Re-applying legacy
-  // entry transforms here makes the destination card animate a second time.
+function motionCardClass(card, zone) {
+  if (!card) return "";
+  if (zone === "hand" && uiMotion.drawn.has(card.instanceId)) return "draw-enter";
+  if (zone === "board" && uiMotion.entered.has(card.instanceId)) {
+    return hasKeyword(card, "Ambush") ? "ambush-enter" : "board-enter";
+  }
   return "";
 }
 
@@ -9109,7 +6080,7 @@ function statusLine(card) {
   }
   if (card.buffs) items.push(t("buff", locale()));
   if (card.mightModifier) items.push(`${card.mightModifier > 0 ? "+" : ""}${card.mightModifier} ${t("might", locale())}`);
-  return `<span class="status-line card-state-hud">${items.join(" / ")}</span>`;
+  return `<span class="status-line">${items.join(" / ")}</span>`;
 }
 
 function moveButtons(card) {
@@ -9124,101 +6095,10 @@ function moveButtons(card) {
   return buttons.join("");
 }
 
-function passParticipantIds(chain, { actionChain = false } = {}) {
-  if (!chain || typeof chain !== "object") return [];
-  const declared = actionChain
-    ? (Array.isArray(chain.playerIds) && chain.playerIds.length ? chain.playerIds : [chain.turnPlayerId])
-    : [chain.attackerId, chain.defenderId];
-  const ids = [...new Set(declared.map((id) => String(id || "")).filter(Boolean))];
-  if (ids.length) return ids;
-  return [...new Set((Array.isArray(game?.players) ? game.players : [])
-    .map((candidate) => String(candidate?.id || ""))
-    .filter(Boolean))];
-}
-
-function passControlState() {
-  const actionChain = game?.actionChain || null;
-  const showdown = game?.phase === "showdown" ? game?.showdown || null : null;
-  const chain = actionChain || showdown;
-  if (!chain) return null;
-  const isActionChain = Boolean(actionChain);
-  const items = Array.isArray(chain.chain) ? chain.chain.filter(Boolean) : [];
-  const required = Math.max(1, passParticipantIds(chain, { actionChain: isActionChain }).length);
-  const rawPassed = Number(chain.consecutivePasses);
-  const passed = Math.min(required, Math.max(0, Number.isFinite(rawPassed) ? Math.trunc(rawPassed) : 0));
-  const completesCycle = passed + 1 >= required;
-  const korean = locale() === LOCALES.KO;
-  let label = korean ? "우선권 넘기기" : "Pass Priority";
-
-  if (items.length) {
-    label = completesCycle
-      ? (korean ? "패스 · 효과 해결" : "Pass & Resolve")
-      : (korean ? "체인 패스" : "Pass Chain");
-  } else if (isActionChain) {
-    label = completesCycle
-      ? (korean ? "반응 창 종료" : "Close Response")
-      : (korean ? "반응 패스" : "Pass Response");
-  } else {
-    label = completesCycle
-      ? chain.combat === false
-        ? (korean ? "결전 종료 · 진행" : "End · Continue")
-        : (korean ? "결전 종료 · 전투" : "End · Combat")
-      : (korean ? "포커스 패스" : "Pass Focus");
-  }
-
-  const progressText = korean
-    ? `패스 ${passed}/${required}${items.length ? ` · 효과 ${items.length}` : ""}`
-    : `Pass ${passed}/${required}${items.length ? ` · ${items.length} effect${items.length === 1 ? "" : "s"}` : ""}`;
-  return { label, progressText, passed, required, completesCycle, itemCount: items.length };
-}
-
-function passControlButton({ disabled = false } = {}) {
-  const state = passControlState();
-  if (!state) return "";
-  const inaccessible = Boolean(disabled || game?.pendingChoice || game?.pendingPayment || !viewerCanAct());
-  const accessibleLabel = `${state.label} · ${state.progressText}`;
-  return `
-    <button type="button" class="primary pass-control" data-action="pass-showdown" ${inaccessible ? "disabled" : ""} aria-label="${escapeHtml(accessibleLabel)}" title="${escapeHtml(accessibleLabel)}">
-      <span>${escapeHtml(state.label)}</span>
-      <small>${escapeHtml(state.progressText)}</small>
-    </button>
-  `;
-}
-
-function actionWindowCommandButton(cardCount) {
-  if (!actionUseWindowAvailable()) return "";
-  return `<button class="primary action-window-toggle" data-action="toggle-hand" title="${escapeHtml(`${t("hand", locale())} ${cardCount}`)}">${handOpen ? t("hideHand", locale()) : playWindowControlLabel()}</button>`;
-}
-
-function actionCommandList(markup, scrollKey) {
-  if (!String(markup || "").trim()) return "";
-  return `
-    <div class="actions inline action-command-list right-action-command-list" data-scroll-key="${escapeHtml(scrollKey)}">
-      ${markup}
-    </div>
-  `;
-}
-
-function tableUtilityRail(card) {
-  const chainActive = Boolean(game?.actionChain || (game?.phase === "showdown" && game?.showdown));
-  const waiting = isOnlineGame() && !viewerCanAct();
-  const disabled = Boolean(game?.pendingPayment || game?.pendingChoice);
-  const standaloneChoice = Boolean(
-    decisionVisibleToViewer(game?.pendingChoice)
-    && !pendingChoiceSharesChainSurface(game.pendingChoice)
-  );
-  return `
-    <div class="bar-controls table-action-rail" aria-label="${escapeHtml(locale() === LOCALES.KO ? "보조 기능" : "Table utilities")}">
-      <button data-action="toggle-inspector" ${card && !standaloneChoice ? "" : "disabled"}>${t("cardInfo", locale())}</button>
-      ${chainActive ? "" : `<button data-action="end-turn" ${game.phase !== "action" || waiting || disabled || !viewerCanAct() ? "disabled" : ""}>${t("endTurn", locale())}</button>`}
-    </div>
-  `;
-}
-
 function actionBar(player, card) {
   if (game.phase === "first-player" || game.phase === "champion-select" || game.phase === "battlefield-select" || game.phase === "mulligan") return "";
-  const disabled = Boolean(game?.pendingPayment || game?.pendingChoice);
-  const cardCount = Array.isArray(player?.hand) ? player.hand.length : 0;
+  const disabled = game.pendingPayment || game.pendingChoice;
+  const cardCount = player.hand.length;
   const showdown = game.phase === "showdown" ? showdownBarSummary() : null;
   const actionChain = game.actionChain ? actionChainBarSummary() : null;
   const chainSummary = showdown || actionChain;
@@ -9227,41 +6107,45 @@ function actionBar(player, card) {
   const rejection = !waiting && !disabled ? actionRejection : null;
   if (!card || disabled || waiting) {
     const quickActions = globalActionButtons(player);
-    const directCommands = `${quickActions.join("")}${chainSummary ? "" : moveBatchCommandGroup(player)}${!chainSummary && !responseInfo ? actionWindowCommandButton(cardCount) : ""}`;
-    const commandMarkup = waiting
-      ? (chainSummary ? priorityResponseControls() : "")
-      : responseInfo
-        ? priorityResponseControls(quickActions.join(""))
-        : chainSummary
-          ? priorityResponseControls(quickActions.join(""))
-          : directCommands;
     return `
-      <section class="action-bar context-action-dock ${chainSummary ? "showdown-action-bar" : ""} ${rejection ? "action-rejected" : ""}">
+      <section class="action-bar ${chainSummary ? "showdown-action-bar" : ""} ${rejection ? "action-rejected" : ""}">
         <div class="action-context">
           <span class="bar-label">${rejection ? (locale() === LOCALES.KO ? "요청 거부" : "Rejected") : chainSummary ? chainSummary.label : t("action", locale())}</span>
           <strong>${waiting ? t("waitingForOpponent", locale()) : rejection?.title || responseInfo?.title || chainSummary?.title || (disabled ? t("resolvingStep", locale()) : t("noAction", locale()))}</strong>
           <span>${waiting ? t("waitingForOpponent", locale()) : rejection?.detail || responseInfo?.detail || chainSummary?.detail || (disabled ? t("finishDialog", locale()) : t("selectCardHint", locale()))}</span>
         </div>
-        ${actionCommandList(commandMarkup, `action-${card?.instanceId || "global"}`)}
+        <div class="actions inline">
+          ${waiting ? `<button disabled>${t("noAction", locale())}</button>` : responseInfo ? `<button class="primary" data-action="toggle-hand">${handOpen ? t("hideHand", locale()) : t("playReaction", locale())}</button><button data-action="pass-showdown">${t("pass", locale())}</button>` : quickActions.join("") || `<button disabled>${t("noAction", locale())}</button>`}
+        </div>
+        <div class="bar-controls">
+          <button data-action="toggle-inspector" ${card ? "" : "disabled"}>${t("cardInfo", locale())}</button>
+          <button class="primary" data-action="toggle-hand">${handOpen ? t("hideHand", locale()) : `${t("hand", locale())} ${cardCount}`}</button>
+          ${chainSummary
+            ? `<button class="primary" data-action="pass-showdown" ${waiting ? "disabled" : ""}>${t("pass", locale())}</button>`
+            : `<button data-action="end-turn" ${game.phase !== "action" || waiting || disabled ? "disabled" : ""}>${t("endTurn", locale())}</button>`}
+        </div>
       </section>
     `;
   }
   const context = selectedContext(card.instanceId);
   const actions = mergeActionButtons(selectedActions(card, context), globalActionButtons(player, card));
-  const directCommands = `${actions.join("")}${chainSummary ? "" : moveBatchCommandGroup(player)}${!chainSummary && !responseInfo ? actionWindowCommandButton(cardCount) : ""}`;
-  const commandMarkup = responseInfo
-    ? priorityResponseControls(actions.join(""))
-    : chainSummary
-      ? priorityResponseControls(actions.join(""))
-      : directCommands;
   return `
-    <section class="action-bar context-action-dock ${chainSummary ? "showdown-action-bar" : ""} ${rejection ? "action-rejected" : ""}">
+    <section class="action-bar ${chainSummary ? "showdown-action-bar" : ""} ${rejection ? "action-rejected" : ""}">
       <div class="action-context">
         <span class="bar-label">${rejection ? (locale() === LOCALES.KO ? "요청 거부" : "Rejected") : chainSummary ? chainSummary.label : t("selected", locale())}</span>
           <strong>${rejection?.title || responseInfo?.title || chainSummary?.title || cardName(card)}</strong>
         <span>${rejection?.detail || (responseInfo ? `${responseInfo.detail} / ${t("selected", locale())}: ${cardName(card)}` : chainSummary ? `${chainSummary.detail} / ${t("selected", locale())}: ${cardName(card)}` : actionHint(card, context, actions))}</span>
       </div>
-      ${actionCommandList(commandMarkup, `action-${card.instanceId || "selected"}`)}
+      <div class="actions inline">
+        ${actions.join("") || `<button disabled>${t("noAction", locale())}</button>`}
+      </div>
+      <div class="bar-controls">
+        <button data-action="toggle-inspector">${t("cardInfo", locale())}</button>
+        <button class="primary" data-action="toggle-hand">${handOpen ? t("hideHand", locale()) : `${t("hand", locale())} ${cardCount}`}</button>
+        ${chainSummary
+          ? `<button class="primary" data-action="pass-showdown" ${!viewerCanAct() ? "disabled" : ""}>${t("pass", locale())}</button>`
+          : `<button data-action="end-turn" ${game.phase !== "action" || !viewerCanAct() ? "disabled" : ""}>${t("endTurn", locale())}</button>`}
+      </div>
     </section>
   `;
 }
@@ -9283,10 +6167,9 @@ function globalActionButtons(player, selectedCard = null) {
 }
 
 function showdownBarSummary() {
-  if (game?.phase !== "showdown" || !game?.showdown) return null;
-  const field = (Array.isArray(game.battlefields) ? game.battlefields : [])
-    .find((candidate) => candidate?.instanceId === game.showdown.battlefieldId);
-  const chainCount = Array.isArray(game.showdown.chain) ? game.showdown.chain.filter(Boolean).length : 0;
+  if (game.phase !== "showdown" || !game.showdown) return null;
+  const field = game.battlefields.find((candidate) => candidate.instanceId === game.showdown.battlefieldId);
+  const chainCount = game.showdown.chain.length;
   return {
     label: t("showdown", locale()),
     title: `${t("showdown", locale())}: ${field ? battlefieldName(field) : t("battlefield", locale())}`,
@@ -9295,7 +6178,7 @@ function showdownBarSummary() {
 }
 
 function actionChainBarSummary() {
-  const chainCount = Array.isArray(game?.actionChain?.chain) ? game.actionChain.chain.filter(Boolean).length : 0;
+  const chainCount = game.actionChain?.chain.length || 0;
   return {
     label: t("chain", locale()),
     title: t("responseWindow", locale()),
@@ -9382,11 +6265,11 @@ function activatedActions(card) {
       const amount = ability.amount;
       if (ability.kind === "addEnergy") {
         const label = locale() === LOCALES.KO ? `탈진 → 에너지 +${amount}` : `Exhaust → +${amount} Energy`;
-        return [`<button class="rune-action rune-action-energy" data-action="activate-card" data-card="${card.instanceId}" data-ability="${ability.id}"><strong>${label}</strong></button>`];
+        return [`<button class="rune-action rune-action-energy" data-action="activate-card" data-card="${card.instanceId}" data-ability="${ability.id}"><strong>${label}</strong><small>${locale() === LOCALES.KO ? "룬은 탈진 상태가 됩니다" : "This Rune becomes exhausted"}</small></button>`];
       }
       const domain = domainText(ability.domain);
       const label = locale() === LOCALES.KO ? `재활용 → ${domain} 힘 +${amount}` : `Recycle → +${amount} ${domain} Power`;
-      return [`<button class="rune-action rune-action-power" data-action="activate-card" data-card="${card.instanceId}" data-ability="${ability.id}"><strong>${label}</strong></button>`];
+      return [`<button class="rune-action rune-action-power" data-action="activate-card" data-card="${card.instanceId}" data-ability="${ability.id}"><strong>${label}</strong><small>${locale() === LOCALES.KO ? "룬 덱 맨 아래로 되돌아갑니다" : "Return this Rune to the bottom of the Rune Deck"}</small></button>`];
     });
   }
   const baseLabel = card.type === "legend" ? t("useLegend", locale()) : t("activateCard", locale(), { name: cardName(card) });
@@ -9440,7 +6323,7 @@ function actionHint(card, context, actions) {
 function selectedContext(cardId) {
   for (const player of game.players) {
     if (player.legend?.instanceId === cardId) return { playerId: player.id, zone: "legend", location: "legend" };
-    if ((player.availableChampions || []).some((card) => card.instanceId === cardId)) return { playerId: player.id, zone: "champion-choice", location: "champion-choice" };
+    if (player.availableChampions.some((card) => card.instanceId === cardId)) return { playerId: player.id, zone: "champion-choice", location: "champion-choice" };
     if (player.hand.some((card) => card.instanceId === cardId)) return { playerId: player.id, zone: "hand", location: "hand" };
     if (player.base.some((card) => card.instanceId === cardId)) return { playerId: player.id, zone: "base", location: "base" };
     if (player.runes.some((card) => card.instanceId === cardId)) return { playerId: player.id, zone: "rune", location: "rune" };
@@ -9495,7 +6378,7 @@ function pruneMoveSelection() {
 }
 
 function activationBlockedReason(card) {
-  const activatedEffects = uiCardEffects(card).filter((effect) => effect.timing === "activated");
+  const activatedEffects = (card.effects || []).filter((effect) => effect?.timing === "activated");
   if (!activatedEffects.length) return "";
   if (!activatedEffects.some((effect) => effect.abilityKeywords?.includes("Reaction"))
     && !card.tags?.includes("Reaction") && !card.keywords?.includes("Reaction")) return "";
@@ -9533,6 +6416,7 @@ function canUseTarget(card, context, destination, ownerId) {
   if (ownerId !== viewerPlayerId()) return false;
   if (context.playerId !== viewerPlayerId()) return false;
   if (context.zone === "hand") {
+    if (card.type !== "unit") return false;
     return uiLegalActions.some((action) =>
       action.kind === "beginPlayCard" && action.cardId === card.instanceId && action.destination === destination);
   }
@@ -9547,19 +6431,8 @@ function canUseTarget(card, context, destination, ownerId) {
 }
 
 function runeSummary(player) {
-  const pendingCard = game.pendingPayment?.playerId === player?.id
-    ? paymentDisplayCard(player, game.pendingPayment)
-    : null;
-  const seat = tabletopSeatView(player, {
-    energyUsable: (resource) => resource?.restriction === "spell"
-      ? pendingCard?.type === "spell"
-      : poolEnergyCanPay(resource, pendingCard),
-    powerUsable: (resource) => resource?.restriction === "spell"
-      ? pendingCard?.type === "spell"
-      : poolPowerCanPay(resource, pendingCard)
-  });
   const counts = new Map();
-  for (const rune of seat.runes) {
+  for (const rune of player.runes) {
     const item = counts.get(rune.domain) || {
       total: 0,
       ready: 0,
@@ -9579,58 +6452,39 @@ function runeSummary(player) {
     }
     counts.set(rune.domain, item);
   }
-  const poolEnergy = seat.runeResources.energy;
-  const poolPower = seat.runeResources.power;
-  const availabilityLabel = (resource) => locale() === LOCALES.KO
-    ? `${resource.usable}/${resource.total} 지금 사용 가능`
-    : `${resource.usable}/${resource.total} available now`;
+  const poolEnergy = runePoolEnergy(player).filter((resource) => poolEnergyCanPay(resource));
+  const poolPower = player.runePool?.power || [];
   return `
-    <div class="rune-summary" data-scroll-key="rune-summary-${escapeHtml(player?.id || "unknown")}">
+    <div class="rune-summary">
       ${[...counts.entries()].map(([domain, item]) => `
         <button type="button" class="rune-count" data-action="select-card" data-card="${item.cardId}" style="--rune:${item.color}" title="${escapeHtml(item.name)} · ${domainText(domain)} ${item.ready}/${item.total}">
           ${item.image ? `<img class="rune-summary-art" src="${item.image}" alt="${escapeHtml(item.name)}" loading="lazy" />` : ""}
           <span class="rune-summary-value"><b>${domainText(domain)}</b><em>${item.ready}/${item.total}</em></span>
         </button>
       `).join("") || `<span class="rune-count muted">${t("noRunes", locale())}</span>`}
-      ${poolEnergy.total ? `<span class="rune-count generated ${poolEnergy.usable < poolEnergy.total ? "partly-restricted" : ""}" title="${escapeHtml(availabilityLabel(poolEnergy))}"><span class="rune-summary-symbol" aria-hidden="true">⚡</span><span class="rune-summary-value"><b>${t("energy", locale())}</b><em>+${poolEnergy.total} · ${poolEnergy.usable}/${poolEnergy.total}</em></span></span>` : ""}
-      ${poolPower.total ? `<span class="rune-count power-pool ${poolPower.usable < poolPower.total ? "partly-restricted" : ""}" title="${escapeHtml(availabilityLabel(poolPower))}"><span class="rune-summary-symbol" aria-hidden="true">◆</span><span class="rune-summary-value"><b>${t("power", locale())}</b><em>${poolPower.total} · ${poolPower.usable}/${poolPower.total}</em></span></span>` : ""}
+      ${poolEnergy.length ? `<span class="rune-count generated"><span class="rune-summary-symbol" aria-hidden="true">⚡</span><span class="rune-summary-value"><b>${t("energy", locale())}</b><em>+${poolEnergy.length}</em></span></span>` : ""}
+      ${poolPower.length ? `<span class="rune-count power-pool"><span class="rune-summary-symbol" aria-hidden="true">◆</span><span class="rune-summary-value"><b>${t("power", locale())}</b><em>${poolPower.length}</em></span></span>` : ""}
     </div>
   `;
 }
 
-function runeChip(rune, index = 0, total = 1, playerId = "") {
-  if (!rune || typeof rune !== "object") return "";
+function runeChip(rune) {
   const spent = rune.exhausted ? " spent" : "";
-  const payment = directRunePaymentState(rune, playerId);
-  const paymentClasses = payment.active
-    ? [
-        "payment-rune-choice",
-        payment.canPayEnergy ? "can-pay-energy" : "",
-        payment.canPayPower ? "can-pay-power" : "",
-        payment.energySelected ? "is-energy-selected" : "",
-        payment.powerSelected ? "is-power-selected" : "",
-        !payment.canPayEnergy && !payment.canPayPower ? "payment-unavailable" : ""
-      ].filter(Boolean).join(" ")
-    : "";
-  const paymentHelp = locale() === LOCALES.KO
-    ? "왼쪽 클릭: 에너지로 탈진 · 오른쪽 클릭: 힘으로 재활용"
-    : "Left-click: exhaust for Energy · Right-click: recycle for Power";
+  const canRecycle = (rune.effects || []).some((effect) => effect?.timing === "activated" && effect.kind === "addPower" && effect.exhaust === false);
   return `
-    <button type="button" class="rune rune-card-chip${spent} ${paymentClasses} ${choiceCardStateClasses(rune.instanceId)}" data-action="${payment.active ? "pay-rune" : "select-card"}" data-mode="${payment.active ? "energy" : ""}" data-direct-payment-rune="${payment.active}" data-card="${escapeHtml(rune.instanceId || "")}" data-card-id="${escapeHtml(rune.instanceId || "")}" data-rune="${escapeHtml(rune.instanceId || "")}" data-rune-card data-payment-energy="${payment.canPayEnergy}" data-payment-power="${payment.canPayPower}" style="--rune:${rune.color || RUNE_COLORS.Any};--rune-index:${index};--rune-count:${Math.max(1, total)}" title="${escapeHtml(payment.active ? `${cardText(rune)} · ${paymentHelp}` : cardText(rune))}" aria-pressed="${payment.active ? payment.energySelected || payment.powerSelected : choiceOptionCardId(stagedChoiceOption()) === rune.instanceId || game.selectedCardId === rune.instanceId}" ${payment.active ? `aria-describedby="payment-stage-help"` : ""}>
-      <span class="rune-orientation-layer">
-        ${rune.image ? `<img src="${escapeHtml(rune.image)}" alt="${escapeHtml(cardName(rune))}" loading="lazy" />` : `<span class="rune-swatch"></span>`}
-        <span class="rune-card-caption">${domainText(rune.domain)}</span>
-        ${payment.energySelected ? `<strong class="payment-rune-mode energy-mode">${t("energy", locale())}</strong>` : ""}
-        ${payment.powerSelected ? `<strong class="payment-rune-mode power-mode">${t("power", locale())}</strong>` : ""}
-      </span>
+    <button type="button" class="rune rune-card-chip${spent}" data-action="select-card" data-card="${rune.instanceId}" style="--rune:${rune.color}" title="${cardText(rune)}">
+      ${rune.image ? `<img src="${rune.image}" alt="${cardName(rune)}" loading="lazy" />` : `<span class="rune-swatch"></span>`}
+      <span class="rune-card-caption">${domainText(rune.domain)}</span>
+      ${rune.exhausted ? `<strong>${t("exhausted", locale())}</strong>` : ""}
+      ${rune.exhausted && canRecycle ? `<small class="rune-recycle-ready">${locale() === LOCALES.KO ? "재활용 가능" : "Can recycle"}</small>` : ""}
     </button>
   `;
 }
 
 function inspector(card) {
-  if (!card || typeof card !== "object") {
+  if (!card) {
     return `
-      <aside class="inspector inspector-panel inspector-empty" data-scroll-key="inspector">
+      <aside class="inspector inspector-empty">
         <div class="inspector-toolbar">
           <strong>${t("cardInfo", locale())}</strong>
           <button type="button" data-action="toggle-inspector">${t("close", locale())}</button>
@@ -9642,49 +6496,34 @@ function inspector(card) {
       </aside>
     `;
   }
-  const normalizedCard = {
-    ...card,
-    power: Array.isArray(card.power) ? card.power.filter((item) => item && typeof item === "object") : [],
-    keywords: Array.isArray(card.keywords) ? card.keywords.filter(Boolean) : [],
-    tags: Array.isArray(card.tags) ? card.tags.filter(Boolean) : [],
-    temporaryKeywords: Array.isArray(card.temporaryKeywords) ? card.temporaryKeywords.filter(Boolean) : [],
-    damagePreventions: Array.isArray(card.damagePreventions) ? card.damagePreventions.filter(Boolean) : [],
-    attachments: Array.isArray(card.attachments) ? card.attachments.filter((item) => item && typeof item === "object") : []
-  };
-  const power = normalizedCard.power.map((item) => {
-    const domain = translateCostDomain(item.domain, locale(), normalizedCard);
-    const amount = Number.isFinite(Number(item.amount)) ? Number(item.amount) : 0;
-    return locale() === LOCALES.KO ? `${amount} ${domain} ${t("power", locale())}` : `${amount} ${domain}`;
+  const power = (card.power || []).map((item) => {
+    const domain = translateCostDomain(item.domain, locale(), card);
+    return locale() === LOCALES.KO ? `${item.amount} ${domain} ${t("power", locale())}` : `${item.amount} ${domain}`;
   }).join(", ");
-  const cost = normalizedCard.type === "rune"
-    ? domainText(normalizedCard.domain)
-    : `${normalizedCard.energy ?? "-"}${power ? ` + ${power}` : ""}`;
-  const attachments = normalizedCard.attachments;
-  const rulesText = String(cardText(normalizedCard) || "").trim();
-  const displayName = cardName(normalizedCard);
+  const cost = card.type === "rune" ? domainText(card.domain) : `${card.energy ?? "-"}${power ? ` + ${power}` : ""}`;
+  const attachments = card.attachments || [];
   return `
-    <aside class="inspector inspector-panel" data-scroll-key="inspector">
+    <aside class="inspector">
       <div class="inspector-toolbar">
         <strong>${t("cardInfo", locale())}</strong>
         <button type="button" data-action="toggle-inspector">${t("close", locale())}</button>
       </div>
       <div class="inspector-card">
-        <div class="inspector-card-fallback" aria-label="${escapeHtml(displayName)}"><strong>${escapeHtml(displayName)}</strong></div>
-        ${normalizedCard.image ? `<img src="${escapeHtml(normalizedCard.image)}" alt="${escapeHtml(displayName)}" />` : ""}
+        ${card.image ? `<img src="${card.image}" alt="${cardName(card)}" />` : ""}
       </div>
       <div class="inspector-text">
-        <h2>${escapeHtml(displayName)}</h2>
-        <span>${escapeHtml(cardTags(normalizedCard).join(" / "))} / ${escapeHtml(cost)}</span>
-        ${["unit", "gear"].includes(normalizedCard.type) ? `<strong>${t("might", locale())} ${normalizedCard.type === "unit" ? inspectorUnitMight(normalizedCard) : normalizedCard.might || 0}</strong>` : ""}
-        <p class="inspector-rules-text">${escapeHtml(rulesText)}</p>
-        ${normalizedCard.keywords.length ? `<small>${escapeHtml(keywordText(normalizedCard.keywords))}</small>` : ""}
-        ${cardStatusPanel(normalizedCard, { compact: true })}
+        <h2>${cardName(card)}</h2>
+        <span>${cardTags(card).join(" / ")} / ${cost}</span>
+        ${["unit", "gear"].includes(card.type) ? `<strong>${t("might", locale())} ${card.type === "unit" ? inspectorUnitMight(card) : card.might || 0}</strong>` : ""}
+        <p>${shortCardText(cardText(card))}</p>
+        ${(card.keywords || []).length ? `<small>${keywordText(card.keywords)}</small>` : ""}
+        ${cardStatusPanel(card, { compact: true })}
         <button class="secondary view-full-card" data-action="view-full-card">${t("viewFullCard", locale())}</button>
         ${attachments.length ? `
-          <button class="secondary attached-gear-toggle" data-action="toggle-attachments" data-card="${escapeHtml(normalizedCard.instanceId || "")}">
-            ${attachmentsOpenCardId === normalizedCard.instanceId ? t("hideAttachedGear", locale()) : `${t("attachedGear", locale())} ${attachments.length}`}
+          <button class="secondary attached-gear-toggle" data-action="toggle-attachments" data-card="${card.instanceId}">
+            ${attachmentsOpenCardId === card.instanceId ? t("hideAttachedGear", locale()) : `${t("attachedGear", locale())} ${attachments.length}`}
           </button>
-          ${attachmentsOpenCardId === normalizedCard.instanceId ? attachedGearPanel(attachments) : ""}
+          ${attachmentsOpenCardId === card.instanceId ? attachedGearPanel(attachments) : ""}
         ` : ""}
       </div>
     </aside>
@@ -9692,12 +6531,8 @@ function inspector(card) {
 }
 
 function inspectorUnitMight(card) {
-  const players = Array.isArray(game?.players) ? game.players : [];
-  const battlefields = Array.isArray(game?.battlefields) ? game.battlefields : [];
-  const onBoard = players.some((player) => (Array.isArray(player?.base) ? player.base : [])
-    .some((unit) => unit?.instanceId === card?.instanceId))
-    || battlefields.some((field) => (Array.isArray(field?.units) ? field.units : [])
-      .some((unit) => unit?.instanceId === card?.instanceId));
+  const onBoard = game.players.some((player) => player.base.some((unit) => unit.instanceId === card.instanceId))
+    || game.battlefields.some((field) => field.units.some((unit) => unit.instanceId === card.instanceId));
   return onBoard ? currentMight(game, card) : effectiveMight(card);
 }
 
@@ -9706,32 +6541,35 @@ function attachedGearPanel(attachments) {
     <div class="attached-gear-panel">
       <span>${t("attachedGear", locale())}</span>
       <div class="attached-gear-list">
-        ${attachments.map((gear) => {
-          const state = attachedGearCompactState(gear);
-          return `
-          <button class="attached-gear-card ${gear.exhausted ? "exhausted" : "ready"} ${cardStatusClassNames(gear)}" data-action="select-card" data-card="${escapeHtml(gear.instanceId || "")}" data-card-id="${escapeHtml(gear.instanceId || "")}" data-current-might="${state.might}" data-exhausted="${Boolean(gear.exhausted)}" title="${escapeHtml(`${cardName(gear)} · ${state.summary}`)}">
-            <span class="attachment-orientation-layer">
-              ${gear.image ? `<img src="${escapeHtml(gear.image)}" alt="${escapeHtml(cardName(gear))}" loading="lazy" />` : `<span>${escapeHtml(cardName(gear))}</span>`}
-            </span>
-            <strong>${escapeHtml(cardName(gear))}</strong>
-            ${attachedGearStateMarkup(state)}
+        ${attachments.map((gear) => `
+          <button class="attached-gear-card" data-action="select-card" data-card="${gear.instanceId}" title="${cardName(gear)}">
+            ${gear.image ? `<img src="${gear.image}" alt="${cardName(gear)}" loading="lazy" />` : ""}
+            <strong>${cardName(gear)}</strong>
           </button>
-        `; }).join("")}
+        `).join("")}
       </div>
     </div>
   `;
 }
 
+function shortCardText(text) {
+  return text
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
 function fullCardModal(card) {
   if (!card) return "";
   return `
-    <section class="full-card-modal modal-panel" role="dialog" aria-modal="true" aria-labelledby="full-card-dialog-title" data-ui-modal data-modal-key="full-card-${escapeHtml(card.instanceId || card.cardNumber || "preview")}" tabindex="-1">
+    <section class="full-card-modal modal-panel">
       <div class="section-head">
         <div>
-          <h2 id="full-card-dialog-title">${cardName(card)}</h2>
+          <h2>${cardName(card)}</h2>
           <span>${cardTags(card).join(" / ")}</span>
         </div>
-        <button data-action="close-full-card" data-primary-focus>${t("close", locale())}</button>
+        <button data-action="close-full-card">${t("close", locale())}</button>
       </div>
       <div class="full-card-body">
         ${card.image ? `<img src="${card.image}" alt="${cardName(card)}" />` : ""}
@@ -9744,95 +6582,12 @@ function fullCardModal(card) {
   `;
 }
 
-function dismissTopUiLayer() {
-  if (appView !== "game") return false;
-  if (!game || typeof game !== "object") return false;
-  const modalKey = topUiModal()?.dataset.modalKey || "";
-  if (modalKey === "game-exit") {
-    pendingGameExit = null;
-    return true;
-  }
-  if (modalKey === "match-result") {
-    resultDismissed = true;
-    return true;
-  }
-  if (modalKey.startsWith("full-card-")) {
-    fullCardOpen = false;
-    fullCardPreviewCard = null;
-    return true;
-  }
-  if (modalKey.startsWith("payment-") && !replayMode && game.pendingPayment && decisionVisibleToViewer(game.pendingPayment)) {
-    dispatchGameCommand({ kind: "cancelPayment" }, () => cancelPayment(game));
-    return true;
-  }
-  if (!modalKey && !replayMode && game.pendingPayment && decisionVisibleToViewer(game.pendingPayment)) {
-    dispatchGameCommand({ kind: "cancelPayment" }, () => cancelPayment(game));
-    return true;
-  }
-  if (modalKey.startsWith("choice-") && !replayMode && game.pendingChoice?.optional && decisionVisibleToViewer(game.pendingChoice)) {
-    dispatchGameCommand({ kind: "declineEffectChoice" }, () => declineEffectChoice(game));
-    return true;
-  }
-  if (!modalKey && !replayMode && game.pendingChoice?.optional && decisionVisibleToViewer(game.pendingChoice)) {
-    dispatchGameCommand({ kind: "declineEffectChoice" }, () => declineEffectChoice(game));
-    return true;
-  }
-  if (attachmentsOpenCardId) {
-    attachmentsOpenCardId = null;
-    return true;
-  }
-  if (graveyardOpenPlayerId) {
-    graveyardOpenPlayerId = null;
-    return true;
-  }
-  if (banishedOpenPlayerId) {
-    banishedOpenPlayerId = null;
-    return true;
-  }
-  if (intelOpenPlayerId) {
-    intelOpenPlayerId = null;
-    return true;
-  }
-  if (logOpen) {
-    logOpen = false;
-    return true;
-  }
-  if (inspectorOpen) {
-    inspectorOpen = false;
-    inspectorPreviewCard = null;
-    return true;
-  }
-  if (inspectedChainItemId) {
-    inspectedChainItemId = null;
-    inspectedChainTargetIds.clear();
-    return true;
-  }
-  if (handOpen) {
-    handOpen = false;
-    return true;
-  }
-  if (moveSelection.size) {
-    moveSelection.clear();
-    return true;
-  }
-  if (replayMode) {
-    exitReplayToList();
-    return true;
-  }
-  return false;
-}
-
-window.__riftboundDismissTopUiLayer = () => {
-  const dismissed = dismissTopUiLayer();
-  if (dismissed) render();
-  return dismissed;
-};
-
 function hasKeyword(card, keyword) {
   if ((card.keywords || []).some((item) => item.toLowerCase() === keyword.toLowerCase())) return true;
   const player = game.players.find((candidate) => candidate.id === card.controllerId)
     || game.players.find((candidate) => candidate.id === card.ownerId);
-  for (const effect of uiCardEffects(card)) {
+  for (const effect of card.effects || []) {
+    if (!effect) continue;
     if (effect.timing !== "levelStatic" || effect.kind !== "gainKeywords") continue;
     if ((player?.xp || 0) < (effect.level || 0)) continue;
     if ((effect.keywords || []).some((item) => item.toLowerCase() === keyword.toLowerCase())) return true;
@@ -9843,194 +6598,6 @@ function hasKeyword(card, keyword) {
 function isFlashed(cardId) {
   return game.effectFlash?.sourceId === cardId || game.effectFlash?.targetIds?.includes(cardId);
 }
-
-function clearRuneScrollGesture() {
-  const session = pointerRuneScroll;
-  pointerRuneScroll = null;
-  session?.track?.classList?.remove("is-panning");
-  try {
-    if (session?.track?.hasPointerCapture?.(session.pointerId)) {
-      session.track.releasePointerCapture(session.pointerId);
-    }
-  } catch {
-    // Pointer capture may already have been released by the browser.
-  }
-}
-
-app.addEventListener("pointerdown", (event) => {
-  if (!event.isPrimary || event.button !== 0 || event.pointerType === "touch" || replayMode || appView !== "game") return;
-  const track = event.target.closest?.("[data-rune-scroll-track]");
-  if (!(track instanceof HTMLElement) || track.scrollWidth <= track.clientWidth + 1) return;
-  clearRuneScrollGesture();
-  pointerRuneScroll = {
-    pointerId: event.pointerId,
-    track,
-    startX: event.clientX,
-    startY: event.clientY,
-    startLeft: track.scrollLeft,
-    dragging: false
-  };
-});
-
-app.addEventListener("pointermove", (event) => {
-  const session = pointerRuneScroll;
-  if (!session || session.pointerId !== event.pointerId) return;
-  if ((event.buttons & 1) === 0) {
-    clearRuneScrollGesture();
-    return;
-  }
-  const deltaX = event.clientX - session.startX;
-  const deltaY = event.clientY - session.startY;
-  if (!session.dragging && Math.hypot(deltaX, deltaY) >= 8 && Math.abs(deltaX) >= Math.abs(deltaY) * 0.7) {
-    session.dragging = true;
-    session.track.classList.add("is-panning");
-    try {
-      session.track.setPointerCapture?.(event.pointerId);
-    } catch {
-      clearRuneScrollGesture();
-      return;
-    }
-  }
-  if (!session.dragging) return;
-  event.preventDefault();
-  session.track.scrollLeft = session.startLeft - deltaX;
-}, { passive: false });
-
-app.addEventListener("pointerup", (event) => {
-  const session = pointerRuneScroll;
-  if (!session || session.pointerId !== event.pointerId) return;
-  if (session.dragging) {
-    event.preventDefault();
-    suppressRuneClickUntil = Date.now() + 500;
-  }
-  clearRuneScrollGesture();
-});
-
-app.addEventListener("pointercancel", (event) => {
-  if (pointerRuneScroll?.pointerId === event.pointerId) clearRuneScrollGesture();
-});
-
-app.addEventListener("lostpointercapture", (event) => {
-  if (pointerRuneScroll?.pointerId === event.pointerId) clearRuneScrollGesture();
-  if (pointerCardDrag?.pointerId === event.pointerId) clearCardDragPresentation();
-});
-
-app.addEventListener("wheel", (event) => {
-  const track = event.target.closest?.("[data-rune-scroll-track]");
-  if (!(track instanceof HTMLElement) || track.scrollWidth <= track.clientWidth + 1) return;
-  if (Math.abs(event.deltaX) >= Math.abs(event.deltaY) || !event.deltaY) return;
-  track.scrollLeft += event.deltaY;
-  event.preventDefault();
-}, { passive: false });
-
-app.addEventListener("dragstart", (event) => {
-  try {
-    if (replayMode || appView !== "game") return;
-    const cardNode = event.target.closest?.("[data-card-drag][draggable='true']");
-    const interactiveChild = event.target.closest?.("button, a, input, select, textarea");
-    const session = cardDragDescriptor(cardNode);
-    if (!cardNode || (interactiveChild && interactiveChild !== cardNode) || !session || !beginCardDragPresentation(session, cardNode)) {
-      event.preventDefault();
-      return;
-    }
-    if (event.dataTransfer) {
-      event.dataTransfer.effectAllowed = "move";
-      // The payload is deliberately opaque. The approved in-memory card id and
-      // the current legal action list are the authority at drop time.
-      event.dataTransfer.setData("text/plain", `riftbound-card-${session.kind}`);
-      event.dataTransfer.setDragImage(cardNode, Math.round(cardNode.offsetWidth / 2), Math.round(cardNode.offsetHeight / 2));
-    }
-  } catch (error) {
-    clearCardDragPresentation();
-    reportUiException(error, "card drag start");
-  }
-});
-
-app.addEventListener("dragover", (event) => {
-  if (!draggingCardSession) return;
-  const target = updateCardDragDestination(event.target);
-  if (!target) return;
-  event.preventDefault();
-  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
-});
-
-app.addEventListener("drop", (event) => {
-  if (!draggingCardSession) return;
-  const session = { ...draggingCardSession };
-  const target = legalDropDestinationNode(event.target, session);
-  event.preventDefault();
-  event.stopPropagation();
-  const destination = String(target?.dataset.playDestination || "");
-  clearCardDragPresentation();
-  if (destination) {
-    if (session.kind === "move") requestUnitMove(session.cardId, destination);
-    else if (session.kind === "champion") requestChampionPlay(session.cardId, destination);
-    else requestHandCardPlay(session.cardId, destination);
-  }
-  render();
-});
-
-app.addEventListener("dragend", () => clearCardDragPresentation());
-
-app.addEventListener("pointerdown", (event) => {
-  if (event.pointerType === "mouse" || !event.isPrimary || event.button !== 0 || replayMode || appView !== "game") return;
-  const cardNode = event.target.closest?.("[data-card-drag]");
-  const interactiveChild = event.target.closest?.("button, a, input, select, textarea");
-  const session = cardDragDescriptor(cardNode);
-  if (!cardNode || (interactiveChild && interactiveChild !== cardNode) || !session) return;
-  pointerCardDrag = {
-    pointerId: event.pointerId,
-    ...session,
-    sourceNode: cardNode,
-    startX: event.clientX,
-    startY: event.clientY,
-    dragging: false,
-    ghost: null
-  };
-  cardNode.setPointerCapture?.(event.pointerId);
-});
-
-app.addEventListener("pointermove", (event) => {
-  const session = pointerCardDrag;
-  if (!session || session.pointerId !== event.pointerId) return;
-  const distance = Math.hypot(event.clientX - session.startX, event.clientY - session.startY);
-  if (!session.dragging && distance >= 10) {
-    if (!beginCardDragPresentation(session, session.sourceNode)) {
-      clearCardDragPresentation();
-      return;
-    }
-    session.dragging = true;
-    session.ghost = createPointerDragGhost(session.sourceNode);
-  }
-  if (!session.dragging) return;
-  event.preventDefault();
-  positionPointerDragGhost(session.ghost, event.clientX, event.clientY);
-  updateCardDragDestination(document.elementFromPoint(event.clientX, event.clientY));
-}, { passive: false });
-
-app.addEventListener("pointerup", (event) => {
-  const session = pointerCardDrag;
-  if (!session || session.pointerId !== event.pointerId) return;
-  if (!session.dragging) {
-    clearCardDragPresentation();
-    return;
-  }
-  event.preventDefault();
-  const dropNode = legalDropDestinationNode(document.elementFromPoint(event.clientX, event.clientY), session);
-  const destination = String(dropNode?.dataset.playDestination || "");
-  suppressCardClickUntil = Date.now() + 650;
-  clearCardDragPresentation();
-  if (destination) {
-    if (session.kind === "move") requestUnitMove(session.cardId, destination);
-    else if (session.kind === "champion") requestChampionPlay(session.cardId, destination);
-    else requestHandCardPlay(session.cardId, destination);
-  }
-  render();
-});
-
-app.addEventListener("pointercancel", (event) => {
-  if (pointerCardDrag?.pointerId === event.pointerId) clearCardDragPresentation();
-});
 
 app.addEventListener("click", (event) => {
   try {
@@ -10043,165 +6610,31 @@ app.addEventListener("click", (event) => {
 
 function handlePendingChoiceClick(event) {
   if (replayMode || appView !== "game" || !game.pendingChoice) return false;
-  const button = event.target.closest("button[data-action='choose-effect'], button[data-action='decline-effect'], button[data-action='assign-alpha-strike'], button[data-action='adjust-alpha-damage'], button[data-action='confirm-staged-choice'], button[data-action='toggle-choice-drawer'], button[data-action='stage-choice-option'], button[data-action='toggle-hand'], button[data-action='toggle-chain-zone'], button[data-action='toggle-inspector'], button[data-action='inspect-chain-effect'], button[data-action='view-chain-card'], button[data-action='focus-chain-target'], button[data-action='view-choice-card'], button[data-action='close-full-card'], [data-action='stage-choice-card']");
-  const inlineCard = ["hand", "board"].includes(choiceCardSurface(game.pendingChoice))
-    ? event.target.closest("[data-card-id]")
-    : null;
-  const control = button || inlineCard;
-  if (!control || !app.contains(control)) return false;
+  const button = event.target.closest("button[data-action='choose-effect'], button[data-action='decline-effect'], button[data-action='assign-alpha-strike']");
+  if (!button || !app.contains(button)) return false;
   event.preventDefault();
   event.stopPropagation();
   event.stopImmediatePropagation();
 
-  const action = button?.dataset.action || "stage-choice-card";
-  const choice = button?.dataset.choice;
-  const localChoiceUiAction = [
-    "stage-choice-card", "stage-choice-option", "toggle-choice-drawer", "toggle-hand", "toggle-chain-zone", "toggle-inspector",
-    "inspect-chain-effect", "view-chain-card", "focus-chain-target", "adjust-alpha-damage",
-    "view-choice-card", "close-full-card", "confirm-staged-choice"
-  ].includes(action);
-  if (!localChoiceUiAction && !tutorialAllowsUiAction(action, { ...(button?.dataset || control.dataset || {}) })) {
-    render();
-    return true;
-  }
-  if (action === "toggle-choice-drawer") {
-    choiceDrawerCollapsed = !choiceDrawerCollapsed;
-    render();
-    return true;
-  }
-  if (action === "toggle-hand") {
-    handOpen = !handOpen;
-    render();
-    return true;
-  }
-  if (action === "toggle-chain-zone") {
-    chainZoneCollapsed = !chainZoneCollapsed;
-    render();
-    return true;
-  }
-  if (action === "toggle-inspector") {
-    toggleTabletopSheet("inspector");
-    render();
-    return true;
-  }
-  if (action === "inspect-chain-effect") {
-    toggleInspectedChainItem(button.dataset.chainItemId);
-    render();
-    return true;
-  }
-  if (action === "view-chain-card") {
-    fullCardPreviewCard = chainPreviewCard(button.dataset.cardId);
-    fullCardOpen = Boolean(fullCardPreviewCard);
-    render();
-    return true;
-  }
-  if (action === "focus-chain-target") {
-    focusChainTarget(button.dataset.cardId);
-    render();
-    return true;
-  }
-  if (action === "stage-choice-option") {
-    setStagedChoiceOption(choice);
-    render();
-    return true;
-  }
-  if (action === "stage-choice-card") {
-    if (control.dataset.stageMode === "option") stageChoiceOption(choice);
-    else stageChoiceCard(control.dataset.cardId);
-    render();
-    return true;
-  }
-  if (action === "confirm-staged-choice") {
-    const selected = stagedChoiceOption();
-    if (selected && tutorialAllowsUiAction("choose-effect", { choice: selected.id, card: choiceOptionCardId(selected) })) {
-      stagedChoiceOptionId = null;
-      dispatchGameCommand({ kind: "chooseEffectOption", optionId: selected.id }, () => chooseEffectOption(game, selected.id));
-    }
-    render();
-    return true;
-  }
-  if (action === "adjust-alpha-damage") {
-    const input = app.querySelector(`input[data-alpha-target="${button.dataset.target}"]`);
-    if (input) {
-      const allowed = String(input.dataset.allowedAmounts || "")
-        .split(/\s+/)
-        .map(Number)
-        .filter((amount) => Number.isFinite(amount) && amount > 0)
-        .sort((left, right) => left - right);
-      const current = Number(input.value);
-      const currentIndex = Math.max(0, allowed.findIndex((amount) => amount === current));
-      const direction = Math.sign(Number(button.dataset.delta) || 0);
-      const nextIndex = Math.max(0, Math.min(allowed.length - 1, currentIndex + direction));
-      const next = allowed[nextIndex] || current || 1;
-      input.value = String(next);
-      const output = button.closest(".damage-stepper")?.querySelector("output");
-      if (output) output.textContent = String(next);
-    }
-    return true;
-  }
-  if (action === "view-choice-card") {
-    fullCardPreviewCard = findChoicePreviewCard(button.dataset.cardId);
-    fullCardOpen = Boolean(fullCardPreviewCard);
-    render();
-    return true;
-  }
-  if (action === "close-full-card") {
-    fullCardOpen = false;
-    fullCardPreviewCard = null;
+  const { action, choice } = button.dataset;
+  if (!tutorialAllowsUiAction(action, { ...button.dataset })) {
     render();
     return true;
   }
   if (action === "choose-effect") dispatchGameCommand({ kind: "chooseEffectOption", optionId: choice }, () => chooseEffectOption(game, choice));
   if (action === "assign-alpha-strike") {
     const input = app.querySelector(`input[data-alpha-target="${button.dataset.target}"]`);
-    const requested = Math.max(1, Number(input?.value) || 1);
-    const targetOptions = validChoiceOptions(game.pendingChoice)
-      .filter((option) => choiceOptionCardId(option) === button.dataset.target && Number(option.amount) > 0 && !option.disabled);
-    const legalOption = targetOptions.find((option) => Number(option.amount) === requested)
-      || targetOptions.sort((left, right) => Math.abs(Number(left.amount) - requested) - Math.abs(Number(right.amount) - requested))[0];
-    if (legalOption) dispatchGameCommand({ kind: "chooseEffectOption", optionId: legalOption.id }, () => chooseEffectOption(game, legalOption.id));
+    const amount = Math.max(1, Math.min(Number(input?.value) || 1, game.pendingChoice.data?.remainingDamage || 1));
+    const optionId = `${button.dataset.target}:${amount}`;
+    dispatchGameCommand({ kind: "chooseEffectOption", optionId }, () => chooseEffectOption(game, optionId));
   }
   if (action === "decline-effect") dispatchGameCommand({ kind: "declineEffectChoice" }, () => declineEffectChoice(game));
   render();
   return true;
 }
 
-app.addEventListener("contextmenu", (event) => {
-  try {
-    if (replayMode || appView !== "game" || !game?.pendingPayment) return;
-    const runeButton = event.target.closest?.("button[data-direct-payment-rune='true'][data-rune]");
-    if (!runeButton || !app.contains(runeButton)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const runeId = String(runeButton.dataset.rune || "");
-    if (!runeId || runeButton.dataset.paymentPower !== "true") return;
-    if (!tutorialAllowsUiAction("pay-rune", { rune: runeId, mode: "power" })) {
-      render();
-      return;
-    }
-    dispatchGameCommand(
-      { kind: "togglePaymentRune", runeId, mode: "power" },
-      () => togglePaymentRune(game, runeId, "power")
-    );
-    render();
-  } catch (error) {
-    reportUiException(error, "direct Rune Power payment");
-    showUiExceptionOverlay(error, "direct Rune Power payment");
-  }
-});
-
 app.addEventListener("click", (event) => {
   try {
-    if (Date.now() < suppressRuneClickUntil && event.target.closest?.("[data-rune-scroll-track]")) {
-      event.preventDefault();
-      event.stopPropagation();
-      return;
-    }
-    if (Date.now() < suppressCardClickUntil && event.target.closest?.("[data-hand-card], .hand-drawer, [data-card-drag]")) {
-      event.preventDefault();
-      event.stopPropagation();
-      return;
-    }
     if (appView !== "game") {
       if (isTextEditingTarget(event.target)) return;
       handleShellClick(event);
@@ -10213,14 +6646,6 @@ app.addEventListener("click", (event) => {
 
     if (replayMode) {
       handleReplayGameClick(event);
-      render();
-      return;
-    }
-
-    // Every legal pending-choice interaction is handled by the capturing
-    // choice controller above. Suppress unrelated board commands while a
-    // decision is open so a bottom drawer behaves as a true focused step.
-    if (game.pendingChoice) {
       render();
       return;
     }
@@ -10239,7 +6664,7 @@ app.addEventListener("click", (event) => {
     if (payRunes) paymentRunesScrollLeft = payRunes.scrollLeft;
 
     const { button, cardNode, targetZone } = resolveBoardClickTarget(event.target);
-    if (cardNode && button?.dataset.directPaymentRune !== "true") toggleUiSelectedCard(cardNode.dataset.cardId);
+    if (cardNode) setUiSelectedCard(cardNode.dataset.cardId);
 
     if (targetZone) {
       const { zoneAction, card, unit, destination } = targetZone.dataset;
@@ -10248,7 +6673,8 @@ app.addEventListener("click", (event) => {
         return;
       }
       if (zoneAction === "begin-play") {
-        requestHandCardPlay(card, destination);
+        handOpen = false;
+        dispatchGameCommand({ kind: "beginPlayCard", cardId: card, destination }, () => beginPlayCard(game, card, destination));
       }
       if (zoneAction === "begin-champion") {
         handOpen = false;
@@ -10268,12 +6694,6 @@ app.addEventListener("click", (event) => {
     }
 
     const { action, card, unit, destination, player, battlefield, rune, energy, mode, choice, ability } = button.dataset;
-    if (action === "return-menu") {
-      appView = "menu";
-      resetGameUiState();
-      render();
-      return;
-    }
     if (!tutorialAllowsUiAction(action, { ...button.dataset })) {
       render();
       return;
@@ -10297,23 +6717,26 @@ app.addEventListener("click", (event) => {
       if (game.phase === "complete" && aiReplay && !aiReplay.report) completeAiReplay();
       appView = "analysis";
     }
-    if (action === "toggle-log") toggleTabletopSheet("log");
+    if (action === "toggle-log") logOpen = !logOpen;
     if (action === "dismiss-feedback") clearRealtimeFeedback();
-    if (action === "toggle-inspector") toggleTabletopSheet("inspector");
+    if (action === "toggle-inspector") inspectorOpen = !inspectorOpen;
     if (action === "toggle-chain-zone") chainZoneCollapsed = !chainZoneCollapsed;
     if (action === "inspect-chain-effect") {
-      toggleInspectedChainItem(button.dataset.chainItemId);
+      inspectedChainItemId = inspectedChainItemId === button.dataset.chainItemId ? null : button.dataset.chainItemId;
+      fullCardOpen = false;
+      fullCardPreviewCard = null;
+      syncInspectedChainTargets();
     }
-    if (action === "focus-chain-target") focusChainTarget(button.dataset.cardId);
+    if (action === "focus-chain-target") setUiSelectedCard(button.dataset.cardId);
     if (action === "confirm-first-player") dispatchGameCommand({ kind: "confirmFirstPlayer" }, () => confirmFirstPlayer(game));
     if (action === "roll-first-player") dispatchGameCommand({ kind: "rollFirstPlayer" }, () => rollFirstPlayer(game, activePlayerId()));
     if (action === "choose-first-player") dispatchGameCommand({ kind: "chooseFirstPlayer", playerId: player }, () => chooseFirstPlayer(game, activePlayerId(), player));
     if (action === "toggle-hand") handOpen = !handOpen;
-    if (action === "toggle-graveyard") toggleTabletopSheet("graveyard", player);
-    if (action === "toggle-banished") toggleTabletopSheet("banished", player);
-    if (action === "toggle-intel") toggleTabletopSheet("intel", player);
+    if (action === "toggle-graveyard") graveyardOpenPlayerId = graveyardOpenPlayerId === player ? null : player;
+    if (action === "toggle-banished") banishedOpenPlayerId = banishedOpenPlayerId === player ? null : player;
+    if (action === "toggle-intel") intelOpenPlayerId = intelOpenPlayerId === player ? null : player;
     if (action === "view-full-card") {
-      fullCardPreviewCard = inspectedCard();
+      fullCardPreviewCard = uiSelectedCard();
       fullCardOpen = Boolean(fullCardPreviewCard);
     }
     if (action === "view-choice-card") {
@@ -10321,7 +6744,7 @@ app.addEventListener("click", (event) => {
       fullCardOpen = Boolean(fullCardPreviewCard);
     }
     if (action === "view-chain-card") {
-      fullCardPreviewCard = chainPreviewCard(button.dataset.cardId);
+      fullCardPreviewCard = findVisibleCard(button.dataset.cardId);
       fullCardOpen = Boolean(fullCardPreviewCard);
     }
     if (action === "close-full-card") {
@@ -10376,7 +6799,8 @@ app.addEventListener("click", (event) => {
     if (action === "confirm-online-result") onlineLeaveRoom();
     if (action === "pass-showdown") dispatchGameCommand({ kind: "passShowdown" }, () => passShowdown(game, activePlayerId()));
     if (action === "begin-play") {
-      requestHandCardPlay(card, destination);
+      handOpen = false;
+      dispatchGameCommand({ kind: "beginPlayCard", cardId: card, destination }, () => beginPlayCard(game, card, destination));
     }
     if (action === "begin-play-from-trash") {
       graveyardOpenPlayerId = null;
@@ -10401,9 +6825,7 @@ app.addEventListener("click", (event) => {
       { kind: "activateCard", cardId: card, abilityId: ability || undefined },
       (resolved) => activateCard(game, resolved.cardId, resolved.abilityId || null)
     );
-    if (action === "pay-rune" && (button.dataset.directPaymentRune !== "true" || button.dataset.paymentEnergy === "true")) {
-      dispatchGameCommand({ kind: "togglePaymentRune", runeId: rune, mode }, () => togglePaymentRune(game, rune, mode));
-    }
+    if (action === "pay-rune") dispatchGameCommand({ kind: "togglePaymentRune", runeId: rune, mode }, () => togglePaymentRune(game, rune, mode));
     if (action === "pay-pool-energy") dispatchGameCommand({ kind: "togglePaymentPoolEnergy", energyId: energy }, () => togglePaymentPoolEnergy(game, energy));
     if (action === "pay-pool-power") dispatchGameCommand({ kind: "togglePaymentPoolPower", powerId: button.dataset.power }, () => togglePaymentPoolPower(game, button.dataset.power));
     if (action === "toggle-optional-payment") dispatchGameCommand({ kind: "toggleOptionalPaymentEffect", effectId: button.dataset.effect }, () => toggleOptionalPaymentEffect(game, button.dataset.effect));
@@ -10417,7 +6839,7 @@ app.addEventListener("click", (event) => {
     }
     if (action === "select-card") {
       if (game.selectedCardId !== card) attachmentsOpenCardId = null;
-      toggleUiSelectedCard(card);
+      setUiSelectedCard(card);
     }
     render();
   } catch (error) {
@@ -10445,41 +6867,10 @@ app.addEventListener("keydown", (event) => {
     return;
   }
   if (!['Enter', ' '].includes(event.key)) return;
-  const nativeControl = event.target.closest?.("button, a[href], input, select, textarea, [contenteditable='true']");
-  if (nativeControl) return;
   const cardNode = event.target.closest?.("[data-card-id][role='button']");
   if (!cardNode || !app.contains(cardNode)) return;
   event.preventDefault();
-  if (game.pendingChoice && ["hand", "board"].includes(choiceCardSurface(game.pendingChoice))) {
-    stageChoiceCard(cardNode.dataset.cardId);
-  } else {
-    toggleUiSelectedCard(cardNode.dataset.cardId);
-  }
-  render();
-});
-
-document.addEventListener("keydown", (event) => {
-  const modal = topUiModal();
-  if (event.key === "Tab" && modal) {
-    trapModalTab(event, modal);
-    return;
-  }
-  if (event.key !== "Escape" || appView !== "game") return;
-  const dismissed = dismissTopUiLayer();
-  if (!dismissed && !modal) return;
-  event.preventDefault();
-  event.stopPropagation();
-  if (dismissed) render();
-}, true);
-
-window.addEventListener("popstate", () => {
-  if (suppressTabletopPopstate) {
-    suppressTabletopPopstate = false;
-    return;
-  }
-  if (!tabletopBackSentinelActive) return;
-  tabletopBackSentinelActive = false;
-  dismissTopUiLayer();
+  setUiSelectedCard(cardNode.dataset.cardId);
   render();
 });
 
@@ -10501,7 +6892,7 @@ app.addEventListener("input", (event) => {
     if (action === "choice-search") {
       const panel = target.closest(".choice-panel");
       const normalized = target.value.trim().toLocaleLowerCase(locale() === LOCALES.KO ? "ko-KR" : "en-US");
-      const options = [...(panel?.querySelectorAll(".choice-grid > .choice-option, .choice-grid > .choice-option-wrap") || [])];
+      const options = [...(panel?.querySelectorAll(".choice-grid > .choice-option") || [])];
       let visible = 0;
       for (const option of options) {
         const matches = !normalized || option.textContent.toLocaleLowerCase(locale() === LOCALES.KO ? "ko-KR" : "en-US").includes(normalized);
@@ -10523,6 +6914,11 @@ app.addEventListener("input", (event) => {
     if (action === "settings-sideboarding") {
       settings.sideboardingEnabled = target.checked;
       saveSettings();
+      render();
+      return;
+    }
+    if (action === "sideboard-first-player") {
+      sideboardFirstPlayerId = target.value;
       render();
       return;
     }
@@ -11090,17 +7486,6 @@ window.addEventListener("error", (event) => {
 window.addEventListener("unhandledrejection", (event) => {
   reportUiException(event.reason, "unhandled promise");
   if (appView === "game") showUiExceptionOverlay(event.reason, "unhandled promise");
-});
-
-window.matchMedia?.("(prefers-reduced-motion: reduce)").addEventListener?.("change", (event) => {
-  if (!event.matches) return;
-  clearEffectAnimations();
-  clearRealtimeFeedback();
-  if (impactDismissTimer) clearTimeout(impactDismissTimer);
-  impactDismissTimer = null;
-  if (["victory", "defeat"].includes(activeImpact?.kind)) resultRevealReady = true;
-  activeImpact = null;
-  if (appView === "game") render();
 });
 
 render();

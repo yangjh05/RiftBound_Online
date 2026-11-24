@@ -558,7 +558,7 @@ function candidateActions(game, actorId, kindFilter = null) {
     if (decision?.method === "roll" && decision.status === "rolling") {
       return wants("rollFirstPlayer") ? [{ kind: "rollFirstPlayer" }] : [];
     }
-    if (["roll", "designated"].includes(decision?.method) && decision.status === "choosing") {
+    if (decision?.method === "roll" && decision.status === "choosing") {
       return wants("chooseFirstPlayer")
         ? game.players.map((candidate) => ({ kind: "chooseFirstPlayer", playerId: candidate.id }))
         : [];

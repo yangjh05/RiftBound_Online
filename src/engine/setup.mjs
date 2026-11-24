@@ -1,7 +1,3 @@
-import { championMatchesLegend, isChampionCard } from "../rules/champions.mjs";
-
-export { championMatchesLegend, isChampionCard };
-
 export function createPlayers(sourceDecks) {
   let nextInstanceId = 1;
   const instantiate = (card, ownerId) => ({
@@ -22,6 +18,17 @@ export function createPlayers(sourceDecks) {
   ];
   applySeatNames(players);
   return players;
+}
+
+export function isChampionCard(card) {
+  return Boolean(card?.isChampion || card?.tags?.includes("Champion"));
+}
+
+export function championMatchesLegend(card, legend) {
+  if (!isChampionCard(card) || !legend) return false;
+  const ignored = new Set(["Champion", "Signature", "Signature Spell", "Action", "Reaction", "Unit", "Spell", "Gear"]);
+  const legendTags = new Set((legend.tags || []).filter((tag) => !ignored.has(tag)));
+  return (card.tags || []).some((tag) => legendTags.has(tag));
 }
 
 function createPlayer(id, deck, instantiate) {

@@ -14,7 +14,6 @@ export const DECK_FORMATS = Object.freeze({
 });
 
 import { hasUniqueDeckConstraint } from "../rules/keywords.mjs";
-import { championMatchesLegend, isChampionCard } from "../rules/champions.mjs";
 
 const NON_IDENTITY_TAGS = Object.freeze(new Set([
   "Champion", "Signature", "Signature Spell", "Action", "Reaction", "Unit", "Spell", "Gear"
@@ -104,8 +103,12 @@ export function validateDeckRecord(deck, cardByNumber, { format = DECK_FORMATS.T
   return { playable: messages.length === 0, messages };
 }
 
-export function isChampionDeckCard(card) { return isChampionCard(card); }
-export { championMatchesLegend };
+export function isChampionDeckCard(card) { return Boolean(card?.isChampion || card?.tags?.includes("Champion")); }
+export function championMatchesLegend(card, legend) {
+  if (!isChampionDeckCard(card) || !legend) return false;
+  const legendTags = new Set((legend.tags || []).filter((tag) => !NON_IDENTITY_TAGS.has(tag)));
+  return (card.tags || []).some((tag) => legendTags.has(tag));
+}
 export function isSignatureCard(card) { return Boolean(card?.tags?.includes("Signature") || card?.tags?.includes("Signature Spell")); }
 export function mainDeckCount(deck) { return deck?.main?.reduce((total, [, count]) => total + count, 0) || 0; }
 export function sideboardCount(deck) { return deck?.sideboard?.reduce((total, [, count]) => total + count, 0) || 0; }

@@ -1640,7 +1640,6 @@ const definitions = [
           "timing": "spell",
           "kind": "counterSpell",
           "includeAbilities": true,
-          "enemyOnly": true,
           "requiresChoosingFriendlyUnitOrGear": true
         }
       ]

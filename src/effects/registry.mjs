@@ -195,8 +195,7 @@ export const SPELL_TARGET_DECLARATIONS = Object.freeze({
   counterSpell: {
     choiceEffect: "counterChainCard",
     provider: TARGET_PROVIDERS.CHAIN_SPELLS,
-    defaultScope: "spell",
-    includeFriendly: true
+    defaultScope: "enemySpell"
   },
   counterUnlessPayEnergy: {
     choiceEffect: "counterUnlessPay",
@@ -394,6 +393,12 @@ export const SPELL_TARGET_DECLARATIONS = Object.freeze({
     choiceEffect: "siphonPowerBattlefield",
     provider: TARGET_PROVIDERS.BATTLEFIELDS
   },
+  damageEnemyUnitsAtBattlefieldByReadyRunes: {
+    steps: [
+      { choiceEffect: "damageEnemyUnitsAtBattlefieldByReadyRunes", provider: TARGET_PROVIDERS.BATTLEFIELDS },
+      { choiceEffect: "runeDamagePaymentRune", provider: "readyRunes", optional: true, multi: true }
+    ]
+  },
   dealDamageAllEnemyUnitsAtBattlefield: {
     choiceEffect: "dealDamageAllEnemyUnitsAtBattlefield",
     provider: TARGET_PROVIDERS.BATTLEFIELDS
@@ -466,8 +471,7 @@ export const SPELL_TARGET_DECLARATIONS = Object.freeze({
   },
   counterSpellToHand: {
     choiceEffect: "unleashedChainSpell",
-    provider: TARGET_PROVIDERS.CHAIN_SPELLS,
-    includeFriendly: true
+    provider: TARGET_PROVIDERS.CHAIN_SPELLS
   },
   crescentStrike: {
     choiceEffect: "unleashedEnemyBattlefieldUnit",
@@ -966,7 +970,7 @@ const effectDefinitions = [
   effect("spell", "killOnNextDamageOrNowIfLegion", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.TARGETABLE_UNITS, declaration: SPELL_TARGET_DECLARATIONS.killOnNextDamageOrNowIfLegion }),
   effect("spell", "preventSpellAbilityDamageThisTurn", { sourceTypes: ["spell"], targetless: true }),
   effect("spell", "killBattlefieldUnitsTotalMightMax", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.BATTLEFIELD_UNITS, declaration: SPELL_TARGET_DECLARATIONS.killBattlefieldUnitsTotalMightMax }),
-  effect("spell", "damageEnemyUnitsAtBattlefieldByReadyRunes", { sourceTypes: ["spell"], targetless: true, flow: "choice", continuation: "finishSpell" }),
+  effect("spell", "damageEnemyUnitsAtBattlefieldByReadyRunes", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.BATTLEFIELD_UNITS, declaration: SPELL_TARGET_DECLARATIONS.damageEnemyUnitsAtBattlefieldByReadyRunes }),
   effect("spell", "returnHiddenTrashToHand", { sourceTypes: ["spell"], targetProvider: TARGET_PROVIDERS.TOP_DECK, declaration: SPELL_TARGET_DECLARATIONS.returnHiddenTrashToHand }),
   effect("spell", "playOpponentTopDeckCard", { sourceTypes: ["spell"], targetless: true }),
   effect("spell", "playTopDeckUnitFromLook", { sourceTypes: ["spell"], targetless: true }),
@@ -1288,7 +1292,7 @@ const effectDefinitions = [
   ,effect("unitPlayedHere", "moveOtherFriendlyHereToBase", { sourceTypes: ["battlefield"], targetProvider: TARGET_PROVIDERS.BATTLEFIELD_UNITS, optionalTrigger: true })
   ,effect("unitPlayedHere", "payEnergyBuffPlayedUnit", { sourceTypes: ["battlefield"], targetProvider: TARGET_PROVIDERS.BATTLEFIELD_UNITS, optionalTrigger: true, triggerCost: { kind: "energy" } })
   ,effect("unitReturnedToHand", "payEnergyChannelRune", { sourceTypes: ["battlefield"], targetless: true, optionalTrigger: true, triggerCost: { kind: "energy" } })
-  ,...[
+  ,...[ 
     ["onMove", "burnPlayer", ["unit"]],
     ["static", "ignoreTankHere", ["unit"]],
     ["beginning", "modifySelfIfFewerRunes", ["unit"]],

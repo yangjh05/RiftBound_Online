@@ -237,11 +237,6 @@ for (const [key, token] of Object.entries(OFFICIAL_TOKEN_DEFINITIONS)) {
     validateEffectPayload(label, index, effect, definition, token.type);
   }
 }
-const goldToken = OFFICIAL_TOKEN_DEFINITIONS.gold;
-expect(goldToken?.effects?.some((effect) => effect.timing === "activated"
-  && effect.kind === "addPower"
-  && effect.resourceKind === "gold"),
-"Gold must identify its shared Add Power ability as a Gold resource so global Gold modifiers can apply without card-number branches.");
 
 for (const warning of warnings) console.warn(`Warning: ${warning}`);
 if (errors.length) {

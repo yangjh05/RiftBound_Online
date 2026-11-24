@@ -61,7 +61,7 @@ function preventionAmount(preventions = [], locale = "ko") {
 }
 
 export function cardStatusItems(card, options = {}) {
-  if (!card || typeof card !== "object") return [];
+  if (!card) return [];
   const locale = options.locale === "en" ? "en" : "ko";
   const copy = language(locale);
   const keywordLabel = options.keywordLabel || ((keyword) => keyword);
@@ -92,7 +92,7 @@ export function cardStatusItems(card, options = {}) {
     items.push(item(locale, "lastingMight", lastingMight > 0 ? "positive" : "negative", `${copy.lastingMight[0]} ${signed(lastingMight)}`));
   }
 
-  const temporaryKeywords = [...new Set(Array.isArray(card.temporaryKeywords) ? card.temporaryKeywords.filter(Boolean) : [])];
+  const temporaryKeywords = [...new Set(card.temporaryKeywords || [])];
   if (temporaryKeywords.length) {
     const labels = temporaryKeywords.map((keyword) => {
       const amount = card.temporaryKeywordAmounts?.[String(keyword).toLowerCase()];
@@ -104,8 +104,7 @@ export function cardStatusItems(card, options = {}) {
   if (card.cantMoveThisTurn) items.push(item(locale, "cannotMove", "negative", copy.cannotMove[0]));
   if (card.temporary) items.push(item(locale, "temporary", "warning", copy.temporary[0]));
 
-  const activePreventions = (Array.isArray(card.damagePreventions) ? card.damagePreventions : [])
-    .filter((entry) => entry && (entry.remaining === "all" || Number(entry.remaining) > 0));
+  const activePreventions = (card.damagePreventions || []).filter((entry) => entry && (entry.remaining === "all" || Number(entry.remaining) > 0));
   if (activePreventions.length) {
     const amount = preventionAmount(activePreventions, locale);
     items.push(item(locale, "prevention", "positive", `${copy.prevention[0]} ${amount}`));
@@ -126,9 +125,9 @@ export function cardStatusItems(card, options = {}) {
 
   if ((card.damage || 0) > 0) items.push(item(locale, "damage", "negative", `${copy.damage[0]} ${card.damage}`));
 
-  const attachments = Array.isArray(card.attachments) ? card.attachments.filter(Boolean) : [];
+  const attachments = card.attachments || [];
   if (attachments.length) {
-    const names = attachments.map((attachment) => cardLabel(attachment?.name || "")).filter(Boolean);
+    const names = attachments.map((attachment) => cardLabel(attachment.name));
     items.push(item(locale, "attachments", "positive", `${copy.attachments[0]} ${attachments.length}`, copy.attachments[1], names.join(", ")));
   }
 

@@ -4,23 +4,6 @@ import {
 } from "../src/ai/neural/model.mjs";
 
 export const EVALUATOR_BOOTSTRAP_STAGE_HANDOFF_VERSION = 2;
-export const EVALUATOR_BOOTSTRAP_STAGE_MAX_ATTEMPTS = 3;
-
-export function evaluatorBootstrapStageAttemptDecision({
-  result,
-  attempt,
-  maximumAttempts = EVALUATOR_BOOTSTRAP_STAGE_MAX_ATTEMPTS,
-  shutdownRequested = false
-} = {}) {
-  if (result?.ok === true) return "complete";
-  if (result?.ok === false) return "failed";
-  if (shutdownRequested !== true
-    && Number.isInteger(attempt)
-    && attempt < Math.max(1, Number(maximumAttempts) || 1)) {
-    return "retry";
-  }
-  return "failed";
-}
 
 export function serializeEvaluatorBootstrapStageRequest(options, metadata = {}) {
   const {
